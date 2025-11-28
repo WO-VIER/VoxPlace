@@ -2,3 +2,10 @@ Opengl : (Version 3.3 Emscriptem compatible)
 Machine etats ce qui ve dire qu'OpengL fonctionne avec des buffers
 
 Double buffer : On utilise cette technique pour éviter le flickering le back buffer va construire l'image et l'orsque l'imageest prete elle est envoyer su le front buffer avec un swap
+
+
+https://opengl.developpez.com/tutoriels/apprendre-opengl/images/pipeline.png
+
+https://stackoverflow.com/questions/2772570/opengl-cheat-sheet
+
+https://github.com/henkeldi/opengl_cheatsheet
