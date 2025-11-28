@@ -1,7 +1,25 @@
 #include <config.h>
+#include <iostream>
+
+// If building for Emscripten prefer the compiler-provided macro __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN_WEB)
+#include <GLFW/glfw3.h>
+#include <emscripten/emscripten.h>
+#else
+#include <glad/glad.h>
+#include <GLFW/glfw3.h>
+#endif
+
+const unsigned int SCREEN_WIDTH = 800;
+const unsigned int SCREEN_HEIGHT = 600;
+
+// global window for render callback (WASM uses callback-based main loop)
+static GLFWwindow* g_window = nullptr;
 
 bool initGlfw()
 {
+
+	std::cout << "INITIALISATION de GLFW" <<std::endl;
 	if(!glfwInit())
 	{
 		std::cout << "LA fenentre glfw n'a pas pu etre initialisé !" << std::endl;
@@ -16,15 +34,49 @@ bool initGlfw()
 
 void frambuffer_size_callback(GLFWwindow *window, int width, int height)
 {
-	glViewport(0,0,width,height);
+	glViewport(0,0,width,height); // Opengl transforme les coordonées 2D qu'il calacule en coord écran 
+	// Ex : (-0.5,0.5) (200, 450) (-1,1) 
 }
+
+
+void processImput(GLFWwindow *window)
+{
+	if(!window)
+		return;
+
+	if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+		glfwSetWindowShouldClose(window, true);
+}
+
+void render_frame()
+{
+	if(!g_window)
+		return;
+	glfwPollEvents();
+	glClear(GL_COLOR_BUFFER_BIT);
+	glfwSwapBuffers(g_window);
+
+}
+
+const char *vertexShaderSource = "#version 330 core\n"
+    "layout (location = 0) in vec3 aPos;\n"
+    "void main()\n"
+    "{\n"
+    "   gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);\n"
+    "}\0";
+const char *fragmentShaderSource = "#version 330 core\n"
+    "out vec4 FragColor;\n"
+    "void main()\n"
+    "{\n"
+    "   FragColor = vec4(1.0f, 0.5f, 0.2f, 1.0f);\n"
+    "}\n\0";
+
 
 int main()
 {
+    GLFWwindow *window = g_window;
 	
-    GLFWwindow *window = NULL;
-	
-	
+
 	if(!initGlfw())
 		return -1;
 	
@@ -37,7 +89,23 @@ int main()
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR,3);
 	*/
     //std::cout << "Hello, World !" <<std::endl;
-    window = glfwCreateWindow(800, 600, "VoxPlace", NULL, NULL);
+	window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_WIDTH, "VoxPlace", NULL, NULL);
+#if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN_WEB)
+		// store global window for the emscripten callback
+		g_window = window;
+		if (!g_window) {
+			std::cout << "La fenetre n'as pas pu etre créer !" << std::endl;
+			glfwTerminate();
+			return -1;
+		}
+		glfwMakeContextCurrent(g_window);
+		// On WASM we usually don't need glad; setup viewport and clear color
+		glViewport(0,0,SCREEN_WIDTH,SCREEN_HEIGHT);
+		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+		emscripten_set_main_loop(render_frame, 0, 1);
+#else
+
+
 	if(!window)
 	{
 		std::cout << "La fenetre n'as pas pu etre créer !" << std::endl;
@@ -45,22 +113,127 @@ int main()
 		return -1;
 	}
 	glfwMakeContextCurrent(window);
+	glfwSetFramebufferSizeCallback(window, frambuffer_size_callback);
 
+	//Glad gere les pointeures de fonctions OpenGL
+		// 	Nous passons a GLAD la fonction de recupération des pointeurs de fonctions OpenGL 
 	if(!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
 	{
-		//Glad gere les pointeures de fonctions OpenGL
-		// 	Nous passons a GLAD la fonction de recupération des pointeurs de fonctions OpenGL 
 		std::cout << "Initialisation de glad echouéee !"<< std::endl;
 		glfwTerminate();
 		return -1;
 	}
-	glViewport(0,0,800,600); // Opengl transforme les coordonées 2D qu'il calacule en coord écran 
-	// Ex : (-0.5,0.5) (200, 450) (-1,1) 
 	
+
+	// Pipeline shader : compile les shaders programmes ram -> gpu
+	
+	//1. Vertex Shader
+
+	unsigned int vertexShader = glCreateShader(GL_VERTEX_SHADER);
+	glShaderSource(vertexShader, 1,&vertexShaderSource, NULL);
+	glCompileShader(vertexShader);
+
+	//Check compilation errors 
+	int sucess;
+	char logs[512];
+
+	glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &sucess);
+	if(!sucess)
+	{
+		glGetShaderInfoLog(vertexShader,sizeof(logs),NULL, logs);
+		std::cout << "Erreur Compilation du vertex shader \n" << logs <<  std::endl;
+	}
+
+	//2. Fragment shader
+
+	unsigned int fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+	glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
+	glCompileShader(fragmentShader);
+
+	//Checks compilations errors
+
+	glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &sucess);
+
+	if(!sucess)
+	{
+		glGetShaderInfoLog(fragmentShader,sizeof(logs),NULL, logs);
+		std::cout << "Erreur Compilation du vertex shader \n" << logs <<  std::endl;
+	}
+	
+	//3. Link Shader
+
+	unsigned int shaderProgram = glCreateProgram();
+	glAttachShader(shaderProgram, vertexShader);
+	glAttachShader(shaderProgram, fragmentShader);
+	glLinkProgram(shaderProgram);
+
+	// Use programiv to check linking for program objects
+	glGetProgramiv(shaderProgram, GL_LINK_STATUS, &sucess);
+	if(!sucess)
+	{
+		glGetProgramInfoLog(shaderProgram,sizeof(logs),NULL, logs);
+		std::cout << "Erreur Linking du shader program \n" << logs <<  std::endl;
+	}
+
+	glDeleteShader(vertexShader);
+	glDeleteShader(fragmentShader);
+
+	//setup vertex data
+
+	float vertices[] = {
+		-0.5f, -0.5f, 0.0f, // left  
+		 0.5f, -0.5f, 0.0f, // right 
+		 0.0f,  0.5f, 0.0f  // top  
+	};
+
+	unsigned int VBO, VAO; // VBO (vertex buffer object) VAO (vertex array object)
+
+	glGenVertexArrays(1, &VAO);
+	glGenBuffers(1, &VBO);
+	// bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
+	glBindVertexArray(VAO);
+
+	glBindBuffer(GL_ARRAY_BUFFER, VBO);
+	glBufferData(GL_ARRAY_BUFFER,sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+	glEnableVertexAttribArray(0);
+
+	glBindBuffer(GL_ARRAY_BUFFER,  0);
+
+	// You can unbind the VAO afterwards so other VAO calls won't accidentally modify this VAO, but this rarely happens. Modifying other
+    // VAOs requires a call to glBindVertexArray anyways so we generally don't unbind VAOs (nor VBOs) when it's not directly necessary.
+    glBindVertexArray(0); 
+
+	//uncomment this call to draw in wireframe polygons.
+    //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+	
+	
+	
+	
+	
+	
+	
+	
+	// RRender loop 
 	while(!glfwWindowShouldClose(window))
 	{
+		//Imput
+		processImput(window);
+		
+		//rendering commands here
+		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
-		glfwSetFramebufferSizeCallback(window, frambuffer_size_callback);
+
+		//Draw
+		glUseProgram(shaderProgram);
+		glBindVertexArray(VAO);
+		glDrawArrays(GL_TRIANGLES, 0,3);
+		
+		//check and call events and swap the buffers 
+		glfwSwapBuffers(window); // Swap lower to front buffer
+		glfwPollEvents();
 	}
 	/*
 	glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
@@ -71,6 +244,9 @@ int main()
 		glfwSwapBuffers(window);
 	}
 	*/
+
+
 	glfwTerminate();
     return 0;
+#endif
 }
