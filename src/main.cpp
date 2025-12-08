@@ -8,6 +8,7 @@
 #else
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include "errorReporting.h"
 #endif
 
 const unsigned int SCREEN_WIDTH = 800;
@@ -71,6 +72,23 @@ const char *fragmentShaderSource = "#version 330 core\n"
     "   FragColor = vec4(1.0f, 0.5f, 0.2f, 1.0f);\n"
     "}\n\0";
 
+const char *vertexShaderSourceNew ="#version 330 core\n"
+    "layout (location = 0) in vec3 aPos;\n"
+    "layout (location = 1) in vec3 aColor;\n"
+    "out vec3 ourColor;\n"
+    "void main()\n"
+    "{\n"
+    "   gl_Position = vec4(aPos, 1.0);\n"
+    "   ourColor = aColor;\n"
+    "}\0";
+
+const char *fragmentShaderSourceNew = "#version 330 core\n"
+    "out vec4 FragColor;\n"
+    "in vec3 ourColor;\n"
+    "void main()\n"
+    "{\n"
+    "   FragColor = vec4(ourColor, 1.0f);\n"
+    "}\n\0";
 
 int main()
 {
@@ -123,51 +141,46 @@ int main()
 		glfwTerminate();
 		return -1;
 	}
+
+	#if defined(HAVE_GLREPORT) && defined(ENABLE_GL_DEBUG) && !defined(__EMSCRIPTEN__)
+    enableReportGlErrors();
+	#endif
 	
 
 	// Pipeline shader : compile les shaders programmes ram -> gpu
+
+		std::cout << "GLAD initialized successfully" << std::endl;
+		std::cout << "OpenGL Renderer: " << glGetString(GL_RENDERER) << std::endl;
+		std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
+	#if defined(HAVE_GLREPORT) && defined(ENABLE_GL_DEBUG) && !defined(__EMSCRIPTEN__) && !defined(EMSCRIPTEN_WEB)
+		enableReportGlErrors();
+	#endif
+
+	
 	
 	//1. Vertex Shader
 
 	unsigned int vertexShader = glCreateShader(GL_VERTEX_SHADER);
-	glShaderSource(vertexShader, 1,&vertexShaderSource, NULL);
+	glShaderSource(vertexShader, 1,&vertexShaderSourceNew, NULL);
 	glCompileShader(vertexShader);
 
-	//Check compilation errors 
-	int sucess;
-	char logs[512];
-
-	glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &sucess);
-	if(!sucess)
-	{
-		glGetShaderInfoLog(vertexShader,sizeof(logs),NULL, logs);
-		std::cout << "Erreur Compilation du vertex shader \n" << logs <<  std::endl;
-	}
 
 	//2. Fragment shader
 
 	unsigned int fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-	glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
+	glShaderSource(fragmentShader, 1, &fragmentShaderSourceNew, NULL);
 	glCompileShader(fragmentShader);
-
-	//Checks compilations errors
-
-	glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &sucess);
-
-	if(!sucess)
-	{
-		glGetShaderInfoLog(fragmentShader,sizeof(logs),NULL, logs);
-		std::cout << "Erreur Compilation du vertex shader \n" << logs <<  std::endl;
-	}
 	
 	//3. Link Shader
 
 	unsigned int shaderProgram = glCreateProgram();
-	glAttachShader(shaderProgram, vertexShader);
+	glAttachShader(shaderProgram, vertexShader); //bind les shaders au programm 
 	glAttachShader(shaderProgram, fragmentShader);
 	glLinkProgram(shaderProgram);
 
 	// Use programiv to check linking for program objects
+	int sucess;
+	char logs[512];
 	glGetProgramiv(shaderProgram, GL_LINK_STATUS, &sucess);
 	if(!sucess)
 	{
@@ -175,47 +188,61 @@ int main()
 		std::cout << "Erreur Linking du shader program \n" << logs <<  std::endl;
 	}
 
+// Optional: call GlReportGleeror("after shader link") if implemented in errorReporting
+
 	glDeleteShader(vertexShader);
 	glDeleteShader(fragmentShader);
 
 	//setup vertex data
 
 	float vertices[] = {
-		-0.5f, -0.5f, 0.0f, // left  
-		 0.5f, -0.5f, 0.0f, // right 
-		 0.0f,  0.5f, 0.0f  // top  
+    // positions         // colors
+     0.5f, -0.5f, 0.0f,  1.0f, 0.0f, 0.0f,   // bottom right
+    -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f,   // bottom left
+     0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f    // top 
 	};
 
-	unsigned int VBO, VAO; // VBO (vertex buffer object) VAO (vertex array object)
+	unsigned int indices[] = {
+		0, 1, 3, // First triangle
+		//1, 2, 3  // Second triangle
+	};
+
+	unsigned int VBO, VAO, EBO; // VBO (vertex buffer object) VAO (vertex array object) EBO (element buffer object)
 
 	glGenVertexArrays(1, &VAO);
 	glGenBuffers(1, &VBO);
+	//glGenBuffers(1, &EBO);
 	// bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
 	glBindVertexArray(VAO);
 
+	// VBO
 	glBindBuffer(GL_ARRAY_BUFFER, VBO);
 	glBufferData(GL_ARRAY_BUFFER,sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+	// EBO (bind as ELEMENT_ARRAY_BUFFER while VAO is bound)
+	//glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+	//glBufferData(GL_ELEMENT_ARRAY_BUFFER,sizeof(indices), indices, GL_STATIC_DRAW);
+// Optional: call GlReportGleeror("buffers setup") if implemented in errorReporting
+
+	// Vertex attributes (layout location = 0)
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
 	glEnableVertexAttribArray(0);
 
-	glBindBuffer(GL_ARRAY_BUFFER,  0);
+	// Color attributes (layout location = 1)
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+	glEnableVertexAttribArray(1);
+
+
+	//glBindBuffer(GL_ARRAY_BUFFER,  0);
 
 	// You can unbind the VAO afterwards so other VAO calls won't accidentally modify this VAO, but this rarely happens. Modifying other
     // VAOs requires a call to glBindVertexArray anyways so we generally don't unbind VAOs (nor VBOs) when it's not directly necessary.
-    glBindVertexArray(0); 
+    //glBindVertexArray(0); 
 
 	//uncomment this call to draw in wireframe polygons.
     //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
-	
-	
-	
-	
-	
-	
-	
-	
+	glUseProgram(shaderProgram);
 	// RRender loop 
 	while(!glfwWindowShouldClose(window))
 	{
@@ -223,14 +250,15 @@ int main()
 		processImput(window);
 		
 		//rendering commands here
-		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+		//glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 
 		//Draw
-		glUseProgram(shaderProgram);
+		//glUseProgram(shaderProgram);
 		glBindVertexArray(VAO);
 		glDrawArrays(GL_TRIANGLES, 0,3);
-		
+		//glDrawElements(GL_TRIANGLES, 6 , GL_UNSIGNED_INT, 0);
+		// Optional: call GlReportGleeror("after draw") if implemented in errorReporting
 		//check and call events and swap the buffers 
 		glfwSwapBuffers(window); // Swap lower to front buffer
 		glfwPollEvents();
