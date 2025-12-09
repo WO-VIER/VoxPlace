@@ -1,5 +1,6 @@
 #include <config.h>
 #include <iostream>
+#include <Shader.h>
 
 // If building for Emscripten prefer the compiler-provided macro __EMSCRIPTEN__
 #if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN_WEB)
@@ -58,7 +59,7 @@ void render_frame()
 	glfwSwapBuffers(g_window);
 
 }
-
+/*
 const char *vertexShaderSource = "#version 330 core\n"
     "layout (location = 0) in vec3 aPos;\n"
     "void main()\n"
@@ -89,7 +90,7 @@ const char *fragmentShaderSourceNew = "#version 330 core\n"
     "{\n"
     "   FragColor = vec4(ourColor, 1.0f);\n"
     "}\n\0";
-
+*/
 int main()
 {
     GLFWwindow *window = g_window;
@@ -157,7 +158,7 @@ int main()
 	#endif
 
 	
-	
+	/*
 	//1. Vertex Shader
 
 	unsigned int vertexShader = glCreateShader(GL_VERTEX_SHADER);
@@ -194,6 +195,9 @@ int main()
 	glDeleteShader(fragmentShader);
 
 	//setup vertex data
+	*/
+
+	Shader shader("src/shader/3.3shader.vs", "src/shader/3.3shader.fs");
 
 	float vertices[] = {
     // positions         // colors
@@ -242,7 +246,7 @@ int main()
 	//uncomment this call to draw in wireframe polygons.
     //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
-	glUseProgram(shaderProgram);
+	//glUseProgram(shaderProgram);
 	// RRender loop 
 	while(!glfwWindowShouldClose(window))
 	{
@@ -253,11 +257,13 @@ int main()
 		//glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 
+		shader.use();
+		//shader.setFloat("someUniform", 1.0f);
 		//Draw
 		//glUseProgram(shaderProgram);
 		glBindVertexArray(VAO);
 		glDrawArrays(GL_TRIANGLES, 0,3);
-		//glDrawElements(GL_TRIANGLES, 6 , GL_UNSIGNED_INT, 0);
+		// Rectangle -> DrawElements(GL_TRIANGLES, 6 , GL_UNSIGNED_INT, 0);
 		// Optional: call GlReportGleeror("after draw") if implemented in errorReporting
 		//check and call events and swap the buffers 
 		glfwSwapBuffers(window); // Swap lower to front buffer

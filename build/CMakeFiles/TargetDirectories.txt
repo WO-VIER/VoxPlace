@@ -1,3 +1,0 @@
-/home/alpha/Documents/TFE/VoxPlace/build/CMakeFiles/VoxPlace.dir
-/home/alpha/Documents/TFE/VoxPlace/build/CMakeFiles/edit_cache.dir
-/home/alpha/Documents/TFE/VoxPlace/build/CMakeFiles/rebuild_cache.dir
