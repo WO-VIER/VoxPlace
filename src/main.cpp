@@ -1,6 +1,8 @@
 #include <config.h>
 #include <iostream>
 #include <Shader.h>
+#include <print>
+
 
 // If building for Emscripten prefer the compiler-provided macro __EMSCRIPTEN__
 #if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN_WEB)
@@ -17,14 +19,13 @@ const unsigned int SCREEN_HEIGHT = 600;
 
 // global window for render callback (WASM uses callback-based main loop)
 static GLFWwindow* g_window = nullptr;
-
 bool initGlfw()
 {
 
 	std::cout << "INITIALISATION de GLFW" <<std::endl;
 	if(!glfwInit())
 	{
-		std::cout << "LA fenentre glfw n'a pas pu etre initialisé !" << std::endl;
+		std::cout << "La fenêtre GLFW n'a pas pu être initialisée !" << std::endl;
 		return false;
 	}
 
@@ -34,14 +35,14 @@ bool initGlfw()
 	return true;
 }
 
-void frambuffer_size_callback(GLFWwindow *window, int width, int height)
+void framebuffer_size_callback(GLFWwindow *window, int width, int height)
 {
 	glViewport(0,0,width,height); // Opengl transforme les coordonées 2D qu'il calacule en coord écran 
 	// Ex : (-0.5,0.5) (200, 450) (-1,1) 
 }
 
 
-void processImput(GLFWwindow *window)
+void processInput(GLFWwindow *window)
 {
 	if(!window)
 		return;
@@ -108,12 +109,13 @@ int main()
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR,3);
 	*/
     //std::cout << "Hello, World !" <<std::endl;
-	window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_WIDTH, "VoxPlace", NULL, NULL);
+	std::println("C++23 is enabled.");
+	window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "VoxPlace", NULL, NULL);
 #if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN_WEB)
 		// store global window for the emscripten callback
 		g_window = window;
 		if (!g_window) {
-			std::cout << "La fenetre n'as pas pu etre créer !" << std::endl;
+			std::cout << "La fenêtre n'a pas pu être créée !" << std::endl;
 			glfwTerminate();
 			return -1;
 		}
@@ -127,33 +129,32 @@ int main()
 
 	if(!window)
 	{
-		std::cout << "La fenetre n'as pas pu etre créer !" << std::endl;
+		std::cout << "La fenêtre n'a pas pu être créée !" << std::endl;
 		glfwTerminate();
 		return -1;
 	}
 	glfwMakeContextCurrent(window);
-	glfwSetFramebufferSizeCallback(window, frambuffer_size_callback);
+	glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
 	//Glad gere les pointeures de fonctions OpenGL
 		// 	Nous passons a GLAD la fonction de recupération des pointeurs de fonctions OpenGL 
 	if(!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
 	{
-		std::cout << "Initialisation de glad echouéee !"<< std::endl;
+		std::cout << "Initialisation de GLAD échouée !"<< std::endl;
 		glfwTerminate();
 		return -1;
 	}
-
-	#if defined(HAVE_GLREPORT) && defined(ENABLE_GL_DEBUG) && !defined(__EMSCRIPTEN__)
-    enableReportGlErrors();
-	#endif
 	
 
 	// Pipeline shader : compile les shaders programmes ram -> gpu
 
 		std::cout << "GLAD initialized successfully" << std::endl;
-		std::cout << "OpenGL Renderer: " << glGetString(GL_RENDERER) << std::endl;
-		std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
-	#if defined(HAVE_GLREPORT) && defined(ENABLE_GL_DEBUG) && !defined(__EMSCRIPTEN__) && !defined(EMSCRIPTEN_WEB)
+		if (const char* renderer = (const char*)glGetString(GL_RENDERER))
+			std::cout << "OpenGL Renderer: " << renderer << std::endl;
+		if (const char* version = (const char*)glGetString(GL_VERSION))
+			std::cout << "OpenGL Version: " << version << std::endl;
+
+	#if defined(HAVE_GLREPORT) && defined(ENABLE_GL_DEBUG)
 		enableReportGlErrors();
 	#endif
 
@@ -251,7 +252,7 @@ int main()
 	while(!glfwWindowShouldClose(window))
 	{
 		//Imput
-		processImput(window);
+		processInput(window);
 		
 		//rendering commands here
 		//glClearColor(0.2f, 0.3f, 0.3f, 1.0f);

@@ -5,16 +5,18 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "(gdb) Lancer",
+            "name": "C/C++: Lancer (gdb) - Native",
             "type": "cppdbg",
             "request": "launch",
-            "program": "entrer le nom du programme, par exemple ${workspaceFolder}/a.out",
+            "program": "${workspaceFolder}/build/VoxPlace",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${fileDirname}",
+            "cwd": "${workspaceFolder}",
             "environment": [],
             "externalConsole": false,
             "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "preLaunchTask": "build: native",
             "setupCommands": [
                 {
                     "description": "Activer l'impression en mode Pretty pour gdb",
@@ -27,7 +29,15 @@
                     "ignoreFailures": true
                 }
             ]
+        },
+        {
+            "name": "Chrome: Lancer (WASM)",
+            "type": "chrome",
+            "request": "launch",
+            "preLaunchTask": "serve: wasm",
+            "url": "http://localhost:8000/VoxPlace.html",
+            "webRoot": "${workspaceFolder}/build_wasm",
+            "sourceMaps": true
         }
-
     ]
 }

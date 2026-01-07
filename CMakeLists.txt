@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
 project(VoxPlace VERSION 0.1.0)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 option(ENABLE_GL_DEBUG "Enable OpenGL debug output for native builds" ON)
 # Native vs Emscripten handling
 if(NOT EMSCRIPTEN)
