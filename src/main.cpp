@@ -1,18 +1,16 @@
+#include <Shader.h>
 #include <config.h>
 #include <iostream>
-#include <Shader.h>
 #include <print>
-
-
 
 // If building for Emscripten prefer the compiler-provided macro __EMSCRIPTEN__
 #if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN_WEB)
 #include <GLFW/glfw3.h>
 #include <emscripten/emscripten.h>
 #else
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
 #include "errorReporting.h"
+#include <GLFW/glfw3.h>
+#include <glad/glad.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #include <glm/glm.hpp>
@@ -24,349 +22,353 @@ const unsigned int SCREEN_WIDTH = 800;
 const unsigned int SCREEN_HEIGHT = 600;
 
 // global window for render callback (WASM uses callback-based main loop)
-static GLFWwindow* g_window = nullptr;
-bool initGlfw()
+static GLFWwindow *g_window = nullptr;
+bool initGlfw() 
 {
 
-	std::cout << "INITIALISATION de GLFW" <<std::endl;
-	if(!glfwInit())
-	{
-		std::cout << "La fenêtre GLFW n'a pas pu être initialisée !" << std::endl;
-		return false;
-	}
+  std::cout << "INITIALISATION de GLFW" << std::endl;
+  if (!glfwInit()) {
+    std::cout << "La fenêtre GLFW n'a pas pu être initialisée !" << std::endl;
+    return false;
+  }
 
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR,3);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR,3);
-	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-	return true;
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+  glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE); // Demande un contexte de débogage
+  return true;
 }
 
-void framebuffer_size_callback(GLFWwindow *window, int width, int height)
-{
-	glViewport(0,0,width,height); // Opengl transforme les coordonées 2D qu'il calacule en coord écran 
-	// Ex : (-0.5,0.5) (200, 450) (-1,1) 
+void framebuffer_size_callback(GLFWwindow *window, int width, int height) {
+  glViewport(0, 0, width, height); // Opengl transforme les coordonées 2D qu'il
+  // calcule en coord écran
+  // Ex : (-0.5,0.5) (200, 450) (-1,1)
 }
 
+void processInput(GLFWwindow *window) {
+  if (!window)
+    return;
 
-void processInput(GLFWwindow *window)
-{
-	if(!window)
-		return;
-
-	if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-		glfwSetWindowShouldClose(window, true);
+  if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+    glfwSetWindowShouldClose(window, true);
 }
 
-void render_frame()
-{
-	if(!g_window)
-		return;
-	glfwPollEvents();
-	glClear(GL_COLOR_BUFFER_BIT);
-	glfwSwapBuffers(g_window);
-
+void render_frame() {
+  if (!g_window)
+    return;
+  glfwPollEvents();
+  glClear(GL_COLOR_BUFFER_BIT);
+  glfwSwapBuffers(g_window);
 }
-/*
-const char *vertexShaderSource = "#version 330 core\n"
-    "layout (location = 0) in vec3 aPos;\n"
-    "void main()\n"
-    "{\n"
-    "   gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);\n"
-    "}\0";
-const char *fragmentShaderSource = "#version 330 core\n"
-    "out vec4 FragColor;\n"
-    "void main()\n"
-    "{\n"
-    "   FragColor = vec4(1.0f, 0.5f, 0.2f, 1.0f);\n"
-    "}\n\0";
 
-const char *vertexShaderSourceNew ="#version 330 core\n"
-    "layout (location = 0) in vec3 aPos;\n"
-    "layout (location = 1) in vec3 aColor;\n"
-    "out vec3 ourColor;\n"
-    "void main()\n"
-    "{\n"
-    "   gl_Position = vec4(aPos, 1.0);\n"
-    "   ourColor = aColor;\n"
-    "}\0";
-
-const char *fragmentShaderSourceNew = "#version 330 core\n"
-    "out vec4 FragColor;\n"
-    "in vec3 ourColor;\n"
-    "void main()\n"
-    "{\n"
-    "   FragColor = vec4(ourColor, 1.0f);\n"
-    "}\n\0";
-*/
-int main()
+void pipelineTransform(Shader &shader) 
 {
-    GLFWwindow *window = g_window;
+
+	// 1. Model matrix : transforme les coord des sommets en coords monde
+	glm::mat4 model = glm::mat4(1.0f);
+	model = rotate(model, glm::radians(-55.0f), glm::vec3(1.0f,0.0f,0.0f));
+
+	// 2. View matrix : transforme les coord monde en coord vue (caméra)
+	glm::mat4 view = glm::mat4(1.0f);
+	view = glm::translate(view, glm::vec3(0.0f, 0.0f, -3.0f));
+
+	// 3. Projection matrix : transforme les coords vue en coord projection
+	glm::mat4 projection = glm::mat4(1.0f);
+	// Important : Cast en float pour éviter la division entière (800/600 = 1)
+	projection = glm::perspective(glm::radians(45.0f),(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
+
+	// Envoi des matrices MVP au shader
+
+	int modelLoc = glGetUniformLocation(shader.ID,"model");
+	glUniformMatrix4fv(modelLoc,1, GL_FALSE, glm::value_ptr(model));
 	
+	int viewLoc = glGetUniformLocation(shader.ID, "view");
+	glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
 
-	if(!initGlfw())
-		return -1;
-	
-    /*
-	if(!glfwInit())
-    {
-        std::cout << "La fenetre glfw n'a pas pu etre inintialisé !" << std::endl;
-		return -1;
-    }
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR,3);
-	*/
-    //std::cout << "Hello, World !" <<std::endl;
-	std::println("C++23 is enabled.");
-	window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "VoxPlace", NULL, NULL);
+	int projectionLoc = glGetUniformLocation(shader.ID, "projection");
+	glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
+}
+
+int main() 
+{
+  GLFWwindow *window = g_window;
+
+  if (!initGlfw())
+    return -1;
+
+  
+  std::println("C++23 is enabled.");
+  window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "VoxPlace", NULL, NULL);
+
 #if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN_WEB)
-		// store global window for the emscripten callback
-		g_window = window;
-		if (!g_window) {
-			std::cout << "La fenêtre n'a pas pu être créée !" << std::endl;
-			glfwTerminate();
-			return -1;
-		}
-		glfwMakeContextCurrent(g_window);
-		// On WASM we usually don't need glad; setup viewport and clear color
-		glViewport(0,0,SCREEN_WIDTH,SCREEN_HEIGHT);
-		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
-		emscripten_set_main_loop(render_frame, 0, 1);
+  // store global window for the emscripten callback
+  g_window = window;
+  if (!g_window) {
+    std::cout << "La fenêtre n'a pas pu être créée !" << std::endl;
+    glfwTerminate();
+    return -1;
+  }
+  glfwMakeContextCurrent(g_window);
+  // On WASM we usually don't need glad; setup viewport and clear color
+  glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+  emscripten_set_main_loop(render_frame, 0, 1);
 #else
 
+  if (!window) 
+  {
+    std::cout << "La fenêtre n'a pas pu être créée !" << std::endl;
+    glfwTerminate();
+    return -1;
+  }
+  glfwMakeContextCurrent(window);
+  glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
-	if(!window)
+  // Glad gere les pointeures de fonctions OpenGL
+  //  	Nous passons a GLAD la fonction de recupération des pointeurs de
+  //  fonctions OpenGL
+	if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) 
 	{
-		std::cout << "La fenêtre n'a pas pu être créée !" << std::endl;
+		std::cout << "Initialisation de GLAD échouée !" << std::endl;
 		glfwTerminate();
 		return -1;
 	}
-	glfwMakeContextCurrent(window);
-	glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
-	//Glad gere les pointeures de fonctions OpenGL
-		// 	Nous passons a GLAD la fonction de recupération des pointeurs de fonctions OpenGL 
-	if(!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+  // Pipeline shader : compile les shaders programmes ram -> gpu
+
+  std::cout << "GLAD initialized successfully" << std::endl;
+  if (const char *renderer = (const char *)glGetString(GL_RENDERER))
+    std::cout << "OpenGL Renderer: " << renderer << std::endl;
+  if (const char *version = (const char *)glGetString(GL_VERSION))
+    std::cout << "OpenGL Version: " << version << std::endl;
+
+#if defined(ENABLE_GL_DEBUG)
+  enableReportGlErrors();
+#endif
+
+  /*
+  //1. Vertex Shader
+
+  unsigned int vertexShader = glCreateShader(GL_VERTEX_SHADER);
+  glShaderSource(vertexShader, 1,&vertexShaderSourceNew, NULL);
+  glCompileShader(vertexShader);
+
+
+  //2. Fragment shader
+
+  unsigned int fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(fragmentShader, 1, &fragmentShaderSourceNew, NULL);
+  glCompileShader(fragmentShader);
+
+  //3. Link Shader
+
+  unsigned int shaderProgram = glCreateProgram();
+  glAttachShader(shaderProgram, vertexShader); //bind les shaders au programm
+  glAttachShader(shaderProgram, fragmentShader);
+  glLinkProgram(shaderProgram);
+
+  // Use programiv to check linking for program objects
+  int sucess;
+  char logs[512];
+  glGetProgramiv(shaderProgram, GL_LINK_STATUS, &sucess);
+  if(!sucess)
+  {
+          glGetProgramInfoLog(shaderProgram,sizeof(logs),NULL, logs);
+          std::cout << "Erreur Linking du shader program \n" << logs <<
+std::endl;
+  }
+
+// Optional: call GlReportGleeror("after shader link") if implemented in
+errorReporting
+
+  glDeleteShader(vertexShader);
+  glDeleteShader(fragmentShader);
+
+  //setup vertex data
+  */
+
+  Shader shader("src/shader/3.3shader.vs", "src/shader/3.3shader.fs");
+
+  float vertices[] = {
+      // positions          // colors           // texture coords
+      0.5f,  0.5f,  0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, // top right
+      0.5f,  -0.5f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, // bottom right
+      -0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, // bottom left
+      -0.5f, 0.5f,  0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f  // top left
+  };
+
+  unsigned int indices[] = {
+      0, 1, 3, // First triangle
+      1, 2, 3  // Second triangle
+  };
+
+  unsigned int VBO, VAO, EBO; // VBO (vertex buffer object) VAO (vertex array
+                              // object) EBO (element buffer object)
+
+  glGenVertexArrays(1, &VAO);
+  glGenBuffers(1, &VBO);
+  glGenBuffers(1, &EBO);
+  // bind the Vertex Array Object first, then bind and set vertex buffer(s), and
+  // then configure vertex attributes(s).
+  glBindVertexArray(VAO);
+
+  // VBO
+  glBindBuffer(GL_ARRAY_BUFFER, VBO);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+  // EBO (bind as ELEMENT_ARRAY_BUFFER while VAO is bound)
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices,
+               GL_STATIC_DRAW);
+  // Optional: call GlReportGleeror("buffers setup") if implemented in
+  // errorReporting
+
+  // Vertex attributes (layout location = 0)
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)0);
+  glEnableVertexAttribArray(0);
+
+  // Color attributes (layout location = 1)
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                        (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(1);
+
+  // Texture coord attribute
+  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                        (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(2);
+
+  // glBindBuffer(GL_ARRAY_BUFFER,  0);
+
+  // You can unbind the VAO afterwards so other VAO calls won't accidentally
+  // modify this VAO, but this rarely happens. Modifying other
+  // VAOs requires a call to glBindVertexArray anyways so we generally don't
+  // unbind VAOs (nor VBOs) when it's not directly necessary.
+  // glBindVertexArray(0);
+
+  // uncomment this call to draw in wireframe polygons.
+  // glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+  // glUseProgram(shaderProgram);
+
+  // LOAD AND CREATE A TEXTURE
+
+  unsigned int texture1, texture2;
+
+  // Texture 1
+  glGenTextures(1, &texture1);
+  glBindTexture(GL_TEXTURE_2D, texture1);
+
+  // wrapping parameter
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
+                  GL_REPEAT); // s t r -> (x,y,z)
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+  // set texture filtering parameters
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+  // load image, create texture and generate mipmaps
+
+  int width, height, nrChannels;
+  stbi_set_flip_vertically_on_load(
+      true); // tell stb_image.h to flip loaded texture's on the y-axis
+
+  unsigned char *data =
+      stbi_load(("assets/container.jpg"), &width, &height, &nrChannels, 0);
+
+  printf("stbi_load returned %p (w=%d h=%d c=%d)\n", (void *)data, width,
+         height, nrChannels);
+  if (data) {
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB,
+                 GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+  } else
+    std::cout << "Failed to load texture" << std::endl;
+
+  stbi_image_free(data);
+  data = nullptr;
+
+  /*
+  //Texture 2
+
+  glGenTexture(1, &texture2);
+  glBindTexture(GL_TEXTURE_2D, texture2);
+
+  //wraping
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+  //texture filtering
+
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  //load data
+
+  */
+
+  shader.use(); // don't forget to activate/use the shader before setting
+                // uniforms!
+  glUniform1i(glGetUniformLocation(shader.ID, "texture1"), 0);
+
+  // or set it via the texture class ourShader.setInt("texture1",0);
+
+  // Render loop
+	while (!glfwWindowShouldClose(window)) 
 	{
-		std::cout << "Initialisation de GLAD échouée !"<< std::endl;
-		glfwTerminate();
-		return -1;
-	}
-	
-
-	// Pipeline shader : compile les shaders programmes ram -> gpu
-
-		std::cout << "GLAD initialized successfully" << std::endl;
-		if (const char* renderer = (const char*)glGetString(GL_RENDERER))
-			std::cout << "OpenGL Renderer: " << renderer << std::endl;
-		if (const char* version = (const char*)glGetString(GL_VERSION))
-			std::cout << "OpenGL Version: " << version << std::endl;
-
-	#if defined(HAVE_GLREPORT) && defined(ENABLE_GL_DEBUG)
-		enableReportGlErrors();
-	#endif
-
-	
-	/*
-	//1. Vertex Shader
-
-	unsigned int vertexShader = glCreateShader(GL_VERTEX_SHADER);
-	glShaderSource(vertexShader, 1,&vertexShaderSourceNew, NULL);
-	glCompileShader(vertexShader);
-
-
-	//2. Fragment shader
-
-	unsigned int fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-	glShaderSource(fragmentShader, 1, &fragmentShaderSourceNew, NULL);
-	glCompileShader(fragmentShader);
-	
-	//3. Link Shader
-
-	unsigned int shaderProgram = glCreateProgram();
-	glAttachShader(shaderProgram, vertexShader); //bind les shaders au programm 
-	glAttachShader(shaderProgram, fragmentShader);
-	glLinkProgram(shaderProgram);
-
-	// Use programiv to check linking for program objects
-	int sucess;
-	char logs[512];
-	glGetProgramiv(shaderProgram, GL_LINK_STATUS, &sucess);
-	if(!sucess)
-	{
-		glGetProgramInfoLog(shaderProgram,sizeof(logs),NULL, logs);
-		std::cout << "Erreur Linking du shader program \n" << logs <<  std::endl;
-	}
-
-// Optional: call GlReportGleeror("after shader link") if implemented in errorReporting
-
-	glDeleteShader(vertexShader);
-	glDeleteShader(fragmentShader);
-
-	//setup vertex data
-	*/
-
-	Shader shader("src/shader/3.3shader.vs", "src/shader/3.3shader.fs");
-
-	 float vertices[] = {
-        // positions          // colors           // texture coords
-         0.5f,  0.5f, 0.0f,   1.0f, 0.0f, 0.0f,   1.0f, 1.0f, // top right
-         0.5f, -0.5f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, // bottom right
-        -0.5f, -0.5f, 0.0f,   0.0f, 0.0f, 1.0f,   0.0f, 0.0f, // bottom left
-        -0.5f,  0.5f, 0.0f,   1.0f, 1.0f, 0.0f,   0.0f, 1.0f  // top left 
-    };
-
-	unsigned int indices[] = {
-		0, 1, 3, // First triangle
-		1, 2, 3  // Second triangle
-	};
-
-	unsigned int VBO, VAO, EBO; // VBO (vertex buffer object) VAO (vertex array object) EBO (element buffer object)
-
-	glGenVertexArrays(1, &VAO);
-	glGenBuffers(1, &VBO);
-	glGenBuffers(1, &EBO);
-	// bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
-	glBindVertexArray(VAO);
-
-	// VBO
-	glBindBuffer(GL_ARRAY_BUFFER, VBO);
-	glBufferData(GL_ARRAY_BUFFER,sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-	// EBO (bind as ELEMENT_ARRAY_BUFFER while VAO is bound)
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER,sizeof(indices), indices, GL_STATIC_DRAW);
-	// Optional: call GlReportGleeror("buffers setup") if implemented in errorReporting
-
-	// Vertex attributes (layout location = 0)
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
-	glEnableVertexAttribArray(0);
-
-	// Color attributes (layout location = 1)
-	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
-	glEnableVertexAttribArray(1);
-
-	// Texture coord attribute
-	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
-	glEnableVertexAttribArray(2);
-
-
-	//glBindBuffer(GL_ARRAY_BUFFER,  0);
-
-	// You can unbind the VAO afterwards so other VAO calls won't accidentally modify this VAO, but this rarely happens. Modifying other
-    // VAOs requires a call to glBindVertexArray anyways so we generally don't unbind VAOs (nor VBOs) when it's not directly necessary.
-    //glBindVertexArray(0); 
-
-	//uncomment this call to draw in wireframe polygons.
-    //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-
-	//glUseProgram(shaderProgram);
-
-	// LOAD AND CREATE A TEXTURE
-
-	unsigned int texture1, texture2;
-
-
-	//Texture 1
-	glGenTextures(1, &texture1);
-	glBindTexture(GL_TEXTURE_2D, texture1);
-
-	//wrapping parameter
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT); //s t r -> (x,y,z)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
-	//set texture filtering parameters
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-	//load image, create texture and generate mipmaps
-
-	int width, height, nrChannels;
-	stbi_set_flip_vertically_on_load(true); // tell stb_image.h to flip loaded texture's on the y-axis 
-
-	unsigned char *data = stbi_load(("assets/container.jpg"), &width, &height, &nrChannels, 0);
-
-	printf("stbi_load returned %p (w=%d h=%d c=%d)\n", (void*)data, width, height, nrChannels);
-	if(data)
-	{
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
-		glGenerateMipmap(GL_TEXTURE_2D);
-	}
-	else
-		std::cout << "Failed to load texture" <<std::endl;
-
-	stbi_image_free(data);
-	data = nullptr;
-
-
-	/*
-	//Texture 2
-
-	glGenTexture(1, &texture2);
-	glBindTexture(GL_TEXTURE_2D, texture2);
-
-	//wraping
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
-	//texture filtering
-
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	//load data
-
-	*/
-
-	shader.use(); //don't forget to activate/use the shader before setting uniforms!
-	glUniform1i(glGetUniformLocation(shader.ID, "texture1"), 0);
-
-	// or set it via the texture class ourShader.setInt("texture1",0);
-
-	// Render loop 
-	while(!glfwWindowShouldClose(window))
-	{
-		//Imput
+		// Imput
 		processInput(window);
-		
-		//rendering commands here
-		//glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+
+		// rendering commands here
+		// glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 
-
-		//bind texture on corresponding texture units
+		// bind texture on corresponding texture units
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, texture1);
-		
-		//shader.setFloat("someUniform", 1.0f);
-		//Draw
-		//glUseProgram(shaderProgram);
-		// recupérer matrice uniform de transformation et l'appliquer
-		glm::mat4 transform = glm::mat4(1.0f); // matrice identité initialisée a 1
-		
-		transform = glm::rotate(transform, glm::radians(90.0f), glm::vec3(0.0f,0.0f,1.0f));
-		transform = glm::scale(transform,glm::vec3(0.5f,0.5f,0.5f));
 
-
+		// shader.setFloat("someUniform", 1.0f);
+		// Draw
+		
 		shader.use();
-		unsigned int transformLoc = glGetUniformLocation(shader.ID, "transform");
-		glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(transform));
+		pipelineTransform(shader);
+		//glm::mat4 transform = glm::mat4(1.0f);
+		// Configurer la caméra (View & Projection) via notre fonction
+		// pipelineTransform(shader.ID);
 
-		
+		/*
+		// Récupérer l'emplacement de "model" pour dessiner nos objets
+		unsigned int modelLoc = glGetUniformLocation(shader.ID, "model");
 
 		glBindVertexArray(VAO);
+
+		// --- Objet 1 : Rotation ---
+		glm::mat4 model = glm::mat4(1.0f);
+		model = glm::translate(model, glm::vec3(0.0f, -0.5f, 0.0f));
+		model = glm::rotate(model, (float)glfwGetTime(), glm::vec3(0.0f,
+		0.0f, 1.0f)); glUniformMatrix4fv(modelLoc, 1, GL_FALSE,
+		glm::value_ptr(model));
+
 		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-		// Rectangle -> DrawElements(GL_TRIANGLES, 6 , GL_UNSIGNED_INT, 0);
-		// Optional: call GlReportGleeror("after draw") if implemented in errorReporting
-		//check and call events and swap the buffers 
+
+		// --- Objet 2 : Pulsation ---
+		model = glm::mat4(1.0f);
+		model = glm::translate(model, glm::vec3(-0.5f, 0.0f, 0.0f));
+		float scaleAmount = static_cast<float>(sin(glfwGetTime())) * 0.5f + 0.5f;
+		model = glm::scale(model, glm::vec3(scaleAmount, scaleAmount, scaleAmount));
+		glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+		*/
+		glBindVertexArray(VAO);
+		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
 		glfwSwapBuffers(window); // Swap lower to front buffer
 		glfwPollEvents();
 	}
 
+  glDeleteVertexArrays(1, &VAO);
+  glDeleteBuffers(1, &VBO);
+  glDeleteBuffers(1, &EBO);
 
-	glDeleteVertexArrays(1, &VAO);
-	glDeleteBuffers(1, &VBO);
-	glDeleteBuffers(1, &EBO);
-
-
-	glfwTerminate();
-    return 0;
+  glfwTerminate();
+  return 0;
 #endif
 }

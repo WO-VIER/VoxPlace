@@ -78,6 +78,6 @@
         "typeinfo": "cpp",
         "valarray": "cpp",
         "variant": "cpp"
-	},
-	"makefile.configureOnOpen": true
+    },
+    "makefile.configureOnOpen": true
 }

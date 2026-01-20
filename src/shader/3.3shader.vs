@@ -6,10 +6,14 @@ layout (location = 2) in vec2 aTexCoord; // vec 2d for 2d textures (s, t) (x, y)
 out vec3 ourColor; //en sortie du vertex shader
 out vec2 TexCoord; //
 
-uniform mat4 transform; // matrice de transformation 
+//uniform mat4 transform; // matrice de transformation (4x4 = 16 floats = 64 bytes)
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+
 void main()
 {
-    gl_Position = transform * vec4(aPos, 1.0); // passer de coord pixel aux coord ecran
+    gl_Position = projection * view * model * vec4(aPos, 1.0); 
     ourColor = aColor;
 	TexCoord = vec2(aTexCoord.x, aTexCoord.y);
 }

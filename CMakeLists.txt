@@ -9,6 +9,7 @@ option(ENABLE_GL_DEBUG "Enable OpenGL debug output for native builds" ON)
 if(NOT EMSCRIPTEN)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GLFW REQUIRED glfw3)
+    set(OpenGL_GL_PREFERENCE "GLVND")
     find_package(OpenGL REQUIRED)
 else()
     # For Emscripten builds we won't use system pkg-config glfw3.
@@ -24,14 +25,7 @@ set(SOURCES
 )
 if(NOT EMSCRIPTEN)
     list(APPEND SOURCES src/glad.c)
-    # Only include errorReporting if the GL headers provide the debug symbols (GL_DEBUG_OUTPUT or GL_KHR_debug or GL_VERSION_4_3)
-    include(CheckCSourceCompiles)
-    set(CMAKE_REQUIRED_INCLUDES ${CMAKE_SOURCE_DIR}/src)
-    check_c_source_compiles(
-        "#include <glad/glad.h>\n#ifdef GL_DEBUG_OUTPUT\nint main() { return 0; }\n#else\n#error no\n#endif\n"
-        HAVE_GL_DEBUG_SUPPORT
-    )
-    if(HAVE_GL_DEBUG_SUPPORT)
+    if(ENABLE_GL_DEBUG)
         list(APPEND SOURCES src/errorReporting.cpp)
     endif()
 endif()
@@ -41,9 +35,6 @@ add_executable(VoxPlace ${SOURCES})
 if(NOT EMSCRIPTEN)
     if(ENABLE_GL_DEBUG)
         target_compile_definitions(VoxPlace PRIVATE ENABLE_GL_DEBUG)
-    endif()
-    if(HAVE_GL_DEBUG_SUPPORT)
-        target_compile_definitions(VoxPlace PRIVATE HAVE_GLREPORT)
     endif()
 endif()
 

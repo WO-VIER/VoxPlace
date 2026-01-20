@@ -1,3 +1,4 @@
+#include <glad/glad.h>
 #include "errorReporting.h"
 #include <iostream>
 
@@ -11,6 +12,7 @@ void GLAPIENTRY glDebugOutput(GLenum source,
 	const char* message,
 	const void* userParam)
 {
+#ifdef GL_DEBUG_OUTPUT
 	// ignore non-significant error/warning codes
 	if (id == 131169 || id == 131185 || id == 131218 || id == 131204
 		|| id == 131222
@@ -51,14 +53,18 @@ void GLAPIENTRY glDebugOutput(GLenum source,
 	case GL_DEBUG_SEVERITY_NOTIFICATION: std::cout << "Severity: notification"; break;
 	} std::cout << std::endl;
 	std::cout << std::endl;
-
+#endif
 }
 
 void enableReportGlErrors()
 {
+#ifdef GL_DEBUG_OUTPUT
 	glEnable(GL_DEBUG_OUTPUT);
 	glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
 	glDebugMessageCallback(glDebugOutput, nullptr);
 	glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
-	glDebugMessageCallback(0, nullptr);
+	std::cout << "Système de rapport d'erreurs OpenGL activé !" << std::endl;
+#else
+	std::cout << "GL_DEBUG_OUTPUT not supported by current GLAD loader." << std::endl;
+#endif
 }
