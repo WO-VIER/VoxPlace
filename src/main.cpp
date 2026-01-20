@@ -15,6 +15,9 @@
 #include "errorReporting.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #endif
 
 const unsigned int SCREEN_WIDTH = 800;
@@ -314,6 +317,7 @@ int main()
 
 	shader.use(); //don't forget to activate/use the shader before setting uniforms!
 	glUniform1i(glGetUniformLocation(shader.ID, "texture1"), 0);
+
 	// or set it via the texture class ourShader.setInt("texture1",0);
 
 	// Render loop 
@@ -334,7 +338,19 @@ int main()
 		//shader.setFloat("someUniform", 1.0f);
 		//Draw
 		//glUseProgram(shaderProgram);
+		// recupérer matrice uniform de transformation et l'appliquer
+		glm::mat4 transform = glm::mat4(1.0f); // matrice identité initialisée a 1
+		
+		transform = glm::rotate(transform, glm::radians(90.0f), glm::vec3(0.0f,0.0f,1.0f));
+		transform = glm::scale(transform,glm::vec3(0.5f,0.5f,0.5f));
+
+
 		shader.use();
+		unsigned int transformLoc = glGetUniformLocation(shader.ID, "transform");
+		glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(transform));
+
+		
+
 		glBindVertexArray(VAO);
 		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 		// Rectangle -> DrawElements(GL_TRIANGLES, 6 , GL_UNSIGNED_INT, 0);
