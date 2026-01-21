@@ -79,5 +79,19 @@
         "valarray": "cpp",
         "variant": "cpp"
     },
-    "makefile.configureOnOpen": true
+    "makefile.configureOnOpen": true,
+    // Désactiver l'IntelliSense par défaut de Microsoft pour éviter les conflits
+    "C_Cpp.intelliSenseEngine": "disabled",
+    // Arguments passés au serveur clangd au démarrage
+    "clangd.arguments": [
+        "--background-index", // Indexation permanente du projet
+        "--clang-tidy", // Active l'analyse statique
+        "--header-insertion=iwyu", // Insertion auto des headers (Include What You Use)
+        "--completion-style=detailed", // Affiche signatures et types de retour
+        "--function-arg-placeholders", // Ajoute les paramètres lors de la complétion
+        "--compile-commands-dir=build", // Chemin vers compile_commands.json
+        "--enable-config" // Autorise la lecture du fichier .clangd local
+    ],
+    // Amélioration de l'interface visuelle
+    "editor.inlayHints.enabled": "on", // Affiche les noms des paramètres et types déduits
 }

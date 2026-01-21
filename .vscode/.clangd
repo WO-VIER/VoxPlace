@@ -1,0 +1,12 @@
+CompileFlags:
+  Add: [
+    "-std=c++23",         # Active le support des dernières fonctionnalités C++26
+    "-Wall",              # Active les avertissements essentiels
+    "-Wextra",            # Avertissements supplémentaires pour un code plus robuste
+    "-I/usr/local/include" # Chemins d'inclusion personnalisés si nécessaire
+  ]
+Index:
+  Background: Build      # Indexation automatique lors de la compilation
+Diagnostics:
+  ClangTidy:
+    Add: [modernize-*, bugprone-*, performance-*] # Règles de qualité recommandées
