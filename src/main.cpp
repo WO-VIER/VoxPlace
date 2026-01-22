@@ -1,4 +1,3 @@
-#include <GL/gl.h>
 #include <Shader.h>
 #include <config.h>
 #include <glm/ext/matrix_float4x4.hpp>
@@ -110,16 +109,18 @@ void pipelineTransform(Shader &shader)
 	projection = glm::perspective(glm::radians(35.0f),(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
 
 	// Envoi des matrices MVP au shader
+	shader.setMat4("model", model);
+	//int modelLoc = glGetUniformLocation(shader.ID,"model");
+	//glUniformMatrix4fv(modelLoc,1, GL_FALSE, glm::value_ptr(model));
 
-	int modelLoc = glGetUniformLocation(shader.ID,"model");
-	glUniformMatrix4fv(modelLoc,1, GL_FALSE, glm::value_ptr(model));
+	shader.setMat4("view", view);
+	//int viewLoc = glGetUniformLocation(shader.ID, "view");
+	//glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
 
-	int viewLoc = glGetUniformLocation(shader.ID, "view");
-	glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
-
-	int projectionLoc = glGetUniformLocation(shader.ID, "projection");
-	glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
-	glDrawArrays(GL_TRIANGLES, 0, 36);
+	shader.setMat4("projection", projection);
+	//int projectionLoc = glGetUniformLocation(shader.ID, "projection");
+	//glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
+	//glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
 int main() 
@@ -403,7 +404,7 @@ errorReporting
 		processInput(window);
 
 		// rendering commands here
-		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+		//glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		// bind texture on corresponding texture units
@@ -414,7 +415,8 @@ errorReporting
 		// Draw
 		
 		shader.use();
-		//pipelineTransform(shader);
+		pipelineTransform(shader);
+		glBindVertexArray(VAO);
 		//glm::mat4 transform = glm::mat4(1.0f);
 		// Configurer la caméra (View & Projection) via notre fonction
 		// pipelineTransform(shader.ID);
@@ -423,7 +425,6 @@ errorReporting
 		// Récupérer l'emplacement de "model" pour dessiner nos objets
 		unsigned int modelLoc = glGetUniformLocation(shader.ID, "model");
 
-		glBindVertexArray(VAO);
 
 		// --- Objet 1 : Rotation ---
 		glm::mat4 model = glm::mat4(1.0f);
@@ -443,12 +444,14 @@ errorReporting
 		*/
 
 		// mvp 
+		
+		/*
 		glm::mat4 model = glm::mat4(1.0f);
 		glm::mat4 view = glm::mat4(1.0f);
 		glm::mat4 projection = glm::mat4(1.0f);
 
 		view 		= glm::translate(view, glm::vec3(0.0f,0.0f,-3.0f));
-		projection	= glm::perspective(glm::radians(45.0f), (float) SCR_WIDTH / (float) SCR_HEIGHT, 0.1f, 100.0f);
+		projection	= glm::perspective(glm::radians(45.0f), (float) SCREEN_WIDTH / (float) SCREEN_HEIGHT, 0.1f, 100.0f);
 
 
 		shader.setMat4("projection", projection);
@@ -467,9 +470,9 @@ errorReporting
 			glDrawArrays(GL_TRIANGLES, 0, 36);
 		}
 
-
+		*/
 		//glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-		//glDrawArrays(GL_TRIANGLES, 0, 36);
+		glDrawArrays(GL_TRIANGLES, 0, 36);
 
 		glfwSwapBuffers(window); // Swap lower to front buffer
 		glfwPollEvents();
