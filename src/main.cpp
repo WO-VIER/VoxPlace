@@ -1,6 +1,10 @@
+#include <GL/gl.h>
 #include <Shader.h>
 #include <config.h>
+#include <glm/ext/matrix_float4x4.hpp>
+#include <glm/ext/matrix_transform.hpp>
 #include <glm/fwd.hpp>
+#include <glm/trigonometric.hpp>
 #include <iostream>
 #include <print>
 
@@ -65,10 +69,37 @@ void render_frame() {
 void pipelineTransform(Shader &shader) 
 {
 
-	// 1. Model matrix : transforme les coord des sommets en coords monde
-	glm::mat4 model = glm::mat4(1.0f);
-	model = rotate(model, (float)glfwGetTime() * glm::radians(50.0f), glm::vec3(0.5f,1.0f,0.0f));
+	glm::vec3 cubePosition[] = 
+	{
+	glm::vec3( 0.0f, 0.0f, 0.0f),
+ 	glm::vec3( 2.0f, 5.0f, -15.0f),
+	glm::vec3(-1.5f, -2.2f, -2.5f),
+	glm::vec3(-3.8f, -2.0f, -12.3f),
+	glm::vec3( 2.4f, -0.4f, -3.5f),
+	glm::vec3(-1.7f, 3.0f, -7.5f),
+	glm::vec3( 1.3f, -2.0f, -2.5f),
+	glm::vec3( 1.5f, 2.0f, -2.5f),
+	glm::vec3( 1.5f, 0.2f, -1.5f),
+	glm::vec3(-1.3f, 1.0f, -1.5f)
+	};
 
+
+	// 1. Model matrix : transforme les coord des sommets en coords monde
+
+	glm::mat4 model = glm::mat4(1.0f);
+	model = rotate(model, (float)glfwGetTime() * glm::radians(45.0f), glm::vec3(0.5f,1.0f,0.0f));
+	//glm::mat4 model = glm::mat4(1.0f);
+
+	/*
+	for(unsigned int i = 0; i < 10; i++)
+	{
+		model = glm::translate(model, cubePosition[i]);
+		float angle = 20.0f * i;
+		model = glm::rotate(model, glm::radians(angle), glm::vec3(1.0f,0.3f,0.5f));
+		//shader.setMat4("model", model);
+	}
+
+	*/
 	// 2. View matrix : transforme les coord monde en coord vue (caméra)
 	glm::mat4 view = glm::mat4(1.0f);
 	view = glm::translate(view, glm::vec3(0.0f, 0.0f, -3.0f));
@@ -76,7 +107,7 @@ void pipelineTransform(Shader &shader)
 	// 3. Projection matrix : transforme les coords vue en coord projection
 	glm::mat4 projection = glm::mat4(1.0f);
 	// Important : Cast en float pour éviter la division entière (800/600 = 1)
-	projection = glm::perspective(glm::radians(45.0f),(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
+	projection = glm::perspective(glm::radians(35.0f),(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
 
 	// Envoi des matrices MVP au shader
 
@@ -88,6 +119,7 @@ void pipelineTransform(Shader &shader)
 
 	int projectionLoc = glGetUniformLocation(shader.ID, "projection");
 	glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
+	glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
 int main() 
@@ -188,55 +220,72 @@ errorReporting
 	//setup vertex data
 	*/
 
+	//Configure le state de opengl
+	glEnable(GL_DEPTH_TEST);
+
 	Shader shader("src/shader/3.3cube.vs", "src/shader/3.3cube.fs");
 
 	float vertices[] = {
-        -0.5f, -0.5f, -0.5f,  0.0f, 0.0f, // 0 postion (vec3) 1 texCoord (vec2) 2 color (vec3)
-         0.5f, -0.5f, -0.5f,  1.0f, 0.0f,
-         0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-         0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-        -0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
-        -0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
+		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f, // 0 postion (vec3) 1 texCoord (vec2) 2 color (vec3)
+		 0.5f, -0.5f, -0.5f,  1.0f, 0.0f,
+		 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+		 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+		-0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
+		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
 
-        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-         0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
-         0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
-         0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
-        -0.5f,  0.5f,  0.5f,  0.0f, 1.0f,
-        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+		 0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+		 0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
+		 0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
+		-0.5f,  0.5f,  0.5f,  0.0f, 1.0f,
+		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
 
-        -0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-        -0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-        -0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+		-0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+		-0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+		-0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
 
-         0.5f,  0.5f,  0.5f,  1.0f,0.0f,
-         0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-         0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-         0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-         0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-         0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+		 0.5f,  0.5f,  0.5f,  1.0f,0.0f,
+		 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+		 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+		 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+		 0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+		 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
 
-        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-         0.5f, -0.5f, -0.5f,  1.0f, 1.0f,
-         0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
-         0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
-        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+		 0.5f, -0.5f, -0.5f,  1.0f, 1.0f,
+		 0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+		 0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
 
-        -0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
-         0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-         0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-         0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-        -0.5f,  0.5f,  0.5f,  0.0f, 0.0f,
-        -0.5f,  0.5f, -0.5f,  0.0f, 1.0f
-    };
+		-0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
+		 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+		 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+		 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+		-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,
+		-0.5f,  0.5f, -0.5f,  0.0f, 1.0f
+	};
 
 	unsigned int indices[] = {
 			0, 1, 3, // First triangle
 			1, 2, 3  // Second triangle
+	};
+
+	glm::vec3 cubesPositions[] = 
+	{
+			glm::vec3( 0.0f, 0.0f, 0.0f),
+			glm::vec3( 2.0f, 5.0f, -15.0f),
+			glm::vec3(-1.5f, -2.2f, -2.5f),
+			glm::vec3(-3.8f, -2.0f, -12.3f),
+			glm::vec3( 2.4f, -0.4f, -3.5f),
+			glm::vec3(-1.7f, 3.0f, -7.5f),
+			glm::vec3( 1.3f, -2.0f, -2.5f),
+			glm::vec3( 1.5f, 2.0f, -2.5f),
+ 			glm::vec3( 1.5f, 0.2f, -1.5f),
+			glm::vec3(-1.3f, 1.0f, -1.5f)
 	};
 
 	unsigned int VBO, VAO, EBO; // VBO (vertex buffer object) VAO (vertex array
@@ -267,8 +316,8 @@ errorReporting
 	glEnableVertexAttribArray(0);
 
 	// Color attributes (layout location = 1)
-	//glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void *)(3 * sizeof(float))); // textcoord vec2 (x,y,z) ptr->(x,y)
-	//glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void *)(3 * sizeof(float))); // textcoord vec2 (x,y,z) ptr->(x,y)
+	glEnableVertexAttribArray(1);
 
 	// Texture coord attribute
 	//glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(6 * sizeof(float)));
@@ -354,8 +403,8 @@ errorReporting
 		processInput(window);
 
 		// rendering commands here
-		// glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT);
+		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		// bind texture on corresponding texture units
 		glActiveTexture(GL_TEXTURE0);
@@ -365,7 +414,7 @@ errorReporting
 		// Draw
 		
 		shader.use();
-		pipelineTransform(shader);
+		//pipelineTransform(shader);
 		//glm::mat4 transform = glm::mat4(1.0f);
 		// Configurer la caméra (View & Projection) via notre fonction
 		// pipelineTransform(shader.ID);
@@ -392,9 +441,35 @@ errorReporting
 		model = glm::scale(model, glm::vec3(scaleAmount, scaleAmount, scaleAmount));
 		glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
 		*/
+
+		// mvp 
+		glm::mat4 model = glm::mat4(1.0f);
+		glm::mat4 view = glm::mat4(1.0f);
+		glm::mat4 projection = glm::mat4(1.0f);
+
+		view 		= glm::translate(view, glm::vec3(0.0f,0.0f,-3.0f));
+		projection	= glm::perspective(glm::radians(45.0f), (float) SCR_WIDTH / (float) SCR_HEIGHT, 0.1f, 100.0f);
+
+
+		shader.setMat4("projection", projection);
+		shader.setMat4("view",	view);
 		glBindVertexArray(VAO);
+
+		for(unsigned int i = 0; i < 10; i++)
+		{
+			glm::mat4 model = glm::mat4(1.0f);
+			model = glm::translate(model, cubesPositions[i]);
+
+			float angle = 20.0f * i;
+			model = glm::rotate(model, glm::radians(angle), glm::vec3(1.0f, 0.3f, 0.5f));
+			shader.setMat4("model", model);
+
+			glDrawArrays(GL_TRIANGLES, 0, 36);
+		}
+
+
 		//glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-		glDrawArrays(GL_TRIANGLES, 0, 36);
+		//glDrawArrays(GL_TRIANGLES, 0, 36);
 
 		glfwSwapBuffers(window); // Swap lower to front buffer
 		glfwPollEvents();
