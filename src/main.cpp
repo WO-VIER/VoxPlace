@@ -68,6 +68,11 @@ void render_frame() {
 void pipelineTransform(Shader &shader) 
 {
 
+
+	glm::mat4 model;
+	glm::mat4 view;
+	glm::mat4 projection;
+
 	glm::vec3 cubePosition[] = 
 	{
 	glm::vec3( 0.0f, 0.0f, 0.0f),
@@ -85,31 +90,43 @@ void pipelineTransform(Shader &shader)
 
 	// 1. Model matrix : transforme les coord des sommets en coords monde
 
-	glm::mat4 model = glm::mat4(1.0f);
-	model = rotate(model, (float)glfwGetTime() * glm::radians(45.0f), glm::vec3(0.5f,1.0f,0.0f));
+	//model = rotate(model, (float)glfwGetTime() * glm::radians(45.0f), glm::vec3(0.5f,1.0f,0.0f));
 	//glm::mat4 model = glm::mat4(1.0f);
 
-	/*
+	
 	for(unsigned int i = 0; i < 10; i++)
 	{
-		model = glm::translate(model, cubePosition[i]);
+		
 		float angle = 20.0f * i;
-		model = glm::rotate(model, glm::radians(angle), glm::vec3(1.0f,0.3f,0.5f));
-		//shader.setMat4("model", model);
+		
+		model = glm::mat4(1.0f);
+		model = glm::translate(model, cubePosition[i]);
+		model = glm::rotate(model, (float)glfwGetTime() * glm::radians(angle), glm::vec3(1.0f,0.3f,0.5f));
+		
+		glm::mat4 view = glm::mat4(1.0f);
+		view = glm::translate(view, glm::vec3(0.0f, 0.0f, -3.0f));
+		
+		glm::mat4 projection = glm::mat4(1.0f);
+		projection = glm::perspective(glm::radians(35.0f),(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
+		
+		
+		shader.setMat4("model", model);
+		shader.setMat4("view", view);
+		shader.setMat4("projection", projection);
+		
+		glDrawArrays(GL_TRIANGLES,0, 36);
 	}
 
-	*/
+	return ;
 	// 2. View matrix : transforme les coord monde en coord vue (caméra)
-	glm::mat4 view = glm::mat4(1.0f);
 	view = glm::translate(view, glm::vec3(0.0f, 0.0f, -3.0f));
 
 	// 3. Projection matrix : transforme les coords vue en coord projection
-	glm::mat4 projection = glm::mat4(1.0f);
 	// Important : Cast en float pour éviter la division entière (800/600 = 1)
 	projection = glm::perspective(glm::radians(35.0f),(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
 
 	// Envoi des matrices MVP au shader
-	shader.setMat4("model", model);
+	//shader.setMat4("model", model);
 	//int modelLoc = glGetUniformLocation(shader.ID,"model");
 	//glUniformMatrix4fv(modelLoc,1, GL_FALSE, glm::value_ptr(model));
 
@@ -416,7 +433,7 @@ errorReporting
 		
 		shader.use();
 		pipelineTransform(shader);
-		glBindVertexArray(VAO);
+		//glBindVertexArray(VAO);
 		//glm::mat4 transform = glm::mat4(1.0f);
 		// Configurer la caméra (View & Projection) via notre fonction
 		// pipelineTransform(shader.ID);
@@ -472,7 +489,7 @@ errorReporting
 
 		*/
 		//glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-		glDrawArrays(GL_TRIANGLES, 0, 36);
+		//glDrawArrays(GL_TRIANGLES, 0, 36);
 
 		glfwSwapBuffers(window); // Swap lower to front buffer
 		glfwPollEvents();
