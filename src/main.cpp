@@ -1,4 +1,5 @@
 #include <Shader.h>
+#include <cmath>
 #include <config.h>
 #include <glm/ext/matrix_float4x4.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -22,11 +23,21 @@
 #include <glm/gtc/type_ptr.hpp>
 #endif
 
-const unsigned int SCREEN_WIDTH = 800;
-const unsigned int SCREEN_HEIGHT = 600;
+const unsigned int SCREEN_WIDTH = 1920;
+const unsigned int SCREEN_HEIGHT = 1080;
 
 // global window for render callback (WASM uses callback-based main loop)
 static GLFWwindow *g_window = nullptr;
+
+//camera
+glm::vec3 cameraPos = glm::vec3(0.0f,0.0f,3.0f);
+glm::vec3 cameraFront = glm::vec3(0.0f,0.0f,-1.0f);
+glm::vec3 cameraUp = glm::vec3(0.0f,1.0f,0.0f);
+
+//timing
+float deltaTime = 0.0f;
+float lastFrame = 0.0f;
+
 bool initGlfw() 
 {
 
@@ -49,12 +60,23 @@ void framebuffer_size_callback(GLFWwindow *window, int width, int height) {
 	// Ex : (-0.5,0.5) (200, 450) (-1,1)
 }
 
-void processInput(GLFWwindow *window) {
+void processInput(GLFWwindow *window) 
+{
 	if (!window)
 		return;
 
 	if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
 		glfwSetWindowShouldClose(window, true);
+	
+	float cameraSpeed = static_cast<float>(2.5 * deltaTime);
+	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+        cameraPos += cameraSpeed * cameraFront;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+        cameraPos -= cameraSpeed * cameraFront;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+        cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+        cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
 }
 
 void render_frame() {
@@ -87,7 +109,6 @@ void pipelineTransform(Shader &shader)
 	glm::vec3(-1.3f, 1.0f, -1.5f)
 	};
 
-
 	// 1. Model matrix : transforme les coord des sommets en coords monde
 
 	//model = rotate(model, (float)glfwGetTime() * glm::radians(45.0f), glm::vec3(0.5f,1.0f,0.0f));
@@ -97,22 +118,33 @@ void pipelineTransform(Shader &shader)
 	for(unsigned int i = 0; i < 10; i++)
 	{
 		
-		float angle = 20.0f * i;
+		float angle = 20.0f + i * 10.0f;
+		//double time = glfwGetTime();
+		float radius = 10.0f;
+		float camX = sin(glfwGetTime()) * radius;
+		float camZ = cos(glfwGetTime()) * radius;
+	
 		
+		//if (i > 2)
+			//angle = 20.0f * i; 
+		
+
 		model = glm::mat4(1.0f);
 		model = glm::translate(model, cubePosition[i]);
 		model = glm::rotate(model, (float)glfwGetTime() * glm::radians(angle), glm::vec3(1.0f,0.3f,0.5f));
-		
-		glm::mat4 view = glm::mat4(1.0f);
-		view = glm::translate(view, glm::vec3(0.0f, 0.0f, -3.0f));
-		
-		glm::mat4 projection = glm::mat4(1.0f);
-		projection = glm::perspective(glm::radians(35.0f),(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
-		
-		
 		shader.setMat4("model", model);
+		
+		//glm::mat4 view = glm::mat4(1.0f);
+		//view = glm::translate(view, glm::vec3(0.0f, 0.0f, -5.0f));
+		
+		view = glm::lookAt(cameraPos, cameraPos * cameraFront, cameraUp);
 		shader.setMat4("view", view);
+		
+		
+		projection = glm::perspective(glm::radians(45.0f),(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
 		shader.setMat4("projection", projection);
+		
+		
 		
 		glDrawArrays(GL_TRIANGLES,0, 36);
 	}
@@ -292,19 +324,6 @@ errorReporting
 			1, 2, 3  // Second triangle
 	};
 
-	glm::vec3 cubesPositions[] = 
-	{
-			glm::vec3( 0.0f, 0.0f, 0.0f),
-			glm::vec3( 2.0f, 5.0f, -15.0f),
-			glm::vec3(-1.5f, -2.2f, -2.5f),
-			glm::vec3(-3.8f, -2.0f, -12.3f),
-			glm::vec3( 2.4f, -0.4f, -3.5f),
-			glm::vec3(-1.7f, 3.0f, -7.5f),
-			glm::vec3( 1.3f, -2.0f, -2.5f),
-			glm::vec3( 1.5f, 2.0f, -2.5f),
- 			glm::vec3( 1.5f, 0.2f, -1.5f),
-			glm::vec3(-1.3f, 1.0f, -1.5f)
-	};
 
 	unsigned int VBO, VAO, EBO; // VBO (vertex buffer object) VAO (vertex array
 															// object) EBO (element buffer object)
@@ -410,13 +429,21 @@ errorReporting
 
 	shader.use(); // don't forget to activate/use the shader before setting
 								// uniforms!
-	glUniform1i(glGetUniformLocation(shader.ID, "texture1"), 0);
+
+	shader.setInt("texture1", 0); 
+	// replace ->
+	//glUniform1i(glGetUniformLocation(shader.ID, "texture1"), 0);
 
 	// or set it via the texture class ourShader.setInt("texture1",0);
 
 	// Render loop
 	while (!glfwWindowShouldClose(window)) 
 	{
+		//per-frame time logic 
+		float currentFrame = static_cast<float>(glfwGetTime());
+		deltaTime = currentFrame - lastFrame;
+		lastFrame = currentFrame;
+		
 		// Imput
 		processInput(window);
 
@@ -428,10 +455,11 @@ errorReporting
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, texture1);
 
+
 		// shader.setFloat("someUniform", 1.0f);
 		// Draw
 		
-		shader.use();
+		//shader.use();
 		pipelineTransform(shader);
 		//glBindVertexArray(VAO);
 		//glm::mat4 transform = glm::mat4(1.0f);
