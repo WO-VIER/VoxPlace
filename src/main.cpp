@@ -114,7 +114,6 @@ void pipelineTransform(Shader &shader)
 	//model = rotate(model, (float)glfwGetTime() * glm::radians(45.0f), glm::vec3(0.5f,1.0f,0.0f));
 	//glm::mat4 model = glm::mat4(1.0f);
 
-	
 	for(unsigned int i = 0; i < 10; i++)
 	{
 		
@@ -137,7 +136,7 @@ void pipelineTransform(Shader &shader)
 		//glm::mat4 view = glm::mat4(1.0f);
 		//view = glm::translate(view, glm::vec3(0.0f, 0.0f, -5.0f));
 		
-		view = glm::lookAt(cameraPos, cameraPos * cameraFront, cameraUp);
+		view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
 		shader.setMat4("view", view);
 		
 		
@@ -460,6 +459,7 @@ errorReporting
 		// Draw
 		
 		//shader.use();
+		glBindVertexArray(VAO);
 		pipelineTransform(shader);
 		//glBindVertexArray(VAO);
 		//glm::mat4 transform = glm::mat4(1.0f);
