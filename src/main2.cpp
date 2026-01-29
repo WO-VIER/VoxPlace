@@ -89,88 +89,24 @@ void render_frame() {
 
 void pipelineTransform(Shader &shader) 
 {
-
-
-	glm::mat4 model;
-	glm::mat4 view;
-	glm::mat4 projection;
-
-	glm::vec3 cubePosition[] = 
-	{
-	glm::vec3( 0.0f, 0.0f, 0.0f),
- 	glm::vec3( 2.0f, 5.0f, -15.0f),
-	glm::vec3(-1.5f, -2.2f, -2.5f),
-	glm::vec3(-3.8f, -2.0f, -12.3f),
-	glm::vec3( 2.4f, -0.4f, -3.5f),
-	glm::vec3(-1.7f, 3.0f, -7.5f),
-	glm::vec3( 1.3f, -2.0f, -2.5f),
-	glm::vec3( 1.5f, 2.0f, -2.5f),
-	glm::vec3( 1.5f, 0.2f, -1.5f),
-	glm::vec3(-1.3f, 1.0f, -1.5f)
-	};
-
-
-	// 1. Model matrix : transforme les coord des sommets en coords monde
-
-	//model = rotate(model, (float)glfwGetTime() * glm::radians(45.0f), glm::vec3(0.5f,1.0f,0.0f));
-	//glm::mat4 model = glm::mat4(1.0f);
-	 
-	for(unsigned int i = 0; i < 10; i++)
-	{
-		
-		float angle = 20.0f + i * 10.0f;
-		//double time = glfwGetTime();
-		float radius = 10.0f;
-		float camX = sin(glfwGetTime()) * radius;
-		float camZ = cos(glfwGetTime()) * radius;
-	
-		
-		//if (i > 2)
-			//angle = 20.0f * i; 
-		
-
-		model = glm::mat4(1.0f);
-
-		model = glm::translate(model, cubePosition[i]);
-		model = glm::rotate(model, (float)glfwGetTime() * glm::radians(angle), glm::vec3(1.0f,0.3f,0.5f));
-		shader.setMat4("model", model);
-		
-		//glm::mat4 view = glm::mat4(1.0f);
-		//view = glm::translate(view, glm::vec3(0.0f, 0.0f, -5.0f));
-		
-		view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-		shader.setMat4("view", view);
-		
-		
-		projection = glm::perspective(glm::radians(45.0f),(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
-		shader.setMat4("projection", projection);
-		
-		
-		
-		glDrawArrays(GL_TRIANGLES,0, 36);
-	}
-
-	return ;
-	// 2. View matrix : transforme les coord monde en coord vue (caméra)
-	view = glm::translate(view, glm::vec3(0.0f, 0.0f, -3.0f));
-
-	// 3. Projection matrix : transforme les coords vue en coord projection
-	// Important : Cast en float pour éviter la division entière (800/600 = 1)
-	projection = glm::perspective(glm::radians(35.0f),(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
-
-	// Envoi des matrices MVP au shader
-	//shader.setMat4("model", model);
-	//int modelLoc = glGetUniformLocation(shader.ID,"model");
-	//glUniformMatrix4fv(modelLoc,1, GL_FALSE, glm::value_ptr(model));
+	glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+	glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
 
 	shader.setMat4("view", view);
-	//int viewLoc = glGetUniformLocation(shader.ID, "view");
-	//glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
-
 	shader.setMat4("projection", projection);
-	//int projectionLoc = glGetUniformLocation(shader.ID, "projection");
-	//glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
-	//glDrawArrays(GL_TRIANGLES, 0, 36);
+
+	for(int x = -25; x < 25; x++)
+	{
+		for(int z = -25; z < 25; z++)
+		{
+			glm::mat4 model = glm::mat4(1.0f);
+			model = glm::translate(model, glm::vec3(x, -1.0f, z));
+			shader.setMat4("model", model);
+
+			// Draw the cube
+			glDrawArrays(GL_TRIANGLES, 0, 36);
+		}
+	}
 }
 
 int main() 
@@ -273,6 +209,9 @@ errorReporting
 
 	//Configure le state de opengl
 	glEnable(GL_DEPTH_TEST);
+	//glEnable(GL_CULL_FACE);
+	//glFrontFace(GL_CCW);
+
 
 	Shader shader("src/shader/3.3cube.vs", "src/shader/3.3cube.fs");
 
