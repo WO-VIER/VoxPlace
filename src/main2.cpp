@@ -1,4 +1,5 @@
 #include <Shader.h>
+#include <Camera.h>
 #include <cmath>
 #include <config.h>
 #include <glm/ext/matrix_float4x4.hpp>

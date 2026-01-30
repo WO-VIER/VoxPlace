@@ -81,7 +81,7 @@
     },
     "makefile.configureOnOpen": true,
     // Désactiver l'IntelliSense par défaut de Microsoft pour éviter les conflits
-    "C_Cpp.intelliSenseEngine": "disabled",
+    //"C_Cpp.intelliSenseEngine": "disabled",
     // Arguments passés au serveur clangd au démarrage
     "clangd.arguments": [
         "--background-index", // Indexation permanente du projet
