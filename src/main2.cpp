@@ -24,6 +24,12 @@
 #include <glm/gtc/type_ptr.hpp>
 #endif
 
+
+void framebuffer_size_callback(GLFWwindow* window, int width, int height);
+void mouse_callback(GLFWwindow* window, double xpos, double ypos);
+void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
+void processInput(GLFWwindow *window);
+
 const unsigned int SCREEN_WIDTH = 1920;
 const unsigned int SCREEN_HEIGHT = 1080;
 
@@ -31,12 +37,13 @@ const unsigned int SCREEN_HEIGHT = 1080;
 static GLFWwindow *g_window = nullptr;
 
 //camera
-glm::vec3 cameraPos = glm::vec3(0.0f,0.0f,3.0f);
-glm::vec3 cameraFront = glm::vec3(0.0f,0.0f,-1.0f);
-glm::vec3 cameraUp = glm::vec3(0.0f,1.0f,0.0f);
+Camera camera(glm::vec3(0.0f,0.0f,3.0f));
+float lastX = SCREEN_WIDTH / 2.0f;
+float lastY = SCREEN_HEIGHT / 2.0f;
+bool firstMouse = true;
 
 //timing
-float deltaTime = 0.0f;
+float deltaTime = 0.0f; // time betweem current and last frame
 float lastFrame = 0.0f;
 
 bool initGlfw() 
@@ -69,16 +76,46 @@ void processInput(GLFWwindow *window)
 	if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
 		glfwSetWindowShouldClose(window, true);
 	
-	float cameraSpeed = static_cast<float>(2.5 * deltaTime);
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-        cameraPos += cameraSpeed * cameraFront;
+        camera.ProcessKeyboard(FORWARD, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-        cameraPos -= cameraSpeed * cameraFront;
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-        cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+		camera.ProcessKeyboard(BACKWARD, deltaTime);
+	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+        camera.ProcessKeyboard(LEFT, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-        cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+        camera.ProcessKeyboard(RIGHT, deltaTime);
 }
+
+void mouse_callback(GLFWwindow *window, double xposIn, double yposIn)
+{
+	float xpos;
+	float ypos;
+	float xoffset;
+	float yoffset;
+
+	xpos = static_cast<float>(xposIn);
+	ypos = static_cast<float>(yposIn);
+
+	if(firstMouse)
+	{
+		lastX = xpos;
+		lastY = ypos;
+		firstMouse = false;
+	};
+
+	xoffset = xpos - lastX;
+	yoffset = lastY - ypos;
+
+	lastX = xpos;
+	lastY = ypos;
+
+	camera.ProcessMouseMovement(xoffset, yoffset);
+};
+
+void scroll_callback(GLFWwindow *window, double xoffset, double yoffset)
+{
+	camera.ProcessMouseScroll(static_cast<float>(yoffset));
+};
 
 void render_frame() {
 	if (!g_window)
@@ -90,9 +127,11 @@ void render_frame() {
 
 void pipelineTransform(Shader &shader) 
 {
-	glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-	glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
+	glm::mat4 view = 1.0f;
+	glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
 
+
+	view = camera.GetViewMatrix();
 	shader.setMat4("view", view);
 	shader.setMat4("projection", projection);
 
@@ -144,6 +183,10 @@ int main()
 	}
 	glfwMakeContextCurrent(window);
 	glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+	glfwSetCursorPosCallback(window, mouse_callback);
+	glfwSetScrollCallback(window, scroll_callback);
+
+	glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
 	// Glad gere les pointeures de fonctions OpenGL
 	//  	Nous passons a GLAD la fonction de recupération des pointeurs de
