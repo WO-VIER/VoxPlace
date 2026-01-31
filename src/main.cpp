@@ -320,6 +320,10 @@ errorReporting
 		-0.5f,  0.5f, -0.5f,  0.0f, 1.0f
 	};
 
+	float vertices2[] = {
+		
+	};
+
 	unsigned int indices[] = {
 			0, 1, 3, // First triangle
 			1, 2, 3  // Second triangle
