@@ -30,6 +30,62 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void processInput(GLFWwindow *window);
 
+
+static const float vertices[] = {
+	0.0, 0.0, 1.0, 0.0, 0.25, // front
+	0.0, 1.0, 1.0, 0.0, 0.0,
+	1.0, 1.0, 1.0, 0.25, 0.0,
+	1.0, 0.0, 1.0, 0.25, 0.25,
+
+	0.0, 0.0, 0.0, 0.0, 1.0, //   back
+	0.0, 1.0, 0.0, 0.0, 0.75,
+	1.0, 1.0, 0.0, 0.25, 0.75,
+	1.0, 0.0, 0.0, 0.25, 1.0,
+
+	0.0, 0.0, 1.0, 0.0, 0.50, // top
+	0.0, 0.0, 0.0, 0.0, 0.75,
+	1.0, 0.0, 0.0, 0.25, 0.75,
+	1.0, 0.0, 1.0, 0.25, 0.50,
+
+	0.0, 1.0, 1.0, 0.0, 0.25,  // bottom
+	0.0, 1.0, 0.0, 0.0, 0.50,
+	1.0, 1.0, 0.0, 0.25, 0.50,
+	1.0, 1.0, 1.0, 0.25, 0.25,
+
+	0.0, 1.0, 1.0, 0.25, 0.0, // left
+	0.0, 0.0, 1.0, 0.25, 0.25,
+	0.0, 0.0, 0.0, 0.50, 0.25,
+	0.0, 1.0, 0.0, 0.50, 0.0,
+
+	1.0, 1.0, 1.0, 0.50, 0.0, // right
+	1.0, 0.0, 1.0, 0.50, 0.25,
+	1.0, 0.0, 0.0, 0.75, 0.25,
+	1.0, 1.0, 0.0, 0.75, 0.0
+};
+
+
+
+	unsigned int indices[] = {
+
+	0, 1, 2, // front
+	2, 3, 0,
+
+	4, 5, 6, // back
+	6, 7, 4,
+
+	8, 9, 10, // bottom
+	8, 10, 11,
+
+	12, 13, 14,
+	12, 14, 15,
+
+	16, 17, 19,
+	17, 18, 19,
+
+	20, 21, 22,
+	20, 22, 23
+};
+
 const unsigned int SCREEN_WIDTH = 1920;
 const unsigned int SCREEN_HEIGHT = 1080;
 
@@ -137,19 +193,66 @@ void pipelineTransform(Shader &shader)
 	shader.setMat4("view", view);
 	shader.setMat4("projection", projection);
 
-	for(int x = -25; x < 25; x++)
+	for(char x = -25; x < 25; x++)
 	{
-		for(int z = -25; z < 25; z++)
+		for(char z = -25; z < 25; z++)
 		{
 			glm::mat4 model = glm::mat4(1.0f);
 			model = glm::translate(model, glm::vec3(x, -1.0f, z));
 			shader.setMat4("model", model);
 
 			// Draw the cube
-			glDrawArrays(GL_TRIANGLES, 0, 36);
+			//Front -> back -> left -> right -> bottom -> top
+			glDrawElements(GL_TRIANGLES, sizeof(indices), GL_UNSIGNED_INT, 0);
+			//glDrawArrays(GL_TRIANGLES, 0, 36);
+			//Top face texture
+			//glActiveTexture(GL_TEXTURE0);
+			//glDrawArrays(GL_TRIANGLES, 30, 6);
+			//glActiveTexture(GL_TEXTURE1);
+
 		}
 	}
 }
+
+void stbi_load_texture(const char *filename)
+{	
+	int width;
+	int height; 
+	int nrChannels;
+	unsigned char * data;
+	
+	if(!filename)
+		return;
+
+	width = 0;
+
+	while(filename[width])
+		width++;
+	if(width == 0)
+		return;
+
+	width = 0;
+
+	stbi_set_flip_vertically_on_load(true); // tell stb_image.h to flip loaded texture's on the y-axis
+
+	data = stbi_load((filename), &width, &height, &nrChannels, 0);
+
+	printf("stbi_load returned %p (w=%d h=%d c=%d)\n", (void *)data, width, height, nrChannels);
+	if (data) 
+	{
+		if(nrChannels == 3)
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+		else if(nrChannels == 4)
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+		glGenerateMipmap(GL_TEXTURE_2D);
+	} 
+	else
+		std::cout << "Failed to load texture" << std::endl;
+
+	stbi_image_free(data);
+	data = nullptr;
+};
+
 
 int main() 
 {
@@ -261,56 +364,6 @@ errorReporting
 
 	Shader shader("src/shader/3.3cube.vs", "src/shader/3.3cube.fs");
 
-	float vertices[] = {
-		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f, // 0 postion (vec3) 1 texCoord (vec2) 2 color (vec3)
-		 0.5f, -0.5f, -0.5f,  1.0f, 0.0f,
-		 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-		 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-		-0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
-		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
-
-		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-		 0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
-		 0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
-		 0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
-		-0.5f,  0.5f,  0.5f,  0.0f, 1.0f,
-		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-
-		-0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-		-0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-		-0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-
-		 0.5f,  0.5f,  0.5f,  1.0f,0.0f,
-		 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-		 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-		 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-		 0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-		 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-
-		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-		 0.5f, -0.5f, -0.5f,  1.0f, 1.0f,
-		 0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
-		 0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
-		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-
-		-0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
-		 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-		 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-		 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-		-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,
-		-0.5f,  0.5f, -0.5f,  0.0f, 1.0f
-	};
-
-	unsigned int indices[] = {
-			0, 1, 3, // First triangle
-			1, 2, 3  // Second triangle
-	};
-
-
 	unsigned int VBO, VAO, EBO; // VBO (vertex buffer object) VAO (vertex array
 															// object) EBO (element buffer object)
 
@@ -367,60 +420,64 @@ errorReporting
 	glGenTextures(1, &texture1);
 	glBindTexture(GL_TEXTURE_2D, texture1);
 
-	// wrapping parameter
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
-									GL_REPEAT); // s t r -> (x,y,z)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
-	// set texture filtering parameters
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-	// load image, create texture and generate mipmaps
-
-	int width, height, nrChannels;
-	stbi_set_flip_vertically_on_load(true); // tell stb_image.h to flip loaded texture's on the y-axis
-
-	unsigned char *data = stbi_load(("assets/container.jpg"), &width, &height, &nrChannels, 0);
-
-	printf("stbi_load returned %p (w=%d h=%d c=%d)\n", (void *)data, width, height, nrChannels);
-	if (data) 
-	{
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
-		glGenerateMipmap(GL_TEXTURE_2D);
-	} 
-	else
-		std::cout << "Failed to load texture" << std::endl;
-
-	stbi_image_free(data);
-	data = nullptr;
-
-	/*
-	//Texture 2
-
-	glGenTexture(1, &texture2);
+	glGenTextures(1, &texture2);
 	glBindTexture(GL_TEXTURE_2D, texture2);
 
+	// wrapping parameter
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT); // s t r -> (x,y,z)
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	
+	// set texture filtering parameters
+	
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_POINT); // 16*16 texture no filter
 	//wraping
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	// load image, create texture and generate mipmaps
+	
+	
+	shader.use(); // don't forget to activate/use the shader before setting
+	// uniforms!
+	stbi_load_texture("assets/grassside.png");
+
+	shader.setInt("texture1", 0);
+	glActiveTexture(GL_TEXTURE0);
+
+	//stbi_load_texture("assets/grasstop.png");
+	//shader.setInt("texture2", 1);
+
+	//Texture 2
+
+	//glGenTexture(1, &texture2);
+	//glBindTexture(GL_TEXTURE_2D, texture2);
+
 
 	//texture filtering
 
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	
+
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	//load data
 
-	*/
-
-	shader.use(); // don't forget to activate/use the shader before setting
-								// uniforms!
-
-	shader.setInt("texture1", 0); 
+	
+								
+	// bind texture on corresponding texture units
+	//shader.setInt("texture1", 0); 
+	//glActiveTexture(GL_TEXTURE0);
+	//glBindTexture(GL_TEXTURE_2D, texture1);
 	// replace ->
 	//glUniform1i(glGetUniformLocation(shader.ID, "texture1"), 0);
 
 	// or set it via the texture class ourShader.setInt("texture1",0);
+
+	//wireframe mode
+	//glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
 	// Render loop
 	while (!glfwWindowShouldClose(window)) 
@@ -437,16 +494,13 @@ errorReporting
 		//glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-		// bind texture on corresponding texture units
-		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, texture1);
 
 
 		// shader.setFloat("someUniform", 1.0f);
 		// Draw
 		
 		//shader.use();
-		glBindVertexArray(VAO);
+		//glBindVertexArray(VAO);
 		pipelineTransform(shader);
 		//glBindVertexArray(VAO);
 		//glm::mat4 transform = glm::mat4(1.0f);
