@@ -93,5 +93,6 @@
         "--enable-config" // Autorise la lecture du fichier .clangd local
     ],
     // Amélioration de l'interface visuelle
-    "editor.inlayHints.enabled": "on", // Affiche les noms des paramètres et types déduits
+    "editor.inlayHints.enabled": "on",
+    "C_Cpp.default.compilerPath": "/usr/bin/g++", // Affiche les noms des paramètres et types déduits
 }

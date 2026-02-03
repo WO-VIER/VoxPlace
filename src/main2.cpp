@@ -1,5 +1,7 @@
 #include <Shader.h>
 #include <Camera.h>
+#include <TextureAtlas.h>
+#include <LowResRenderer.h>
 #include <cmath>
 #include <config.h>
 #include <glm/ext/matrix_float4x4.hpp>
@@ -31,7 +33,7 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void processInput(GLFWwindow *window);
 
 
-static const float vertices[] = {
+static const float vertices2[] = {
 	0.0, 0.0, 1.0, 0.0, 0.25, // front
 	0.0, 1.0, 1.0, 0.0, 0.0,
 	1.0, 1.0, 1.0, 0.25, 0.0,
@@ -63,27 +65,83 @@ static const float vertices[] = {
 	1.0, 1.0, 0.0, 0.75, 0.0
 };
 
+// ============================================================================
+// CUBE VERTICES - Utilise les UV du TextureAtlas
+// Format: x, y, z, u, v (position vec3, texCoord vec2)
+// 24 vertices (4 par face) pour utilisation avec indices
+// ============================================================================
+using namespace TextureAtlas;
+
+// Raccourcis pour les UV des textures
+constexpr UV SIDE = GRASS_SIDE_UV;
+constexpr UV BOT = DIRT_UV;
+constexpr UV TOP = GRASS_TOP_UV;
+
+static const float vertices[] = {
+	// FRONT face (z = +0.5) - grass_side
+	-0.5f, -0.5f,  0.5f,  SIDE.u0, SIDE.v0,  // 0: bas-gauche
+	 0.5f, -0.5f,  0.5f,  SIDE.u1, SIDE.v0,  // 1: bas-droite
+	 0.5f,  0.5f,  0.5f,  SIDE.u1, SIDE.v1,  // 2: haut-droite
+	-0.5f,  0.5f,  0.5f,  SIDE.u0, SIDE.v1,  // 3: haut-gauche
+
+	// BACK face (z = -0.5) - grass_side
+	 0.5f, -0.5f, -0.5f,  SIDE.u0, SIDE.v0,  // 4: bas-gauche
+	-0.5f, -0.5f, -0.5f,  SIDE.u1, SIDE.v0,  // 5: bas-droite
+	-0.5f,  0.5f, -0.5f,  SIDE.u1, SIDE.v1,  // 6: haut-droite
+	 0.5f,  0.5f, -0.5f,  SIDE.u0, SIDE.v1,  // 7: haut-gauche
+
+	// LEFT face (x = -0.5) - grass_side
+	-0.5f, -0.5f, -0.5f,  SIDE.u0, SIDE.v0,  // 8: bas-gauche
+	-0.5f, -0.5f,  0.5f,  SIDE.u1, SIDE.v0,  // 9: bas-droite
+	-0.5f,  0.5f,  0.5f,  SIDE.u1, SIDE.v1,  // 10: haut-droite
+	-0.5f,  0.5f, -0.5f,  SIDE.u0, SIDE.v1,  // 11: haut-gauche
+
+	// RIGHT face (x = +0.5) - grass_side
+	 0.5f, -0.5f,  0.5f,  SIDE.u0, SIDE.v0,  // 12: bas-gauche
+	 0.5f, -0.5f, -0.5f,  SIDE.u1, SIDE.v0,  // 13: bas-droite
+	 0.5f,  0.5f, -0.5f,  SIDE.u1, SIDE.v1,  // 14: haut-droite
+	 0.5f,  0.5f,  0.5f,  SIDE.u0, SIDE.v1,  // 15: haut-gauche
+
+	// BOTTOM face (y = -0.5) - dirt
+	-0.5f, -0.5f, -0.5f,  BOT.u0, BOT.v0,   // 16
+	 0.5f, -0.5f, -0.5f,  BOT.u1, BOT.v0,   // 17
+	 0.5f, -0.5f,  0.5f,  BOT.u1, BOT.v1,   // 18
+	-0.5f, -0.5f,  0.5f,  BOT.u0, BOT.v1,   // 19
+
+	// TOP face (y = +0.5) - grass_top (sera tinté en vert via shader)
+	-0.5f,  0.5f,  0.5f,  TOP.u0, TOP.v0,   // 20
+	 0.5f,  0.5f,  0.5f,  TOP.u1, TOP.v0,   // 21
+	 0.5f,  0.5f, -0.5f,  TOP.u1, TOP.v1,   // 22
+	-0.5f,  0.5f, -0.5f,  TOP.u0, TOP.v1    // 23
+};
 
 
-	unsigned int indices[] = {
 
-	0, 1, 2, // front
+// Indices pour le cube (2 triangles par face, CCW winding)
+unsigned int indices[] = {
+	// FRONT face (vertices 0-3)
+	0, 1, 2,
 	2, 3, 0,
 
-	4, 5, 6, // back
+	// BACK face (vertices 4-7)
+	4, 5, 6,
 	6, 7, 4,
 
-	8, 9, 10, // bottom
-	8, 10, 11,
+	// LEFT face (vertices 8-11)
+	8, 9, 10,
+	10, 11, 8,
 
+	// RIGHT face (vertices 12-15)
 	12, 13, 14,
-	12, 14, 15,
+	14, 15, 12,
 
-	16, 17, 19,
-	17, 18, 19,
+	// BOTTOM face (vertices 16-19)
+	16, 17, 18,
+	18, 19, 16,
 
+	// TOP face (vertices 20-23)
 	20, 21, 22,
-	20, 22, 23
+	22, 23, 20
 };
 
 const unsigned int SCREEN_WIDTH = 1920;
@@ -183,15 +241,21 @@ void render_frame() {
 	glfwSwapBuffers(g_window);
 }
 
-void pipelineTransform(Shader &shader) 
+void pipelineTransform(Shader &shader, unsigned int atlasTexture) 
 {
 	glm::mat4 view = 1.0f;
 	glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 100.0f);
 
-
 	view = camera.GetViewMatrix();
 	shader.setMat4("view", view);
 	shader.setMat4("projection", projection);
+	
+	// Pour le shader PS1: passer la résolution pour le vertex jittering
+	shader.setVec2("resolution", glm::vec2(SCREEN_WIDTH, SCREEN_HEIGHT));
+
+	// Bind l'atlas une seule fois au début
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, atlasTexture);
 
 	for(char x = -25; x < 25; x++)
 	{
@@ -201,57 +265,44 @@ void pipelineTransform(Shader &shader)
 			model = glm::translate(model, glm::vec3(x, -1.0f, z));
 			shader.setMat4("model", model);
 
-			// Draw the cube
-			//Front -> back -> left -> right -> bottom -> top
-			glDrawElements(GL_TRIANGLES, sizeof(indices), GL_UNSIGNED_INT, 0);
-			//glDrawArrays(GL_TRIANGLES, 0, 36);
-			//Top face texture
-			//glActiveTexture(GL_TEXTURE0);
-			//glDrawArrays(GL_TRIANGLES, 30, 6);
-			//glActiveTexture(GL_TEXTURE1);
-
+			// Draw le cube entier en un seul appel (36 indices)
+			glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
 		}
 	}
 }
 
-void stbi_load_texture(const char *filename)
-{	
-	int width;
-	int height; 
-	int nrChannels;
-	unsigned char * data;
+// Crée une texture OpenGL à partir d'un fichier image
+unsigned int createTexture(const char *filename)
+{
+	unsigned int textureID;
+	int width, height, nrChannels;
 	
-	if(!filename)
-		return;
-
-	width = 0;
-
-	while(filename[width])
-		width++;
-	if(width == 0)
-		return;
-
-	width = 0;
-
-	stbi_set_flip_vertically_on_load(true); // tell stb_image.h to flip loaded texture's on the y-axis
-
-	data = stbi_load((filename), &width, &height, &nrChannels, 0);
-
-	printf("stbi_load returned %p (w=%d h=%d c=%d)\n", (void *)data, width, height, nrChannels);
-	if (data) 
+	glGenTextures(1, &textureID);
+	glBindTexture(GL_TEXTURE_2D, textureID);
+	
+	// Paramètres de texture (pixel art style)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	
+	stbi_set_flip_vertically_on_load(true);
+	unsigned char* data = stbi_load(filename, &width, &height, &nrChannels, 0);
+	
+	printf("Loading texture '%s': %p (w=%d h=%d c=%d)\n", filename, (void*)data, width, height, nrChannels);
+	
+	if (data)
 	{
-		if(nrChannels == 3)
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
-		else if(nrChannels == 4)
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+		GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
+		glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
 		glGenerateMipmap(GL_TEXTURE_2D);
-	} 
+	}
 	else
-		std::cout << "Failed to load texture" << std::endl;
-
+		std::cout << "Failed to load texture: " << filename << std::endl;
+	
 	stbi_image_free(data);
-	data = nullptr;
-};
+	return textureID;
+}
 
 
 int main() 
@@ -362,7 +413,11 @@ errorReporting
 	//glFrontFace(GL_CCW);
 
 
+	// Shader standard (l'effet basse résolution est géré par LowResRenderer)
 	Shader shader("src/shader/3.3cube.vs", "src/shader/3.3cube.fs");
+	
+	// Shader PS1 alternatif (vertex jittering, affine textures, dithering)
+	// Shader shader("src/shader/ps1.vs", "src/shader/ps1.fs");
 
 	unsigned int VBO, VAO, EBO; // VBO (vertex buffer object) VAO (vertex array
 															// object) EBO (element buffer object)
@@ -412,69 +467,14 @@ errorReporting
 
 	// glUseProgram(shaderProgram);
 
-	// LOAD AND CREATE A TEXTURE
-
-	unsigned int texture1, texture2;
-
-	// Texture 1
-	glGenTextures(1, &texture1);
-	glBindTexture(GL_TEXTURE_2D, texture1);
-
-	glGenTextures(1, &texture2);
-	glBindTexture(GL_TEXTURE_2D, texture2);
-
-	// wrapping parameter
-	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT); // s t r -> (x,y,z)
-	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	// LOAD TEXTURE ATLAS
+	unsigned int atlasTexture = createTexture("assets/terrain.png");
 	
-	// set texture filtering parameters
+	// Initialiser le rendu basse résolution (320x240 -> fullscreen)
+	LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
 	
-	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_POINT); // 16*16 texture no filter
-	//wraping
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	
-	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-	// load image, create texture and generate mipmaps
-	
-	
-	shader.use(); // don't forget to activate/use the shader before setting
-	// uniforms!
-	stbi_load_texture("assets/grassside.png");
-
+	shader.use();
 	shader.setInt("texture1", 0);
-	glActiveTexture(GL_TEXTURE0);
-
-	//stbi_load_texture("assets/grasstop.png");
-	//shader.setInt("texture2", 1);
-
-	//Texture 2
-
-	//glGenTexture(1, &texture2);
-	//glBindTexture(GL_TEXTURE_2D, texture2);
-
-
-	//texture filtering
-
-	
-
-	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	//load data
-
-	
-								
-	// bind texture on corresponding texture units
-	//shader.setInt("texture1", 0); 
-	//glActiveTexture(GL_TEXTURE0);
-	//glBindTexture(GL_TEXTURE_2D, texture1);
-	// replace ->
-	//glUniform1i(glGetUniformLocation(shader.ID, "texture1"), 0);
-
-	// or set it via the texture class ourShader.setInt("texture1",0);
 
 	//wireframe mode
 	//glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -490,22 +490,20 @@ errorReporting
 		// Imput
 		processInput(window);
 
-		// rendering commands here
-		//glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-
-
-		// shader.setFloat("someUniform", 1.0f);
-		// Draw
+		// ================================================================
+		// RENDU BASSE RÉSOLUTION
+		// ================================================================
 		
-		//shader.use();
-		//glBindVertexArray(VAO);
-		pipelineTransform(shader);
-		//glBindVertexArray(VAO);
-		//glm::mat4 transform = glm::mat4(1.0f);
-		// Configurer la caméra (View & Projection) via notre fonction
-		// pipelineTransform(shader.ID);
+		// Commencer le rendu dans le framebuffer basse résolution
+		LowResRenderer::beginFrame();
+		
+		// Activer le shader et rendre la scène
+		shader.use();
+		glBindVertexArray(VAO);
+		pipelineTransform(shader, atlasTexture);
+		
+		// Terminer et afficher le résultat upscalé
+		LowResRenderer::endFrame();
 
 		/*
 		// Récupérer l'emplacement de "model" pour dessiner nos objets
