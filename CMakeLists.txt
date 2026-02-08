@@ -21,7 +21,7 @@ endif()
 
 # sources: exclude glad for Emscripten (glad can cause symbol issues on WASM)
 set(SOURCES
-    src/main2.cpp
+    src/main3.cpp  # Test du système de chunks (main2.cpp = ancienne version)
 )
 if(NOT EMSCRIPTEN)
     list(APPEND SOURCES src/glad.c)
