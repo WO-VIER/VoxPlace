@@ -252,7 +252,18 @@ private:
                  float r, float g, float b) {
         
         unsigned int baseIndex = static_cast<unsigned int>(vertices.size());
-        float ao = 1.0f;  // TODO: Calculer l'AO
+        
+        // Face shading : luminosité différente par direction
+        // Donne du volume et permet de distinguer les blocs
+        float ao;
+        switch (dir) {
+            case FaceDirection::TOP:    ao = 1.0f;  break;  // Plein soleil
+            case FaceDirection::BOTTOM: ao = 0.5f;  break;  // Très sombre
+            case FaceDirection::NORTH:  ao = 0.8f;  break;  // Éclairé
+            case FaceDirection::SOUTH:  ao = 0.7f;  break;  // Un peu sombre
+            case FaceDirection::EAST:   ao = 0.6f;  break;  // Ombre
+            case FaceDirection::WEST:   ao = 0.65f; break;  // Ombre légère
+        }
         
         // Définir les 4 vertices de la face selon la direction
         switch (dir) {

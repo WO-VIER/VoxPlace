@@ -177,19 +177,17 @@ int main() {
     // Initialiser le rendu basse résolution
     LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    // Créer quelques chunks de test (grille 3x3)
+    // Créer un chunk de test
     std::cout << "Generating chunks..." << std::endl;
-    for (int cx = -1; cx <= 1; cx++) {
-        for (int cz = -1; cz <= 1; cz++) {
-            Chunk* chunk = new Chunk(cx, cz);
-            generateTestTerrain(*chunk);
-            chunk->generateMesh();
-            chunks.push_back(chunk);
-            std::cout << "  Chunk (" << cx << ", " << cz << ") - " 
-                      << chunk->indexCount << " indices" << std::endl;
-        }
+    {
+        Chunk* chunk = new Chunk(0, 0);
+        generateTestTerrain(*chunk);
+        chunk->generateMesh();
+        chunks.push_back(chunk);
+        std::cout << "  Chunk (0, 0) - " 
+                  << chunk->indexCount << " indices" << std::endl;
     }
-    std::cout << "Generated " << chunks.size() << " chunks" << std::endl;
+    std::cout << "Generated " << chunks.size() << " chunk(s)" << std::endl;
 
     // Render loop
     while (!glfwWindowShouldClose(g_window)) {
