@@ -408,7 +408,7 @@ errorReporting
 	*/
 
 	//Configure le state de opengl
-	glEnable(GL_DEPTH_TEST);
+	//glEnable(GL_DEPTH_TEST);
 	//glEnable(GL_CULL_FACE);
 	//glFrontFace(GL_CCW);
 

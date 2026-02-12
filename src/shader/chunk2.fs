@@ -80,8 +80,8 @@ void main()
 
     // 3. Distance fog
     float dist = length(vFragPos - cameraPos);
-    float fogFactor = clamp((dist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
-    color = mix(color, fogColor, fogFactor);
+    //float fogFactor = clamp((dist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+    //color = mix(color, fogColor, fogFactor);
 
     FragColor = vec4(color, 1.0);
 }
