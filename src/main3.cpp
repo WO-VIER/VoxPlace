@@ -15,7 +15,7 @@
 
 #include <Shader.h>
 #include <Camera.h>
-#include <Chunk.h>
+#include <Chunk2.h>
 #include <LowResRenderer.h>
 #include <cmath>
 #include <config.h>
@@ -51,7 +51,7 @@ float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
 // Chunks
-std::vector<Chunk*> chunks;
+std::vector<Chunk2*> chunks;
 
 // ============================================================================
 // CALLBACKS
@@ -96,13 +96,15 @@ void processInput(GLFWwindow* window) {
         camera.ProcessKeyboard(LEFT, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
         camera.ProcessKeyboard(RIGHT, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+        camera.ProcessKeyboard(UP, deltaTime);
 }
 
 // ============================================================================
 // GÉNÉRATION DE TERRAIN SIMPLE
 // ============================================================================
 
-void generateTestTerrain(Chunk& chunk) {
+void generateTestTerrain(Chunk2& chunk) {
     // Générer un terrain simple avec des hauteurs aléatoires
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
@@ -113,13 +115,13 @@ void generateTestTerrain(Chunk& chunk) {
             
             // Remplir jusqu'à cette hauteur
             for (int y = 1; y <= height && y < CHUNK_SIZE_Y; y++) {
-                // Couleur basée sur la hauteur
+                // Couleur basée sur la hauteur (indices palette r/place)
                 if (y == height) {
-                    chunk.blocks[x][y][z] = 9;  // Vert (herbe)
+                    chunk.blocks[x][y][z] = 8;   // Vert clair (herbe)
                 } else if (y > height - 3) {
-                    chunk.blocks[x][y][z] = 15; // Marron (terre)
+                    chunk.blocks[x][y][z] = 26;  // Marron (terre)
                 } else {
-                    chunk.blocks[x][y][z] = 3;  // Gris (pierre)
+                    chunk.blocks[x][y][z] = 29;  // Gris foncé (pierre)
                 }
             }
         }
@@ -172,20 +174,20 @@ int main() {
     glClearColor(FOG_COLOR.r, FOG_COLOR.g, FOG_COLOR.b, 1.0f);
 
     // Charger le shader
-    Shader chunkShader("src/shader/chunk.vs", "src/shader/chunk.fs");
+    Shader chunkShader("src/shader/chunk2.vs", "src/shader/chunk2.fs");
 
     // Initialiser le rendu basse résolution
     LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    // Créer un chunk de test
+    // Créer 32 chunks (grille 4x8)
     std::cout << "Generating chunks..." << std::endl;
-    {
-        Chunk* chunk = new Chunk(0, 0);
-        generateTestTerrain(*chunk);
-        chunk->generateMesh();
-        chunks.push_back(chunk);
-        std::cout << "  Chunk (0, 0) - " 
-                  << chunk->indexCount << " indices" << std::endl;
+    for (int cx = -2; cx < 2; cx++) {
+        for (int cz = -4; cz < 4; cz++) {
+            Chunk2* chunk = new Chunk2(cx, cz);
+            generateTestTerrain(*chunk);
+            chunk->meshGenerate();
+            chunks.push_back(chunk);
+        }
     }
     std::cout << "Generated " << chunks.size() << " chunk(s)" << std::endl;
 
@@ -209,11 +211,9 @@ int main() {
             0.1f, 200.0f
         );
         glm::mat4 view = camera.GetViewMatrix();
-        glm::mat4 model = glm::mat4(1.0f);
         
         chunkShader.setMat4("projection", projection);
         chunkShader.setMat4("view", view);
-        chunkShader.setMat4("model", model);
         
         // Fog uniforms
         chunkShader.setFloat("fogStart", FOG_START);
@@ -222,10 +222,16 @@ int main() {
         chunkShader.setVec3("cameraPos", camera.Position);
 
         // Dessiner tous les chunks
-        for (Chunk* chunk : chunks) {
+        for (Chunk2* chunk : chunks) {
             if (chunk->needsMeshRebuild) {
-                chunk->generateMesh();
+                chunk->meshGenerate();
             }
+            // Envoyer la position monde du chunk au shader
+            chunkShader.setVec3("chunkPos", glm::vec3(
+                chunk->chunkX * CHUNK_SIZE_X, 
+                0.0f, 
+                chunk->chunkZ * CHUNK_SIZE_Z
+            ));
             chunk->render();
         }
 
@@ -237,7 +243,7 @@ int main() {
     }
 
     // Cleanup
-    for (Chunk* chunk : chunks) {
+    for (Chunk2* chunk : chunks) {
         delete chunk;
     }
     LowResRenderer::cleanup();

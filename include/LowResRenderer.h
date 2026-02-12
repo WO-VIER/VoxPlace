@@ -28,8 +28,8 @@ namespace LowResRenderer {
 // Plus c'est petit, plus c'est pixelisé
 // Scene → Framebuffer 320x240 → Upscale GL_NEAREST → Écran 1920x1080
 // 480x270 → Un peu plus de détails, 640x360 → Style 16-bit/pixel art, 960x540 → Subtil, encore visible
-constexpr int RENDER_WIDTH = 640;   // PS1 typique: 320
-constexpr int RENDER_HEIGHT = 360;  // PS1 typique: 240
+constexpr int RENDER_WIDTH = 1920;   // PS1 typique: 320
+constexpr int RENDER_HEIGHT = 1080;  // PS1 typique: 240
 
 // ============================================================================
 // VARIABLES INTERNES
