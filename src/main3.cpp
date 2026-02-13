@@ -26,6 +26,7 @@
 #include <glm/trigonometric.hpp>
 #include <iostream>
 #include <vector>
+#include <unordered_map>
 
 // ============================================================================
 // CONFIGURATION
@@ -51,8 +52,26 @@ bool firstMouse = true;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
-// Chunks
-std::vector<Chunk2 *> chunks;
+// Chunks : hashmap indexée par (cx, cz) pour accès O(1) aux voisins
+// ┌────────┐  ┌────────┐  ┌────────┐
+// │(-1,-1) │  │( 0,-1) │  │( 1,-1) │
+// ├────────┤  ├────────┤  ├────────┤
+// │(-1, 0) │  │( 0, 0) │  │( 1, 0) │
+// ├────────┤  ├────────┤  ├────────┤
+// │(-1, 1) │  │( 0, 1) │  │( 1, 1) │
+// └────────┘  └────────┘  └────────┘
+std::unordered_map<int64_t, Chunk2*> chunkMap;
+
+// Convertit (cx, cz) en clé unique pour la hashmap
+inline int64_t chunkKey(int cx, int cz) {
+    return ((int64_t)cx << 32) | ((int64_t)cz & 0xFFFFFFFF);
+}
+
+// Récupère un chunk par position, nullptr si inexistant
+inline Chunk2* getChunkAt(int cx, int cz) {
+    auto it = chunkMap.find(chunkKey(cx, cz));
+    return (it != chunkMap.end()) ? it->second : nullptr;
+}
 
 // ============================================================================
 // CALLBACKS
@@ -198,21 +217,36 @@ int main()
 	// Initialiser le rendu basse résolution
 	LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
 
+	// 1. Créer tous les chunks et remplir le terrain
 	std::cout << "Generating chunks..." << std::endl;
 	for (int cx = -10; cx < 10; cx++)
 	{
 		for (int cz = -10; cz < 10; cz++)
 		{
+			// x[-10 a 10] z[-10 a 10]
 			Chunk2 *chunk = new Chunk2(cx, cz);
 			generateTestTerrain(*chunk);
-			chunk->meshGenerate();
-			chunks.push_back(chunk);
+			chunkMap[chunkKey(cx, cz)] = chunk;
 		}
 	}
-	std::cout << "Generated " << chunks.size() << " chunk(s)" << std::endl;
+
+	// 2. Générer les meshes APRÈS avoir créé tous les chunks
+	//    (pour que les voisins existent au moment du face culling)
+	for (auto& [key, chunk] : chunkMap)
+	{
+		int cx = chunk->chunkX;
+		int cz = chunk->chunkZ;
+		chunk->meshGenerate(
+			getChunkAt(cx, cz + 1),  // north (+Z)
+			getChunkAt(cx, cz - 1),  // south (-Z)
+			getChunkAt(cx + 1, cz),  // east  (+X)
+			getChunkAt(cx - 1, cz)   // west  (-X)
+		);
+	}
+	std::cout << "Generated " << chunkMap.size() << " chunk(s)" << std::endl;
 
 	// Afficher le profiler
-	printChunkProfiler(chunks);
+	printChunkProfiler(chunkMap);
 
 	// Render loop
 	while (!glfwWindowShouldClose(g_window))
@@ -245,17 +279,23 @@ int main()
 		chunkShader.setVec3("cameraPos", camera.Position);
 
 		// Dessiner tous les chunks
-		for (Chunk2 *chunk : chunks)
+		for (auto& [key, chunk] : chunkMap)
 		{
 			if (chunk->needsMeshRebuild)
 			{
-				chunk->meshGenerate();
+				int cx = chunk->chunkX;
+				int cz = chunk->chunkZ;
+				chunk->meshGenerate(
+					getChunkAt(cx, cz + 1),
+					getChunkAt(cx, cz - 1),
+					getChunkAt(cx + 1, cz),
+					getChunkAt(cx - 1, cz)
+				);
 			}
-			// Envoyer la position monde du chunk au shader
 			chunkShader.setVec3("chunkPos", glm::vec3(
-												chunk->chunkX * CHUNK_SIZE_X,
-												0.0f,
-												chunk->chunkZ * CHUNK_SIZE_Z));
+				chunk->chunkX * CHUNK_SIZE_X,
+				0.0f,
+				chunk->chunkZ * CHUNK_SIZE_Z));
 			chunk->render();
 		}
 
@@ -267,7 +307,7 @@ int main()
 	}
 
 	// Cleanup
-	for (Chunk2 *chunk : chunks)
+	for (auto& [key, chunk] : chunkMap)
 	{
 		delete chunk;
 	}

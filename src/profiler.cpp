@@ -18,13 +18,13 @@ std::string formatBytes(size_t bytes)
 	return oss.str();
 }
 
-void printChunkProfiler(const std::vector<Chunk2 *> &allChunks)
+void printChunkProfiler(const std::unordered_map<int64_t, Chunk2*>& chunkMap)
 {
 	size_t totalRAM = 0, totalVRAM = 0;
 	uint64_t totalVertices = 0;
 
 	std::vector<Chunk2::ChunkStats> allStats;
-	for (const auto *c : allChunks)
+	for (const auto& [key, c] : chunkMap)
 	{
 		auto s = c->getStats();
 		allStats.push_back(s);
@@ -63,7 +63,7 @@ void printChunkProfiler(const std::vector<Chunk2 *> &allChunks)
 
 	// Totaux
 	std::cout << "╠═══════════════════════════════════════════════════╣" << std::endl;
-	std::cout << "║  TOTAL : " << allChunks.size() << " chunks" << std::endl;
+	std::cout << "║  TOTAL : " << chunkMap.size() << " chunks" << std::endl;
 	std::cout << "║  Vertices      : " << totalVertices << std::endl;
 	std::cout << "║  RAM  totale   : " << formatBytes(totalRAM) << std::endl;
 	std::cout << "║  VRAM totale   : " << formatBytes(totalVRAM) << std::endl;

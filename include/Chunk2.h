@@ -91,7 +91,9 @@ public:
 		return true;
 	}
 
-	void meshGenerate()
+	// north = +Z, south = -Z, east = +X, west = -X
+	void meshGenerate(Chunk2* north = nullptr, Chunk2* south = nullptr,
+	                  Chunk2* east = nullptr, Chunk2* west = nullptr)
 	{
 		std::vector<uint32_t> packedFaces;
 		/*
@@ -110,19 +112,13 @@ public:
 		*/
 		for (uint8_t x = 0; x < CHUNK_SIZE_X; x++)
 		{
-			for (uint8_t y = 0; y < CHUNK_SIZE_Y; y++)
+			for (uint16_t y = 0; y < CHUNK_SIZE_Y; y++)
 			{
 				for (uint8_t z = 0; z < CHUNK_SIZE_Z; z++)
 				{
 					uint8_t block = blocks[x][y][z];
 					if (block == 0)
-						continue; // Skip l'air
-
-					// Position du bloc dans le monde avec vertexPulling que position locales (x,y,z dans chunk)\
-					// La position monde du chunk sera uniform vec3 chunkPos
-					// float wx = static_cast<float>(chunkX * CHUNK_SIZE_X + x);
-					// float wy = static_cast<float>(y);
-					// float wz = static_cast<float>(chunkZ * CHUNK_SIZE_Z + z);
+						continue;
 
 					// Face 0 : TOP (+Y)
 					if (getBlock(x, y + 1, z) == 0)
@@ -136,26 +132,26 @@ public:
 						uint32_t packed = x | (y << 4) | (z << 12) | (1 << 16) | (block << 19);
 						packedFaces.push_back(packed);
 					}
-					// Face 2 : NORTH (+Z)
-					if (getBlock(x, y, z + 1) == 0)
+					// Face 2 : NORTH (+Z) — vérifie le chunk voisin si z == 15
+					if (getBlockOrNeighbor(x, y, z + 1, north, south, east, west) == 0)
 					{
 						uint32_t packed = x | (y << 4) | (z << 12) | (2 << 16) | (block << 19);
 						packedFaces.push_back(packed);
 					}
-					// Face 3 : SOUTH (-Z)
-					if (getBlock(x, y, z - 1) == 0)
+					// Face 3 : SOUTH (-Z) — vérifie le chunk voisin si z == 0
+					if (getBlockOrNeighbor(x, y, z - 1, north, south, east, west) == 0)
 					{
 						uint32_t packed = x | (y << 4) | (z << 12) | (3 << 16) | (block << 19);
 						packedFaces.push_back(packed);
 					}
-					// Face 4 : EAST (+X)
-					if (getBlock(x + 1, y, z) == 0)
+					// Face 4 : EAST (+X) — vérifie le chunk voisin si x == 15
+					if (getBlockOrNeighbor(x + 1, y, z, north, south, east, west) == 0)
 					{
 						uint32_t packed = x | (y << 4) | (z << 12) | (4 << 16) | (block << 19);
 						packedFaces.push_back(packed);
 					}
-					// Face 5 : WEST (-X)
-					if (getBlock(x - 1, y, z) == 0)
+					// Face 5 : WEST (-X) — vérifie le chunk voisin si x == 0
+					if (getBlockOrNeighbor(x - 1, y, z, north, south, east, west) == 0)
 					{
 						uint32_t packed = x | (y << 4) | (z << 12) | (5 << 16) | (block << 19);
 						packedFaces.push_back(packed);
@@ -239,6 +235,41 @@ public:
 	};
 
 private:
+	// ──────────────────────────────────────────────────────────────────
+	// Vérifie un bloc aux coordonnées (x, y, z) locales.
+	// Si hors limites en X ou Z, regarde dans le chunk voisin.
+	// Si pas de voisin → retourne 0 (air) = face visible au bord du monde.
+	//
+	//  Chunk West    This Chunk     Chunk East
+	//  ┌────────┐   ┌────────────┐   ┌────────┐
+	//  │        │   │ x=0 ... 15 │   │        │
+	//  │  [15]  │←──│  getBlock   │──→│  [0]   │
+	//  │        │   │  (-1,y,z)   │   │(16,y,z)│
+	//  └────────┘   └────────────┘   └────────┘
+	// ──────────────────────────────────────────────────────────────────
+	uint8_t getBlockOrNeighbor(int x, int y, int z,
+		Chunk2* north, Chunk2* south,
+		Chunk2* east, Chunk2* west) const
+	{
+		// Y hors limites → air (dessus/dessous du monde)
+		if (y < 0 || y >= CHUNK_SIZE_Y) return 0;
+
+		// X hors limites → chunk east/west
+		if (x >= CHUNK_SIZE_X)
+			return east ? east->blocks[0][y][z] : 0;
+		if (x < 0)
+			return west ? west->blocks[CHUNK_SIZE_X - 1][y][z] : 0;
+
+		// Z hors limites → chunk north/south
+		if (z >= CHUNK_SIZE_Z)
+			return north ? north->blocks[x][y][0] : 0;
+		if (z < 0)
+			return south ? south->blocks[x][y][CHUNK_SIZE_Z - 1] : 0;
+
+		// Dans les limites → bloc local
+		return blocks[x][y][z];
+	}
+
 	void uploadMesh(const std::vector<uint32_t> &faces)
 	{
 		if (ssbo)
