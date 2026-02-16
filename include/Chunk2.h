@@ -92,8 +92,8 @@ public:
 	}
 
 	// north = +Z, south = -Z, east = +X, west = -X
-	void meshGenerate(Chunk2* north = nullptr, Chunk2* south = nullptr,
-	                  Chunk2* east = nullptr, Chunk2* west = nullptr)
+	void meshGenerate(Chunk2 *north = nullptr, Chunk2 *south = nullptr,
+					  Chunk2 *east = nullptr, Chunk2 *west = nullptr)
 	{
 		std::vector<uint32_t> packedFaces;
 		/*
@@ -112,7 +112,7 @@ public:
 		*/
 		for (uint8_t x = 0; x < CHUNK_SIZE_X; x++)
 		{
-			for (uint16_t y = 0; y < CHUNK_SIZE_Y; y++)
+			for (uint8_t y = 0; y < CHUNK_SIZE_Y; y++)
 			{
 				for (uint8_t z = 0; z < CHUNK_SIZE_Z; z++)
 				{
@@ -121,6 +121,7 @@ public:
 						continue;
 
 					// Face 0 : TOP (+Y)
+					// pour les blocs je
 					if (getBlock(x, y + 1, z) == 0)
 					{
 						uint32_t packed = x | (y << 4) | (z << 12) | (0 << 16) | (block << 19);
@@ -248,11 +249,12 @@ private:
 	//  └────────┘   └────────────┘   └────────┘
 	// ──────────────────────────────────────────────────────────────────
 	uint8_t getBlockOrNeighbor(int x, int y, int z,
-		Chunk2* north, Chunk2* south,
-		Chunk2* east, Chunk2* west) const
+							   Chunk2 *north, Chunk2 *south,
+							   Chunk2 *east, Chunk2 *west) const
 	{
 		// Y hors limites → air (dessus/dessous du monde)
-		if (y < 0 || y >= CHUNK_SIZE_Y) return 0;
+		if (y < 0 || y >= CHUNK_SIZE_Y)
+			return 0;
 
 		// X hors limites → chunk east/west
 		if (x >= CHUNK_SIZE_X)

@@ -60,17 +60,19 @@ float lastFrame = 0.0f;
 // ├────────┤  ├────────┤  ├────────┤
 // │(-1, 1) │  │( 0, 1) │  │( 1, 1) │
 // └────────┘  └────────┘  └────────┘
-std::unordered_map<int64_t, Chunk2*> chunkMap;
+std::unordered_map<int64_t, Chunk2 *> chunkMap;
 
 // Convertit (cx, cz) en clé unique pour la hashmap
-inline int64_t chunkKey(int cx, int cz) {
-    return ((int64_t)cx << 32) | ((int64_t)cz & 0xFFFFFFFF);
+inline int64_t chunkKey(int cx, int cz)
+{
+	return ((int64_t)cx << 32) | ((int64_t)cz & 0xFFFFFFFF);
 }
 
 // Récupère un chunk par position, nullptr si inexistant
-inline Chunk2* getChunkAt(int cx, int cz) {
-    auto it = chunkMap.find(chunkKey(cx, cz));
-    return (it != chunkMap.end()) ? it->second : nullptr;
+inline Chunk2 *getChunkAt(int cx, int cz)
+{
+	auto it = chunkMap.find(chunkKey(cx, cz));
+	return (it != chunkMap.end()) ? it->second : nullptr;
 }
 
 // ============================================================================
@@ -147,7 +149,7 @@ void generateTestTerrain(Chunk2 &chunk)
 				// Couleur basée sur la hauteur (indices palette r/place)
 				if (y == height)
 				{
-					chunk.blocks[x][y][z] = 8; // Vert clair (herbe)
+					chunk.blocks[x][y][z] = 1 + rand() % 31; // Vert clair (herbe)
 				}
 				else if (y > height - 3)
 				{
@@ -232,21 +234,21 @@ int main()
 
 	// 2. Générer les meshes APRÈS avoir créé tous les chunks
 	//    (pour que les voisins existent au moment du face culling)
-	for (auto& [key, chunk] : chunkMap)
+	for (auto &[key, chunk] : chunkMap)
 	{
 		int cx = chunk->chunkX;
 		int cz = chunk->chunkZ;
 		chunk->meshGenerate(
-			getChunkAt(cx, cz + 1),  // north (+Z)
-			getChunkAt(cx, cz - 1),  // south (-Z)
-			getChunkAt(cx + 1, cz),  // east  (+X)
-			getChunkAt(cx - 1, cz)   // west  (-X)
+			getChunkAt(cx, cz + 1), // north (+Z)
+			getChunkAt(cx, cz - 1), // south (-Z)
+			getChunkAt(cx + 1, cz), // east  (+X)
+			getChunkAt(cx - 1, cz)	// west  (-X)
 		);
 	}
 	std::cout << "Generated " << chunkMap.size() << " chunk(s)" << std::endl;
 
 	// Afficher le profiler
-	printChunkProfiler(chunkMap);
+	// printChunkProfiler(chunkMap);
 
 	// Render loop
 	while (!glfwWindowShouldClose(g_window))
@@ -279,7 +281,7 @@ int main()
 		chunkShader.setVec3("cameraPos", camera.Position);
 
 		// Dessiner tous les chunks
-		for (auto& [key, chunk] : chunkMap)
+		for (auto &[key, chunk] : chunkMap)
 		{
 			if (chunk->needsMeshRebuild)
 			{
@@ -289,13 +291,12 @@ int main()
 					getChunkAt(cx, cz + 1),
 					getChunkAt(cx, cz - 1),
 					getChunkAt(cx + 1, cz),
-					getChunkAt(cx - 1, cz)
-				);
+					getChunkAt(cx - 1, cz));
 			}
 			chunkShader.setVec3("chunkPos", glm::vec3(
-				chunk->chunkX * CHUNK_SIZE_X,
-				0.0f,
-				chunk->chunkZ * CHUNK_SIZE_Z));
+												chunk->chunkX * CHUNK_SIZE_X,
+												0.0f,
+												chunk->chunkZ * CHUNK_SIZE_Z));
 			chunk->render();
 		}
 
@@ -307,7 +308,7 @@ int main()
 	}
 
 	// Cleanup
-	for (auto& [key, chunk] : chunkMap)
+	for (auto &[key, chunk] : chunkMap)
 	{
 		delete chunk;
 	}

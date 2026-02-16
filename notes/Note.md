@@ -1,5 +1,7 @@
 # Notes OpenGL — VoxPlace
 
+valgrind -s --leak-check=full --show-leak-kinds=all --track-origins=yes ./build/VoxPlace > valgrind.txt 2>&1
+
 Version ciblée : OpenGL 3.3 (compatible Emscripten / WebGL2)
 
 Ce document contient des notions essentielles à retenir pour débuter avec OpenGL et l'usage courant (buffers, pipeline de rendu, VBO/VAO/EBO). C'est un mémo destiné à garder une trace et à s'y référer rapidement.
