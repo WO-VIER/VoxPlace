@@ -32,8 +32,8 @@
 // CONFIGURATION
 // ============================================================================
 
-const int SCREEN_WIDTH = 1920;
-const int SCREEN_HEIGHT = 1080;
+const int SCREEN_WIDTH = 800;
+const int SCREEN_HEIGHT = 600;
 
 // Fog settings
 const float FOG_START = 0.0f;							 // 40.0f
@@ -86,6 +86,10 @@ void framebuffer_size_callback(GLFWwindow *window, int width, int height)
 
 void mouse_callback(GLFWwindow *window, double xposIn, double yposIn)
 {
+// Modification pour le débogage : ignorer la souris si elle n'est pas capturée
+	if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL)
+		return;
+
 	float xpos = static_cast<float>(xposIn);
 	float ypos = static_cast<float>(yposIn);
 
@@ -105,6 +109,18 @@ void mouse_callback(GLFWwindow *window, double xposIn, double yposIn)
 	camera.ProcessMouseMovement(xoffset, yoffset);
 }
 
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
+{
+	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
+	{
+		if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL)
+		{
+			glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+			firstMouse = true;
+		}
+	}
+}
+
 void scroll_callback(GLFWwindow *window, double xoffset, double yoffset)
 {
 	camera.ProcessMouseScroll(static_cast<float>(yoffset));
@@ -113,7 +129,8 @@ void scroll_callback(GLFWwindow *window, double xoffset, double yoffset)
 void processInput(GLFWwindow *window)
 {
 	if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-		glfwSetWindowShouldClose(window, true);
+		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+		//glfwSetWindowShouldClose(window, true);
 
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
 		camera.ProcessKeyboard(FORWARD, deltaTime);
@@ -149,7 +166,9 @@ void generateTestTerrain(Chunk2 &chunk)
 				// Couleur basée sur la hauteur (indices palette r/place)
 				if (y == height)
 				{
-					chunk.blocks[x][y][z] = 1 + rand() % 31; // Vert clair (herbe)
+					// randomise between 1-31
+					chunk.blocks[x][y][z] = 1 + (rand() % 31);
+					//chunk.blocks[x][y][z] = 8; // Vert clair (herbe)
 				}
 				else if (y > height - 3)
 				{
@@ -194,8 +213,9 @@ int main()
 	glfwMakeContextCurrent(g_window);
 	glfwSetFramebufferSizeCallback(g_window, framebuffer_size_callback);
 	glfwSetCursorPosCallback(g_window, mouse_callback);
+	glfwSetMouseButtonCallback(g_window, mouse_button_callback);
 	glfwSetScrollCallback(g_window, scroll_callback);
-	glfwSetInputMode(g_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+	// glfwSetInputMode(g_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); // Démarrer avec la souris libre
 
 #ifndef __EMSCRIPTEN__
 	if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
@@ -228,7 +248,7 @@ int main()
 			// x[-10 a 10] z[-10 a 10]
 			Chunk2 *chunk = new Chunk2(cx, cz);
 			generateTestTerrain(*chunk);
-			chunkMap[chunkKey(cx, cz)] = chunk;
+			chunkMap[chunkKey(cx, cz)] = chunk; // cx cz -> key
 		}
 	}
 

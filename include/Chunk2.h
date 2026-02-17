@@ -118,12 +118,12 @@ public:
 				{
 					uint8_t block = blocks[x][y][z];
 					if (block == 0)
-						continue;
+						continue; // air
 
 					// Face 0 : TOP (+Y)
 					// pour les blocs je
 					if (getBlock(x, y + 1, z) == 0)
-					{
+					{ 
 						uint32_t packed = x | (y << 4) | (z << 12) | (0 << 16) | (block << 19);
 						packedFaces.push_back(packed);
 					}
