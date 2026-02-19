@@ -44,6 +44,7 @@ target_include_directories(VoxPlace PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/dependencies
+    ${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
     ${GLFW_INCLUDE_DIRS}
 )
 

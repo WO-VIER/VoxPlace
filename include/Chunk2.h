@@ -5,11 +5,11 @@
 #include <cstdint>
 #include <vector>
 #include <cstring>
-
+#include <print>
 // Chunks Params
 
 constexpr uint8_t CHUNK_SIZE_X = 16;  // (0 - 255) all time
-constexpr uint8_t CHUNK_SIZE_Y = 255; // Hauteur
+constexpr uint16_t CHUNK_SIZE_Y = 256; // Hauteur (0-255, 0 = bedrock)
 constexpr uint8_t CHUNK_SIZE_Z = 16;
 constexpr uint8_t BEDROCK_LAYER = 0;
 
@@ -47,9 +47,9 @@ public:
 	{
 		memset(blocks, 0, sizeof(blocks));
 
-		for (uint8_t x = 0; x < CHUNK_SIZE_X; x++)
+		for (int x = 0; x < CHUNK_SIZE_X; x++)
 		{
-			for (uint8_t z = 0; z < CHUNK_SIZE_Z; z++)
+			for (int z = 0; z < CHUNK_SIZE_Z; z++)
 			{
 				blocks[x][BEDROCK_LAYER][z] = 29; /// couleur
 			};
@@ -96,9 +96,10 @@ public:
 					  Chunk2 *east = nullptr, Chunk2 *west = nullptr)
 	{
 		std::vector<uint32_t> packedFaces;
+		//packedFaces.reserve(CHUNK_SIZE_X * CHUNK_SIZE_Z * 6);
 		/*
 		Bits [0-3] ; X local (0 - 15) -> 4 bits
-		Bits [4-11] ; y local (0 - 256) -> 8 bits
+		Bits [4-11] ; y local (0 - 255) -> 8 bits
 		Bits [12-15] ; z local (0 - 15) -> 4 bits
 		Bits [16-18] ; Face Direction   -> 3 bits
 		(0=top, 1=bottom, 2=north, 3=south, 4=east, 5=west)
@@ -110,18 +111,18 @@ public:
 
 		//uint32_t packed = (x) | (y << 4) | (z << 12) | (faceDir << 16) | (color << 19);
 		*/
-		for (uint8_t x = 0; x < CHUNK_SIZE_X; x++)
+		for (int x = 0; x < CHUNK_SIZE_X; x++)
 		{
-			for (uint8_t y = 0; y < CHUNK_SIZE_Y; y++)
+			for (int y = 0; y < CHUNK_SIZE_Y; y++)
 			{
-				for (uint8_t z = 0; z < CHUNK_SIZE_Z; z++)
+				for (int z = 0; z < CHUNK_SIZE_Z; z++)
 				{
 					uint8_t block = blocks[x][y][z];
 					if (block == 0)
 						continue; // air
 
 					// Face 0 : TOP (+Y)
-					// pour les blocs je
+					// Si le block au dessus est de l'air je creer une face
 					if (getBlock(x, y + 1, z) == 0)
 					{ 
 						uint32_t packed = x | (y << 4) | (z << 12) | (0 << 16) | (block << 19);
@@ -160,6 +161,19 @@ public:
 				};
 			};
 		};
+		/*
+		push_back #1 : alloue [] -> 1 slot
+		push_back #2 : Trop petit, alloue [][] copie l'ancien -> 2slot
+		push_back #3 : Trop petit, alloue [][][] copie l'ancien -> 3slot
+
+		avec .reserve()
+		juste écrrie dans le buffer
+
+		Chaque réallocation :
+			malloc() -> memcpy() -> free()
+
+		*/
+		printf("packedFaces.size() : %d\n", packedFaces.size());
 		uploadMesh(packedFaces);
 	};
 
@@ -209,9 +223,9 @@ public:
 		s.totalBlocks = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
 		s.solidBlocks = 0;
 
-		for (uint8_t x = 0; x < CHUNK_SIZE_X; x++)
-			for (uint16_t y = 0; y < CHUNK_SIZE_Y; y++)
-				for (uint8_t z = 0; z < CHUNK_SIZE_Z; z++)
+		for (int x = 0; x < CHUNK_SIZE_X; x++)
+			for (int y = 0; y < CHUNK_SIZE_Y; y++)
+				for (int z = 0; z < CHUNK_SIZE_Z; z++)
 					if (blocks[x][y][z] != 0)
 						s.solidBlocks++;
 

@@ -16,9 +16,9 @@
 #include <Shader.h>
 #include <Camera.h>
 #include <Chunk2.h>
+#include <TerrainGenerator.h>
 #include <LowResRenderer.h>
 #include <profiler.h>
-#include <cmath>
 #include <config.h>
 #include <glm/ext/matrix_float4x4.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -32,8 +32,8 @@
 // CONFIGURATION
 // ============================================================================
 
-const int SCREEN_WIDTH = 800;
-const int SCREEN_HEIGHT = 600;
+const int SCREEN_WIDTH = 1920;
+const int SCREEN_HEIGHT = 1080;
 
 // Fog settings
 const float FOG_START = 0.0f;							 // 40.0f
@@ -145,46 +145,6 @@ void processInput(GLFWwindow *window)
 }
 
 // ============================================================================
-// GÉNÉRATION DE TERRAIN SIMPLE
-// ============================================================================
-
-void generateTestTerrain(Chunk2 &chunk)
-{
-	// Générer un terrain simple avec des hauteurs aléatoires
-	for (int x = 0; x < CHUNK_SIZE_X; x++)
-	{
-		for (int z = 0; z < CHUNK_SIZE_Z; z++)
-		{
-			// Hauteur basée sur une "vague" simple
-			float nx = (float)(chunk.chunkX * CHUNK_SIZE_X + x) * 0.1f;
-			float nz = (float)(chunk.chunkZ * CHUNK_SIZE_Z + z) * 0.1f;
-			int height = 5 + (int)(sin(nx) * 2 + cos(nz) * 2);
-
-			// Remplir jusqu'à cette hauteur
-			for (int y = 1; y <= height && y < CHUNK_SIZE_Y; y++)
-			{
-				// Couleur basée sur la hauteur (indices palette r/place)
-				if (y == height)
-				{
-					// randomise between 1-31
-					chunk.blocks[x][y][z] = 1 + (rand() % 31);
-					//chunk.blocks[x][y][z] = 8; // Vert clair (herbe)
-				}
-				else if (y > height - 3)
-				{
-					chunk.blocks[x][y][z] = 26; // Marron (terre)
-				}
-				else
-				{
-					chunk.blocks[x][y][z] = 29; // Gris foncé (pierre)
-				}
-			}
-		}
-	}
-	chunk.needsMeshRebuild = true;
-}
-
-// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -239,15 +199,17 @@ int main()
 	// Initialiser le rendu basse résolution
 	LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
 
+	// Terrain generator (Simplex Noise, seed 42)
+	TerrainGenerator gen(42);
+
 	// 1. Créer tous les chunks et remplir le terrain
 	std::cout << "Generating chunks..." << std::endl;
 	for (int cx = -10; cx < 10; cx++)
 	{
 		for (int cz = -10; cz < 10; cz++)
 		{
-			// x[-10 a 10] z[-10 a 10]
 			Chunk2 *chunk = new Chunk2(cx, cz);
-			generateTestTerrain(*chunk);
+			gen.fillChunk(*chunk);
 			chunkMap[chunkKey(cx, cz)] = chunk; // cx cz -> key
 		}
 	}
