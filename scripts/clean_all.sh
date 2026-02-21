@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Remove build directories
-rm -rf "$PROJECT_ROOT/build" "$PROJECT_ROOT/build_wasm"
+rm -rf "$PROJECT_ROOT/build" "$PROJECT_ROOT/build_wasm" "$PROJECT_ROOT/build_asan"
 
 # Remove generated output files that may be at repo root
 rm -f "$PROJECT_ROOT/VoxPlace" "$PROJECT_ROOT/VoxPlace.html" "$PROJECT_ROOT/VoxPlace.wasm" "$PROJECT_ROOT/VoxPlace.js"

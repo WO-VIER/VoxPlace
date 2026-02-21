@@ -129,7 +129,7 @@ public:
 						packedFaces.push_back(packed);
 					}
 					// Face 1 : BOTTOM (-Y)
-					if (getBlock(x, y - 1, z) == 0)
+					if (getBlock(x, y - 1, z) == 0) // Air
 					{
 						uint32_t packed = x | (y << 4) | (z << 12) | (1 << 16) | (block << 19);
 						packedFaces.push_back(packed);
@@ -173,7 +173,7 @@ public:
 			malloc() -> memcpy() -> free()
 
 		*/
-		printf("packedFaces.size() : %d\n", packedFaces.size());
+		//printf("packedFaces.size() : %d\n", packedFaces.size());
 		uploadMesh(packedFaces);
 	};
 
@@ -258,8 +258,8 @@ private:
 	//  Chunk West    This Chunk     Chunk East
 	//  ┌────────┐   ┌────────────┐   ┌────────┐
 	//  │        │   │ x=0 ... 15 │   │        │
-	//  │  [15]  │←──│  getBlock   │──→│  [0]   │
-	//  │        │   │  (-1,y,z)   │   │(16,y,z)│
+	//  │  [15]  │←──│  getBlock  │──→│  [0]   │
+	//  │        │   │  (-1,y,z)  │   │(16,y,z)│
 	//  └────────┘   └────────────┘   └────────┘
 	// ──────────────────────────────────────────────────────────────────
 	uint8_t getBlockOrNeighbor(int x, int y, int z,

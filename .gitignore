@@ -1,4 +1,7 @@
 .cache
+.PVS-Studio
+.PVS-Studio/
 build
 build_wasm
+build_asan
 *.pdf

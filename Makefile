@@ -1,18 +1,22 @@
 JOBS ?= 8
 
-.PHONY: help native wasm serve clean fclean
+.PHONY: help native native-asan wasm serve clean fclean
 
 help:
 	@echo "Usage: make <target>"
 	@echo "Targets:"
-	@echo "  native    Configure & build native (CMake)"
-	@echo "  wasm      Configure & build WebAssembly (Emscripten)"
-	@echo "  serve     Serve build_wasm/ on http://localhost:8000"
-	@echo "  clean     Remove build/ and build_wasm/"
-	@echo "  fclean    Full clean: removes build dirs and generated artifacts"
+	@echo "  native      Configure & build native (CMake)"
+	@echo "  native-asan Configure & build native with Address Sanitizer"
+	@echo "  wasm        Configure & build WebAssembly (Emscripten)"
+	@echo "  serve       Serve build_wasm/ on http://localhost:8000"
+	@echo "  clean       Remove build/ and build_wasm/"
+	@echo "  fclean      Full clean: removes build dirs and generated artifacts"
 
 native:
 	scripts/build_native.sh
+
+native-asan:
+	scripts/build_native_asan.sh
 
 wasm:
 	scripts/build_wasm.sh

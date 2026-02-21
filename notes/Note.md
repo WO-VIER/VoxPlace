@@ -418,19 +418,212 @@ Le fog linéaire est implémenté dans `chunk2.fs` mais les lignes de calcul son
 - **Blocs Custom (Blockbench) :** Si une face touche les limites de la bounding box et qu'un bloc plein est collé contre, la face peut être cullée. *(Futur)*
 - **Bordures de Chunk :** Si le chunk voisin est `nullptr`, la face est créée (air). ✅ *Implémenté via `getBlockOrNeighbor()`.*
 
-### Z-Prepass (Depth Prepass)
+### Z-Prepass (Depth Prepass) — ❌ PAS rentable pour VoxPlace
 
-Réduit l'**Overdraw** (calculs inutiles de pixels cachés) à zéro. Le Fragment Shader est la partie la **plus coûteuse** du rendu ; le Z-Prepass garantit qu'il ne s'exécute que pour les pixels réellement visibles.
+Le Z-Prepass réduit l'**Overdraw** (calculs inutiles de pixels cachés) à zéro. Le Fragment Shader ne s'exécute que pour les pixels réellement visibles.
 
-**Principe :** On rend toute la géométrie sans couleur (juste le Vertex Shader) pour remplir le Depth Buffer. Puis on re-rend en ne colorant que les pixels dont la profondeur correspond exactement — le GPU saute automatiquement le Fragment Shader pour les fragments qui échouent au test de profondeur.
+**Principe :**
 
-| Passe | Configuration | Action |
-|-------|--------------|--------|
-| **1. Profondeur** | `glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE)` | Remplir le Depth Buffer (vertex shader uniquement) |
-| **2. Couleur** | `glColorMask(GL_TRUE, ...)` + `glDepthFunc(GL_EQUAL)` | Le Fragment Shader ne calcule QUE les pixels au premier plan |
+```
+  Passe 1 : Profondeur seule (pas de couleur)
+  ┌─────────────────────────────────┐
+  │ glColorMask(FALSE, FALSE, ...)  │  ← Fragment Shader = OFF
+  │ Vertex Shader → Depth Buffer    │  ← On remplit juste le Z-buffer
+  └─────────────────────────────────┘
+                    ↓
+  Passe 2 : Couleur (depth = EQUAL)
+  ┌─────────────────────────────────┐
+  │ glColorMask(TRUE, TRUE, ...)    │
+  │ glDepthFunc(GL_EQUAL)           │  ← Seuls les pixels "gagnants"
+  │ Fragment Shader = ON            │     exécutent le FS
+  └─────────────────────────────────┘
+```
 
-> ⚠️ **Piège :** Le Z-Prepass exécute le Vertex Shader **deux fois**. Si la géométrie est massive (ex: damier 3D via `fillChunkBench`) et le Fragment Shader très simple, c'est une **perte** de FPS. À tester via un toggle clavier (`F3`).
-> ⚠️ **Attention :** Gérer séparément la géométrie transparente.
+#### Pourquoi c'est une PERTE pour VoxPlace
+
+Le Z-Prepass est un **trade-off** : on exécute le Vertex Shader **2×** pour exécuter le Fragment Shader **1×** au lieu de ~1.5×. C'est rentable **seulement** si le Fragment Shader est cher.
+
+```
+  COÛT DU FRAGMENT SHADER DE VOXPLACE (chunk2.fs) :
+  
+  vec3 color = PALETTE[vColorIndex];        // 1 lookup tableau
+  color *= FACE_BRIGHTNESS[vFaceDir];       // 1 multiplication
+  FragColor = vec4(color, 1.0);             // 1 write
+  
+  Total : ~3 opérations GPU. C'est RIEN.
+```
+
+```
+  RÉSOLUTION DE RENDU :
+  
+  640 × 360 = 230 400 pixels       ← VoxPlace (LowRes PS1)
+  1920 × 1080 = 2 073 600 pixels   ← Full HD
+  
+  Le fragment shader s'exécute sur 9× MOINS de pixels qu'en full HD.
+  Même avec de l'overdraw, le coût total est négligeable.
+```
+
+| | Sans Z-Prepass | Avec Z-Prepass |
+|---|---|---|
+| **Vertex Shader** | 1× tous les vertices | 2× tous les vertices |
+| **Fragment Shader** | ~1.3× les pixels (overdraw) | 1× les pixels |
+| **Bilan VoxPlace** | ✅ VS cheap + FS cheap | ❌ 2× VS pour économiser un FS déjà gratuit |
+
+#### Quand le Z-Prepass SERAIT rentable
+
+| Situation | Rentable ? |
+|-----------|-----------|
+| Fragment Shader complexe (PBR, 10 lights, shadow maps) | ✅ OUI |
+| Rendu full HD ou 4K | ✅ OUI |
+| Beaucoup de couches superposées (transparence) | ✅ OUI |
+| **VoxPlace** (3 opérations FS, 640×360, opaque) | ❌ NON |
+
+> ⚠️ **Conclusion (mise à jour) :** Avec le FS actuel (3 opérations, 640×360), le Z-Prepass est une perte nette.
+> **MAIS** si VoxPlace ajoute :
+> - **Ambient Occlusion** → FS passe de 3 à ~10+ opérations
+> - **Résolution dynamique** → potentiellement 1920×1080 (9× plus de pixels)
+>
+> Alors le Z-Prepass redevient **rentable** et devrait être implémenté **après** l'AO, avec un toggle (`F3`) pour comparer.
+
+### Frustum Culling — ✅ PRIORITÉ #1
+
+Le frustum culling est l'optimisation la plus impactante **maintenant** car elle élimine des chunks **entiers** du pipeline GPU. C'est un test **CPU** : le GPU ne fait rien de plus.
+
+#### C'est quoi le Frustum ?
+
+Le "frustum" c'est la **pyramide tronquée** de la caméra — tout ce que la caméra voit. Tout objet en dehors de cette pyramide est invisible et ne devrait pas être envoyé au GPU.
+
+```
+  Vue de dessus (la caméra regarde vers le haut du schéma) :
+  
+              near plane
+              ┌─────┐
+             ╱       ╲
+            ╱  VISIBLE ╲
+           ╱   zone du   ╲
+          ╱    frustum     ╲
+         ╱                  ╲
+        ╱                    ╲
+       └──────────────────────┘
+              far plane
+       
+       🎥 caméra (ici)
+  
+  Vue de côté :
+  
+       near         far
+        │            │
+        │   ╱────────│  ← top plane
+        │  ╱         │
+        │ 🎥         │  ← centre
+        │  ╲         │
+        │   ╲────────│  ← bottom plane
+        │            │
+```
+
+Le frustum est défini par **6 plans** : Left, Right, Top, Bottom, Near, Far. Chaque plan "coupe" l'espace en deux : le côté visible et le côté invisible.
+
+#### Comment extraire les 6 plans ?
+
+On les extrait directement de la matrice **VP** (projection × view). C'est la méthode de Gribb & Hartmann (1999) — chaque plan est une combinaison de lignes de la matrice :
+
+```
+  VP = Projection × View   (matrice 4×4)
+  
+  Chaque ligne de VP :
+  row[0] = VP[0][0], VP[1][0], VP[2][0], VP[3][0]
+  row[1] = VP[0][1], VP[1][1], VP[2][1], VP[3][1]
+  row[2] = VP[0][2], VP[1][2], VP[2][2], VP[3][2]
+  row[3] = VP[0][3], VP[1][3], VP[2][3], VP[3][3]
+  
+  Les 6 plans :
+  Left   = row[3] + row[0]     "tout ce qui est trop à gauche"
+  Right  = row[3] - row[0]     "tout ce qui est trop à droite"
+  Bottom = row[3] + row[1]     "tout ce qui est trop en bas"
+  Top    = row[3] - row[1]     "tout ce qui est trop en haut"
+  Near   = row[3] + row[2]     "tout ce qui est trop près"
+  Far    = row[3] - row[2]     "tout ce qui est trop loin"
+```
+
+Chaque plan a la forme `ax + by + cz + d = 0` (équation du plan dans l'espace 3D). Les coefficients `(a, b, c)` forment la **normale** du plan, et `d` est la distance à l'origine.
+
+#### Comment tester un chunk vs le frustum ?
+
+Chaque chunk a une **AABB** (Axis-Aligned Bounding Box) :
+
+```
+  Chunk (cx=3, cz=5) :
+  
+  min = (3×16, 0, 5×16) = (48, 0, 80)
+  max = (48+16, 256, 80+16) = (64, 256, 96)
+  
+       max (64, 256, 96)
+       ╱──────────╱│
+      ╱          ╱ │    256 blocs de haut
+     ╱──────────╱  │
+     │          │  │
+     │   CHUNK  │  ╱
+     │          │ ╱     16×16 au sol
+     └──────────╱
+   min (48, 0, 80)
+```
+
+Pour chaque plan du frustum, on teste le **point le plus éloigné de l'AABB dans la direction de la normale** (le "positive vertex"). Si ce point est du mauvais côté du plan → **le chunk est invisible**.
+
+```
+  Test : AABB vs 1 plan
+  
+  Plan avec normale n = (nx, ny, nz)
+  
+  On prend le coin de l'AABB le plus aligné avec n :
+  
+  pVertex.x = (nx >= 0) ? max.x : min.x
+  pVertex.y = (ny >= 0) ? max.y : min.y
+  pVertex.z = (nz >= 0) ? max.z : min.z
+  
+  distance = dot(n, pVertex) + d
+  
+  Si distance < 0 → le chunk est ENTIÈREMENT de l'autre côté du plan
+                   → INVISIBLE, on skip le rendu ✅
+```
+
+On répète ce test pour les 6 plans. Si le chunk est du bon côté des 6 plans, il est visible.
+
+#### Algorithme complet
+
+```
+  Pour chaque frame :
+    1. Calculer VP = projection × view
+    2. Extraire les 6 plans (6 vec4)
+    3. Normaliser chaque plan (diviser par length(normal))
+    
+  Pour chaque chunk :
+    1. Calculer min/max de l'AABB
+    2. Pour chaque plan (6 tests) :
+       - Trouver le positive vertex
+       - Calculer distance signée
+       - Si distance < 0 → SKIP ce chunk
+    3. Si aucun plan ne l'exclut → RENDER
+    
+  Complexité : 6 dot products par chunk = ~24 multiplications
+  C'est RIEN pour le CPU. Même pour 10 000 chunks.
+```
+
+> ✅ **Le frustum culling est gratuit côté GPU** (c'est un test CPU), réduit tout le pipeline de ~3×, et n'a aucun trade-off. C'est TOUJOURS la première optimisation à implémenter.
+> ✅ **Implémenté dans `include/Frustum.h`** — méthode Gribb-Hartmann.
+
+### Résumé des optimisations par priorité
+
+```
+  Priorité     Optimisation            Gain              Quand ?
+  ─────────────────────────────────────────────────────────────────
+  ⭐ 1         Frustum Culling         ~3× draw calls    Maintenant
+  2            Fog                     Masque bordures    Maintenant
+  3            Ambient Occlusion       Visuel ++          Prochain
+  4            Résolution dynamique    Toggle PS1/HD      Prochain
+  5            Z-Prepass               ~1.5× FS (si AO)  Après AO
+  ...          MDI, Multithreading     Futur             Plus tard
+```
 
 ---
 
@@ -619,14 +812,17 @@ Demander au client de générer les chunks à partir du Seed :
 
 ## 11. To-Do
 
-- [ ] **Frustum Culling** — Réduira la géométrie envoyée de ~4×. Cas spécial : que se passe-t-il si le joueur est *dans* un cube ?
-- [ ] **Z-Prepass** — Implémenter avec toggle `F3`. Potentiel ×2 FPS si pas de deferred renderer.
+- [x] **Cross-Chunk Face Culling** — `getBlockOrNeighbor()` + `unordered_map` ✅
+- [x] **Terrain Perlin Noise** — FastNoiseLite, 2 couches Simplex ✅
+- [x] **ImGui** — Debug UI (FPS, chunks, faces, vertices, camera, speed slider) ✅
+- [ ] **Frustum Culling** — ⭐ PRIORITÉ. Réduira les draw calls de ~3×. Test AABB vs 6 plans du frustum.
+- [x] ~~**Z-Prepass**~~ — ❌ Pas rentable : FS à 3 opérations + rendu 640×360. Double le VS pour rien. À réévaluer si FS devient complexe (AO, ombres).
+- [ ] **Activer le fog** — Décommenter le calcul fog dans `chunk2.fs` et ajuster `FOG_START`/`FOG_END`. Ajouter sliders ImGui.
 - [ ] **Génération serveur** — Déplacer la génération du monde côté serveur (lazy generation).
-- [ ] **MDI** — Implémenter `glMultiDrawArraysIndirect` pour réduire les draw calls de 400 à 1.
-- [ ] **`.reserve()` sur les vecteurs** — Décommenter `packedFaces.reserve(...)` dans `meshGenerate()`.
-- [ ] **Activer le fog** — Décommenter le calcul fog dans `chunk2.fs` et ajuster `FOG_START`/`FOG_END`.
+- [ ] **MDI** — `glMultiDrawArraysIndirect` pour réduire les draw calls. Pas rentable tant que pas 2000+ chunks (voir discussion transparence/modifications).
 - [ ] **Multithreading** — Déplacer `meshGenerate()` et `fillChunk()` dans un thread pool.
-- [ ] **Dirty flag rebuild** — Actuellement les chunks sont rebuildés dans la render loop si `needsMeshRebuild`. Optimiser pour qu'un seul chunk soit rebuild par frame.
+- [ ] **Dirty flag rebuild** — Max 1 chunk rebuild par frame dans la render loop.
+- [ ] **Load/unload dynamique** — Chunks chargés par render distance autour de la caméra.
 
 ---
 

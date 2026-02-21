@@ -15,6 +15,19 @@
             }
         },
         {
+            "label": "build: native (ASan)",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/build_native_asan.sh",
+            "group": "build",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
             "label": "build: wasm",
             "type": "shell",
             "command": "${workspaceFolder}/scripts/build_wasm.sh",

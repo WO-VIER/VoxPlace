@@ -31,6 +31,37 @@
             ]
         },
         {
+            "name": "C/C++: Lancer (gdb) - Native (ASan)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build_asan/VoxPlace",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "preLaunchTask": "build: native (ASan)",
+            "setupCommands": [
+                {
+                    "description": "Activer l'impression en mode Pretty pour gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Définir la version désassemblage sur Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Demande à GDB de ne pas arrêter le programme sur ASAN SIGSEGV non fatal",
+                    "text": "handle SIGSEGV nostop noprint pass",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
             "name": "Chrome: Lancer (WASM)",
             "type": "chrome",
             "request": "launch",
