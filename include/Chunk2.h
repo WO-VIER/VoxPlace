@@ -92,25 +92,128 @@ public:
 	}
 
 	// north = +Z, south = -Z, east = +X, west = -X
+	// ════════════════════════════════════════════════════════════════════
+	// Ambient Occlusion — calcule l'AO pour un vertex d'une face
+	//
+	// Pour chaque vertex, on regarde 3 blocs voisins :
+	//   side1, side2 (adjacents sur le plan de la face)
+	//   corner (diagonal)
+	//
+	//        side1  corner
+	//        ┌───┐┌───┐
+	//        │ ? ││ ? │   Si side1 ET side2 solides → AO = 0 (max ombre)
+	//        └───┘└───┘   Sinon AO = 3 - (side1 + side2 + corner)
+	//   ┌───┐
+	//   │ V │ ← vertex       AO = 3 : pas d'ombre (lumineux)
+	//   └───┘                 AO = 0 : ombre maximale (coin sombre)
+	//        ┌───┐
+	//        │ ? │ side2
+	//        └───┘
+	//
+	// Table de 72 offsets (6 faces × 4 vertices × 3 voisins)
+	// Chaque entrée : {dx, dy, dz} relatif au bloc
+	// ════════════════════════════════════════════════════════════════════
+
+	// AO_OFFSETS[faceDir][vertexIdx][neighborIdx] = {dx, dy, dz}
+	// neighborIdx: 0 = side1, 1 = side2, 2 = corner
+	static constexpr int AO_OFFSETS[6][4][3][3] = {
+		// Face 0: TOP (+Y) — check layer y+1
+		// v0(0,1,0) v1(1,1,0) v2(1,1,1) v3(0,1,1)
+		{{{-1,1,0}, {0,1,-1}, {-1,1,-1}},   // v0
+		 {{ 1,1,0}, {0,1,-1}, { 1,1,-1}},   // v1
+		 {{ 1,1,0}, {0,1, 1}, { 1,1, 1}},   // v2
+		 {{-1,1,0}, {0,1, 1}, {-1,1, 1}}},  // v3
+
+		// Face 1: BOTTOM (-Y) — check layer y-1
+		// v0(0,0,1) v1(1,0,1) v2(1,0,0) v3(0,0,0)
+		{{{-1,-1,0}, {0,-1, 1}, {-1,-1, 1}},
+		 {{ 1,-1,0}, {0,-1, 1}, { 1,-1, 1}},
+		 {{ 1,-1,0}, {0,-1,-1}, { 1,-1,-1}},
+		 {{-1,-1,0}, {0,-1,-1}, {-1,-1,-1}}},
+
+		// Face 2: NORTH (+Z) — check layer z+1
+		// v0(0,0,1) v1(0,1,1) v2(1,1,1) v3(1,0,1)
+		{{{-1,0,1}, {0,-1,1}, {-1,-1,1}},
+		 {{-1,0,1}, {0, 1,1}, {-1, 1,1}},
+		 {{ 1,0,1}, {0, 1,1}, { 1, 1,1}},
+		 {{ 1,0,1}, {0,-1,1}, { 1,-1,1}}},
+
+		// Face 3: SOUTH (-Z) — check layer z-1
+		// v0(1,0,0) v1(1,1,0) v2(0,1,0) v3(0,0,0)
+		{{{ 1,0,-1}, {0,-1,-1}, { 1,-1,-1}},
+		 {{ 1,0,-1}, {0, 1,-1}, { 1, 1,-1}},
+		 {{-1,0,-1}, {0, 1,-1}, {-1, 1,-1}},
+		 {{-1,0,-1}, {0,-1,-1}, {-1,-1,-1}}},
+
+		// Face 4: EAST (+X) — check layer x+1
+		// v0(1,0,1) v1(1,1,1) v2(1,1,0) v3(1,0,0)
+		{{{1,0, 1}, {1,-1,0}, {1,-1, 1}},
+		 {{1,0, 1}, {1, 1,0}, {1, 1, 1}},
+		 {{1,0,-1}, {1, 1,0}, {1, 1,-1}},
+		 {{1,0,-1}, {1,-1,0}, {1,-1,-1}}},
+
+		// Face 5: WEST (-X) — check layer x-1
+		// v0(0,0,0) v1(0,1,0) v2(0,1,1) v3(0,0,1)
+		{{{-1,0,-1}, {-1,-1,0}, {-1,-1,-1}},
+		 {{-1,0,-1}, {-1, 1,0}, {-1, 1,-1}},
+		 {{-1,0, 1}, {-1, 1,0}, {-1, 1, 1}},
+		 {{-1,0, 1}, {-1,-1,0}, {-1,-1, 1}}}
+	};
+
+	int computeVertexAO(int bx, int by, int bz, int faceDir, int vertIdx,
+	                    Chunk2* north, Chunk2* south, Chunk2* east, Chunk2* west) const
+	{
+		auto& off = AO_OFFSETS[faceDir][vertIdx];
+		bool s1 = getBlockOrNeighbor(bx + off[0][0], by + off[0][1], bz + off[0][2],
+		                             north, south, east, west) != 0;
+		bool s2 = getBlockOrNeighbor(bx + off[1][0], by + off[1][1], bz + off[1][2],
+		                             north, south, east, west) != 0;
+		bool corner = getBlockOrNeighbor(bx + off[2][0], by + off[2][1], bz + off[2][2],
+		                                 north, south, east, west) != 0;
+		if (s1 && s2) return 0; // Coin entièrement occluded
+		return 3 - (s1 + s2 + corner);
+	}
+
+	// north = +Z, south = -Z, east = +X, west = -X
 	void meshGenerate(Chunk2 *north = nullptr, Chunk2 *south = nullptr,
 					  Chunk2 *east = nullptr, Chunk2 *west = nullptr)
 	{
 		std::vector<uint32_t> packedFaces;
-		//packedFaces.reserve(CHUNK_SIZE_X * CHUNK_SIZE_Z * 6);
 		/*
-		Bits [0-3] ; X local (0 - 15) -> 4 bits
-		Bits [4-11] ; y local (0 - 255) -> 8 bits
-		Bits [12-15] ; z local (0 - 15) -> 4 bits
-		Bits [16-18] ; Face Direction   -> 3 bits
-		(0=top, 1=bottom, 2=north, 3=south, 4=east, 5=west)
+		NOUVEAU BIT LAYOUT (avec AO per-vertex) :
 
-		Bits [19-25] : Color Index (0 - 64) -> 6 bits mais on utilise 5bits
-		Bits [26-28] : AO apr faces 		-> 2bits (opt, 0-3)
+		Bits [0-3]   : X local (0-15)      → 4 bits
+		Bits [4-11]  : Y local (0-255)      → 8 bits
+		Bits [12-15] : Z local (0-15)       → 4 bits
+		Bits [16-18] : Face Direction (0-5) → 3 bits
+		Bits [19-23] : Color (color-1, 0-31)→ 5 bits   ← réduit de 6 à 5
+		Bits [24-25] : AO vertex 0          → 2 bits
+		Bits [26-27] : AO vertex 1          → 2 bits
+		Bits [28-29] : AO vertex 2          → 2 bits
+		Bits [30-31] : AO vertex 3          → 2 bits
 
-		Total : 28 / 32 bits du uint_32
-
-		//uint32_t packed = (x) | (y << 4) | (z << 12) | (faceDir << 16) | (color << 19);
+		Total : 32/32 bits utilisés !
 		*/
+
+		auto packFace = [&](int x, int y, int z, int faceDir, uint8_t color) {
+			int ao0 = computeVertexAO(x, y, z, faceDir, 0, north, south, east, west);
+			int ao1 = computeVertexAO(x, y, z, faceDir, 1, north, south, east, west);
+			int ao2 = computeVertexAO(x, y, z, faceDir, 2, north, south, east, west);
+			int ao3 = computeVertexAO(x, y, z, faceDir, 3, north, south, east, west);
+
+			uint32_t packed = (uint32_t)x
+				| ((uint32_t)y << 4)
+				| ((uint32_t)z << 12)
+				| ((uint32_t)faceDir << 16)
+				| ((uint32_t)(color - 1) << 19)  // color-1 car 0=air jamais rendu
+				| ((uint32_t)ao0 << 24)
+				| ((uint32_t)ao1 << 26)
+				| ((uint32_t)ao2 << 28)
+				| ((uint32_t)ao3 << 30);
+
+			packedFaces.push_back(packed);
+		};
+		// Cache line , chache hit dans le l1 
 		for (int x = 0; x < CHUNK_SIZE_X; x++)
 		{
 			for (int y = 0; y < CHUNK_SIZE_Y; y++)
@@ -122,42 +225,23 @@ public:
 						continue; // air
 
 					// Face 0 : TOP (+Y)
-					// Si le block au dessus est de l'air je creer une face
 					if (getBlock(x, y + 1, z) == 0)
-					{ 
-						uint32_t packed = x | (y << 4) | (z << 12) | (0 << 16) | (block << 19);
-						packedFaces.push_back(packed);
-					}
+						packFace(x, y, z, 0, block);
 					// Face 1 : BOTTOM (-Y)
-					if (getBlock(x, y - 1, z) == 0) // Air
-					{
-						uint32_t packed = x | (y << 4) | (z << 12) | (1 << 16) | (block << 19);
-						packedFaces.push_back(packed);
-					}
-					// Face 2 : NORTH (+Z) — vérifie le chunk voisin si z == 15
+					if (getBlock(x, y - 1, z) == 0)
+						packFace(x, y, z, 1, block);
+					// Face 2 : NORTH (+Z)
 					if (getBlockOrNeighbor(x, y, z + 1, north, south, east, west) == 0)
-					{
-						uint32_t packed = x | (y << 4) | (z << 12) | (2 << 16) | (block << 19);
-						packedFaces.push_back(packed);
-					}
-					// Face 3 : SOUTH (-Z) — vérifie le chunk voisin si z == 0
+						packFace(x, y, z, 2, block);
+					// Face 3 : SOUTH (-Z)
 					if (getBlockOrNeighbor(x, y, z - 1, north, south, east, west) == 0)
-					{
-						uint32_t packed = x | (y << 4) | (z << 12) | (3 << 16) | (block << 19);
-						packedFaces.push_back(packed);
-					}
-					// Face 4 : EAST (+X) — vérifie le chunk voisin si x == 15
+						packFace(x, y, z, 3, block);
+					// Face 4 : EAST (+X)
 					if (getBlockOrNeighbor(x + 1, y, z, north, south, east, west) == 0)
-					{
-						uint32_t packed = x | (y << 4) | (z << 12) | (4 << 16) | (block << 19);
-						packedFaces.push_back(packed);
-					}
-					// Face 5 : WEST (-X) — vérifie le chunk voisin si x == 0
+						packFace(x, y, z, 4, block);
+					// Face 5 : WEST (-X)
 					if (getBlockOrNeighbor(x - 1, y, z, north, south, east, west) == 0)
-					{
-						uint32_t packed = x | (y << 4) | (z << 12) | (5 << 16) | (block << 19);
-						packedFaces.push_back(packed);
-					}
+						packFace(x, y, z, 5, block);
 				};
 			};
 		};

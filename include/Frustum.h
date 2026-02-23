@@ -28,7 +28,12 @@ struct Frustum
 	// Extraire les 6 plans du frustum depuis la matrice VP
 	//
 	//   VP = Projection × View
-	//
+	//	row[0] -> (1.3, 0.0, 0.0, 0.0) : Gère l'axe X (gauche/droite).
+	//	row[1] -> (0.0, 1.7, 0.0, 0.0) : Gère l'axe Y (haut/bas).
+	//	row[2] -> (0.0, 0.0, -1.0, -0.2) : Gère la profondeur (Near/Far).
+	//	row[3] -> (0.0, 0.0, -1.0, 0.0) : Gère le W (la perspective, ce qui fait que les objets lointains rapetissent).
+	//	
+	// 
 	//   Left   = row[3] + row[0]
 	//   Right  = row[3] - row[0]
 	//   Bottom = row[3] + row[1]
@@ -51,13 +56,14 @@ struct Frustum
 			vp[2][3] + vp[2][0],
 			vp[3][3] + vp[3][0]);
 
-		// Right  = row3 - row0
+		// Right  = row3 - row0 
 		planes[1] = glm::vec4(
 			vp[0][3] - vp[0][0],
 			vp[1][3] - vp[1][0],
 			vp[2][3] - vp[2][0],
-			vp[3][3] - vp[3][0]);
-
+			vp[3][3] - vp[3][0]); // -> Donne la normal (vecteur perpendiculaire a la surface du plan) du plan de droite qui pointe vers (gauche et vers l'arrière) l'intérieur de ce que la cam voit
+			// Le d est la distance du plan par rapport à l'origine du monde (0,0,0)
+			// Ensuite on normalise cette normale qui ramene a 1 sa longueur 
 		// Bottom = row3 + row1
 		planes[2] = glm::vec4(
 			vp[0][3] + vp[0][1],
@@ -149,6 +155,14 @@ struct Frustum
 			static_cast<float>(chunkZ * 16 + 16));
 
 		return isAABBVisible(aabbMin, aabbMax);
+	}
+
+	void printFrustum()
+	{
+		for (int i = 0; i < 6; i++)
+		{
+			std::cout << "Plane " << i << ": " << glm::to_string(planes[i]) << std::endl;
+		}
 	}
 };
 

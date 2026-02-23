@@ -6,12 +6,14 @@ out vec4 FragColor;
 in flat int vColorIndex;
 in flat int vFaceDir;
 in vec3 vFragPos;
+in float vAO;  // AO interpolé par le rasterizer (0.2 → 1.0)
 
 // Uniforms
 uniform vec3 cameraPos;
 uniform float fogStart;
 uniform float fogEnd;
 uniform vec3 fogColor;
+uniform int useAO;
 
 // ============================================================================
 // PALETTE r/place 2023 (33 couleurs : 0 = air, 1-32 = couleurs)
@@ -78,10 +80,14 @@ void main()
     // 2. Face shading (éclairage directionnel simple)
     color *= FACE_BRIGHTNESS[vFaceDir];
 
-    // 3. Distance fog
+    // 3. Ambient Occlusion (toggle via ImGui)
+    if (useAO == 1)
+        color *= vAO;
+
+    // 4. Distance fog
     float dist = length(vFragPos - cameraPos);
-    //float fogFactor = clamp((dist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
-    //color = mix(color, fogColor, fogFactor);
+    float fogFactor = clamp((dist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+    color = mix(color, fogColor, fogFactor);
 
     FragColor = vec4(color, 1.0);
 }

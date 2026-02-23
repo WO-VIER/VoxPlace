@@ -1,0 +1,115 @@
+Bitshift permet la multiplication et division en décalent << *2  >> /2
+
+i = * (long *) &y; -> droite a gauche &y ->  converti float adress en long adress
+
+Pour chaques bloc j'ai la meme geometry mais ce qui deffere c'est la position x y z et le material
+Je peux rendre que les quads de formes définies et pour chaques quads je dosi spécifier the shape the texture
+the position torch light sun light flags
+
+Shape - 16bits
+Texture - 16bits dans un int
+
+Position xyz pour x et z besoin de full int alors que pour y j'ai besoins de la moitier de int
+
+Torch light = 4bits
+
+Sun light = 4 bits
+
+Et pour completer 8 bits pour flags
+
+Tout ca dans 4 int -> une face alors que d'habitude cela est juste pour encoder la position
+
+Calcule les formes reel et les normales dans le vertex shader il suffit de mettre toute la geometry possible dans le buffer tout ce qui reste a faire est d'indexer la position
+
+Méconpréhension du buffer index
+
+https://voxel.wiki/wiki/vertex-pulling/
+
+Un coté -> 2 triangles -> Un triangle -> 3 sommets (verticies / vertex )
+
+    LOgiquement on donne au gpu chaques sommets du triangle individuellement
+    C'est ca que l'on peut améliorer dans notre voxel engine nous déssinont que des carré (2 triangles -> 6sommets )
+    Si nous connaissont un sommet nous connaison le motif que doit adopter pour completer le carré (Vertex Pulling)
+
+    Nous donnons au gpu un seul sommet puis dans le code gpu intellignet on peut construire les 2 triangles avec ce seul point
+
+    Dans opengl on peut le faire avec un ssbo (shader storage buffer object)
+
+    Unsigned int ssbo, vao, shaderprogram;
+    glCreateBuffers(1, &ssbo); // Create ssbo pour stocker notre sommet
+    glCreateBuffers(1, &vao);
+
+    ensuite
+
+    // Vector to hold our mesh data
+    std::vector<int> ssbo verticies;
+
+    //The position of our face
+    vec3 position = vec3(5,5,5); //Position (5,5,5) du sommet  <- Créer des données pour stocker la données de motre face puis pousser directement dans notre ssbo
+
+    //Pack the position of our face into a sigular int
+    int vertex = (position.x | position.y  << 10 || position.z << 20);
+
+    //Put the mesh data inside our vector
+    ssboVerticies.push_back(vertex);
+
+    //Bind our shader program
+    glUseProgram(shaderProgram);
+
+    //Using DSA, put the data inside of the ssbo
+    glNamedBufferStorage(ssbo, ssbo.size() * sizeof(int),ssbo.data(), NULL);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo);
+
+    //Unbind our shader programm
+    glUseProgram(0);
+
+    ssbo
+    Position(5,5,5)
+
+
+    // Bind our vertex array. This is needed even though we have no vbo
+    glBindVertexArray(vao);
+
+    //Issue the draw comand
+    glDrawArrays(G_TRIANGLES, 0, ssboVerticies.size()*6);
+
+    //Unbind our vertex array
+    glBindVertexArray(0);
+
+    Maitenant nous allons dessiner notre maillage en multipliant le nombre de sommets par 6 car le gpu dessine 6 sommets pour le single vertex que nous avons stocker
+
+    Enfin dans le code gpu nous allons accéder a nos données pour chaques sommmet de notre face avec un index personalisé
+
+
+    //offsets for our verticies drawing this face
+    const vec3 facePositions[4] = vec3[4]
+    (
+        vec3(0.0f,0.0f,1.0f),
+        vec3(1.0f,0.0f,0.0f),
+        vec3(1.0f,0.0f,1.0f),
+        vec3(0.0f,0.0f,0.0f)
+    );
+
+    //Winding order to acces the face facePositions
+    int indicies[6] = {0,1,2,1,0,3};
+
+    int main()
+    {
+        //Create a custom index to acces the mesh data in the right order
+        const int index = g_vertexID / 6;   <-- Acces Data
+        const uint packeData = packedMeshData[index];
+        const int currentVertexID = gl_vertexID % 6;
+
+        // unpack the data we retrieved
+        const uint x = (packeData) & 1023;
+        const uint y = (packeData >> 10) & 1023;
+        const uint z = (packeData >> 20) & 1023;
+        vec3 position = vec3(x, y, z);
+
+        //Apply the offsets for our face so we can form 2 triangles
+        position += facePositions[indicies[currentVertexID]];
+
+        //output our position
+        gl_Position = vec4(position,1.0);
+
+    }

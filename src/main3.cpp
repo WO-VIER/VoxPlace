@@ -42,10 +42,13 @@
 const int SCREEN_WIDTH = 1920;
 const int SCREEN_HEIGHT = 1080;
 
-// Fog settings
-const float FOG_START = 0.0f;							 // 40.0f
-const float FOG_END = 0.0f;								 // 80.0f
-const glm::vec3 FOG_COLOR = glm::vec3(0.6f, 0.7f, 0.9f); // Bleu ciel
+// Fog settings (modifiable via ImGui)
+float fogStart = 80.0f;
+float fogEnd = 200.0f;
+glm::vec3 FOG_COLOR = glm::vec3(0.6f, 0.7f, 0.9f); // Bleu ciel
+
+// Rendering toggles
+bool useAO = true;
 
 // ============================================================================
 // GLOBALS
@@ -205,7 +208,7 @@ int main()
 	std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
 
 	// Configuration OpenGL
-	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_DEPTH_TEST); 
 	glClearColor(FOG_COLOR.r, FOG_COLOR.g, FOG_COLOR.b, 1.0f);
 
 	// ============================================================================
@@ -271,23 +274,25 @@ int main()
 		// Rendu basse résolution
 		LowResRenderer::beginFrame();
 
+
 		// Configurer le shader
 		chunkShader.use();
 
 		glm::mat4 projection = glm::perspective(
 			glm::radians(camera.Zoom),
 			(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT,
-			0.1f, 1000.0f); // avant 200.0f // Far plane
+			0.1f, 200.0f); // avant 200.0f // Far plane
 		glm::mat4 view = camera.GetViewMatrix();
 
 		chunkShader.setMat4("projection", projection);
 		chunkShader.setMat4("view", view);
 
 		// Fog uniforms
-		chunkShader.setFloat("fogStart", FOG_START);
-		chunkShader.setFloat("fogEnd", FOG_END);
+		chunkShader.setFloat("fogStart", fogStart);
+		chunkShader.setFloat("fogEnd", fogEnd);
 		chunkShader.setVec3("fogColor", FOG_COLOR);
 		chunkShader.setVec3("cameraPos", camera.Position);
+		chunkShader.setInt("useAO", useAO ? 1 : 0);
 
 		// Frustum culling — extraire les plans depuis VP
 		Frustum frustum;
@@ -319,7 +324,6 @@ int main()
 			chunk->render();
 			visibleChunks++;
 		}
-
 		// Afficher le résultat upscalé
 		LowResRenderer::endFrame();
 
@@ -344,6 +348,12 @@ int main()
 		ImGui::Separator();
 		ImGui::Text("Camera: (%.1f, %.1f, %.1f)", camera.Position.x, camera.Position.y, camera.Position.z);
 		ImGui::SliderFloat("Speed", &camera.MovementSpeed, 1.0f, 100.0f);
+		ImGui::Separator();
+		ImGui::Text("Fog");
+		ImGui::SliderFloat("Fog Start", &fogStart, 0.0f, 500.0f);
+		ImGui::SliderFloat("Fog End", &fogEnd, 0.0f, 500.0f);
+		ImGui::Separator();
+		ImGui::Checkbox("Ambient Occlusion", &useAO);
 		ImGui::End();
 
 		ImGui::Render();

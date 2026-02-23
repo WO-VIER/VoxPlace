@@ -126,7 +126,7 @@ Le **Vertex Pulling** lit directement le SSBO via `gl_VertexID`. On ne passe pas
 
 ### Côté CPU : Bit Packing (Layout réel de `Chunk2.h`)
 
-On compresse toutes les infos d'une face dans un seul `uint32_t` :
+On compresse toutes les infos d'une face + AO dans un seul `uint32_t` :
 
 | Champ | Bits | Masque | Plage | Shift |
 |-------|------|--------|-------|-------|
@@ -134,15 +134,18 @@ On compresse toutes les infos d'une face dans un seul `uint32_t` :
 | Y local | `[4–11]` — 8 bits | `0xFF` | 0–255 | `<< 4` |
 | Z local | `[12–15]` — 4 bits | `0xF` | 0–15 | `<< 12` |
 | Face Direction | `[16–18]` — 3 bits | `0x7` | 0–5 | `<< 16` |
-| Color Index | `[19–24]` — 6 bits | `0x3F` | 0–63 | `<< 19` |
-| AO (réservé) | `[25–26]` — 2 bits | — | 0–3 | `<< 25` |
-| **Libre** | `[27–31]` — 5 bits | — | — | — |
+| Color Index | `[19–23]` — 5 bits | `0x1F` | 0–31 | `<< 19` |
+| AO vertex 0 | `[24–25]` — 2 bits | `0x3` | 0–3 | `<< 24` |
+| AO vertex 1 | `[26–27]` — 2 bits | `0x3` | 0–3 | `<< 26` |
+| AO vertex 2 | `[28–29]` — 2 bits | `0x3` | 0–3 | `<< 28` |
+| AO vertex 3 | `[30–31]` — 2 bits | `0x3` | 0–3 | `<< 30` |
 
-**Total utilisé : 27/32 bits** (5 bits libres pour extensions futures : lumière, metadata...)
+**Total utilisé : 32/32 bits** — Color est packé comme `color-1` (air = 0, jamais rendu, donc offset de 1 est safe)
 
 ```cpp
 // Bit packing réel (Chunk2.h, meshGenerate)
-uint32_t packed = x | (y << 4) | (z << 12) | (faceDir << 16) | (colorIndex << 19);
+uint32_t packed = x | (y << 4) | (z << 12) | (faceDir << 16) 
+    | ((color - 1) << 19) | (ao0 << 24) | (ao1 << 26) | (ao2 << 28) | (ao3 << 30);
 ```
 
 > **Performance `std::vector`** : Sans `.reserve()`, chaque `push_back` qui dépasse la capacité déclenche une réallocation : `malloc()` → `memcpy()` → `free()`. Toujours appeler `.reserve(estimatedSize)` avant de remplir le vecteur. La ligne `packedFaces.reserve(...)` est actuellement **commentée** dans le code.
@@ -398,16 +401,68 @@ Chunk West     This Chunk      Chunk East
 
 Si aucun voisin n'existe (`nullptr`) → retourne 0 (air) → la face est créée (le bord du monde est visible).
 
-### Configuration Fog (désactivée)
+### Distance Fog ✅ Implémenté
 
-```cpp
-// main3.cpp — actuellement à 0 (désactivé)
-const float FOG_START = 0.0f;
-const float FOG_END = 0.0f;
-const glm::vec3 FOG_COLOR = glm::vec3(0.6f, 0.7f, 0.9f); // Bleu ciel
+Le fog masque la frontière du monde en fondant les blocs distants dans la couleur du ciel. Implémenté dans `chunk2.fs` avec contrôle live via ImGui.
+
+#### Formule : Fog Linéaire
+
+```glsl
+// chunk2.fs — fog linéaire
+float dist = length(vFragPos - cameraPos);                        // distance caméra → fragment
+float fogFactor = clamp((dist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);  // 0 = clair, 1 = fog total
+color = mix(color, fogColor, fogFactor);                           // interpolation linéaire
 ```
 
-Le fog linéaire est implémenté dans `chunk2.fs` mais les lignes de calcul sont **commentées**. La `glClearColor` correspond au `FOG_COLOR` pour un fondu seamless quand le fog sera activé.
+```
+  fogFactor
+  1.0 ─────────────────────────╱──────────  ← 100% fog (fogColor)
+                              ╱
+                             ╱
+                            ╱
+  0.0 ──────────────────────╱              ← 0% fog (couleur du bloc)
+       0     fogStart    fogEnd      distance
+              80          200        (en unités monde)
+```
+
+**Comment ça marche :**
+
+| Distance | fogFactor | Résultat |
+|----------|-----------|----------|
+| `dist < fogStart` | 0.0 | Couleur du bloc pure (pas de fog) |
+| `fogStart < dist < fogEnd` | 0.0 – 1.0 | Mélange progressif bloc → fog |
+| `dist > fogEnd` | 1.0 | Couleur du fog pure (bloc invisible) |
+
+**`mix(a, b, t)`** = interpolation linéaire : `a × (1-t) + b × t`
+
+#### Pourquoi fogColor = glClearColor ?
+
+```
+  Si fogColor ≠ glClearColor :
+  ┌─────────────────────────────────────┐
+  │   terrain   │  fog gris  │ ciel bleu│  ← transition VISIBLE = moche
+  └─────────────────────────────────────┘
+  
+  Si fogColor = glClearColor :
+  ┌─────────────────────────────────────┐
+  │   terrain  ───  fondu ──── ciel     │  ← seamless !
+  └─────────────────────────────────────┘
+```
+
+La `glClearColor` dans `main3.cpp` est automatiquement synchronisée avec `FOG_COLOR` :
+```cpp
+glClearColor(FOG_COLOR.r, FOG_COLOR.g, FOG_COLOR.b, 1.0f);
+```
+
+#### Valeurs actuelles
+
+```cpp
+// main3.cpp — modifiables via ImGui sliders
+float fogStart = 80.0f;   // Le fog commence à 80 blocs
+float fogEnd   = 200.0f;  // À 200 blocs, c'est 100% fog
+```
+
+> ✅ **Astuce :** Le fog va bien avec le frustum culling. Si `fogEnd < far plane`, les chunks au-delà du fog sont de toute façon invisibles → le frustum culling les skip. Double économie.
 
 ---
 
@@ -611,6 +666,126 @@ On répète ce test pour les 6 plans. Si le chunk est du bon côté des 6 plans,
 
 > ✅ **Le frustum culling est gratuit côté GPU** (c'est un test CPU), réduit tout le pipeline de ~3×, et n'a aucun trade-off. C'est TOUJOURS la première optimisation à implémenter.
 > ✅ **Implémenté dans `include/Frustum.h`** — méthode Gribb-Hartmann.
+### Ambient Occlusion Per-Vertex ✅ Implémenté
+
+L'AO voxel assombrit les coins et arêtes entre blocs pour donner du volume. C'est du **per-vertex AO** calculé au moment du meshing (CPU), pas du SSAO screen-space (GPU).
+
+#### Principe : 3 blocs voisins par vertex
+
+Pour chaque vertex d'une face, on examine 3 blocs voisins dans la direction de la face :
+
+```
+  Vue d'en haut d'un vertex sur une face TOP (+Y) :
+  
+  Le vertex V est au coin. On regarde les 3 blocs autour de lui
+  dans la couche y+1 (au-dessus du bloc courant).
+  
+      side1    corner
+      ┌───┐┌───┐
+      │ ? ││ ? │    Si side1 ET side2 sont solides → AO = 0 (max ombre)
+      └───┘└───┘    Sinon : AO = 3 - (side1 + side2 + corner)
+  ┌───┐
+  │ V │ ← vertex        AO = 3 : lumineux (0 voisins solides)
+  └───┘                  AO = 2 : léger ombrage (1 voisin solide)
+      ┌───┐              AO = 1 : ombré (2 voisins solides)
+      │ ? │ side2         AO = 0 : très sombre (3 voisins solides, ou s1+s2)
+      └───┘
+```
+
+#### Formule AO
+
+```cpp
+// Chunk2.h — computeVertexAO()
+int computeVertexAO(side1, side2, corner) {
+    if (side1 && side2) return 0;  // Cas spécial : coin totalement occluded
+    return 3 - (side1 + side2 + corner);
+}
+```
+
+Le cas spécial `side1 && side2` est important : si les deux côtés sont solides, le corner ne peut pas être visible même s'il est vide → on force AO = 0.
+
+```
+  AO = 3        AO = 2        AO = 1        AO = 0
+  ┌───┐         ┌───┐         ┌███┐         ┌███┐
+  │   │ air     │   │ air     │███│ solide   │███│ solide
+  └───┘         └───┘         └───┘         └───┘
+  ┌───┐         ┌───┐         ┌───┐         ┌───┐
+  │ V │         │ V │         │ V │         │ V │
+  └───┘         └───┘         └───┘         └───┘
+  ┌───┐         ┌███┐         ┌───┐         ┌███┐
+  │   │ air     │███│ solide  │   │ air     │███│ solide
+  └───┘         └───┘         └───┘         └───┘
+  
+  0 voisins     1 voisin      1+corner      2 côtés (forcé)
+```
+
+#### Table de 72 offsets
+
+Pour chaque face (6) × chaque vertex (4) × chaque voisin (3 = side1, side2, corner), on définit un offset (dx, dy, dz) relatif au bloc. Total : 6×4×3 = 72 vecteurs, définis dans `AO_OFFSETS[6][4][3][3]` dans `Chunk2.h`.
+
+```
+  Exemple : Face TOP (+Y), vertex v0 (coin 0,1,0) du bloc (x,y,z)
+  
+  Couche au-dessus (y+1) :
+         z-1     z      z+1
+  x-1  [corner] [side1] [  ]       side1  = getBlock(x-1, y+1, z)
+  x    [side2]  [FACE]  [  ]       side2  = getBlock(x, y+1, z-1)
+  x+1  [  ]     [  ]    [  ]       corner = getBlock(x-1, y+1, z-1)
+```
+
+#### Nouveau Bit Layout (32/32 bits utilisés)
+
+```
+  Ancien (sans AO) :
+  [XXXX][YYYYYYYY][ZZZZ][FFF][CCCCCC][???????]
+   4      8        4     3    6 bits   7 libres = 25/32
+  
+  Nouveau (avec AO) :
+  [XXXX][YYYYYYYY][ZZZZ][FFF][CCCCC][AA][AA][AA][AA]
+   4      8        4     3    5 bits  v0  v1  v2  v3  = 32/32
+  
+  Changement :
+  - Color réduit de 6 → 5 bits (color-1, car 0=air jamais packé)
+  - Les 8 bits libérés stockent 4 valeurs AO × 2 bits = 0-3 chacune
+```
+
+| Champ | Bits | Plage | Remarque |
+|-------|------|-------|----------|
+| X | [0-3] | 0-15 | Position locale |
+| Y | [4-11] | 0-255 | Position locale |
+| Z | [12-15] | 0-15 | Position locale |
+| Face | [16-18] | 0-5 | Direction |
+| Color | [19-23] | 0-31 | **Packé comme color-1** (shader fait +1) |
+| AO v0 | [24-25] | 0-3 | Vertex 0 |
+| AO v1 | [26-27] | 0-3 | Vertex 1 |
+| AO v2 | [28-29] | 0-3 | Vertex 2 |
+| AO v3 | [30-31] | 0-3 | Vertex 3 |
+
+#### Pipeline GPU : Vertex → Fragment
+
+```
+  Vertex Shader (chunk2.vs)
+  ┌──────────────────────────────────────────────────┐
+  │ 1. Unpack AO pour les 4 vertices de la face      │
+  │ 2. cornerIdx = QUAD_INDICES[vertID] → 0,1,2,3   │
+  │ 3. ao = AO_CURVE[aoValues[cornerIdx]]            │
+  │    AO_CURVE = [0.20, 0.50, 0.75, 1.00]           │
+  │ 4. vAO = ao (PAS flat → interpolé par rasterizer)│
+  └──────────────────────────────────────────────────┘
+                        ↓
+  Rasterizer (GPU hardware)
+  ┌──────────────────────────────────────────────────┐
+  │ Interpole vAO entre les 3 sommets du triangle    │
+  │ → gradient doux sur toute la face ! 🎨            │
+  └──────────────────────────────────────────────────┘
+                        ↓
+  Fragment Shader (chunk2.fs)
+  ┌──────────────────────────────────────────────────┐
+  │ color *= vAO;  ← simple multiplication           │
+  └──────────────────────────────────────────────────┘
+```
+
+> ✅ **Point clé :** `vAO` n'est **PAS `flat`** (contrairement à `vColorIndex` et `vFaceDir`). Le rasterizer GPU interpole automatiquement la valeur entre les 3 sommets de chaque triangle, créant un dégradé doux d'ombre vers lumière sur la face. C'est **gratuit** — le GPU le fait de toute façon.
 
 ### Résumé des optimisations par priorité
 
@@ -675,30 +850,39 @@ Le **cache CPU** (L1, L2) est ultra-rapide mais très petit. Plus les données s
 
 ## 6. Multithreading (CPU)
 
+> Source : LowLevelGameDev — [Multithreading Voxel Engine](https://www.youtube.com/watch?v=yUUh5N2ZYHA)
+
 La pire erreur est de mettre des `mutex` (verrous) partout entre le thread principal et les workers. Cela force les threads à s'attendre, annulant le gain de performance.
 
-### Modèle "Thread Pool" Isolé (Data-Oriented Design)
+### Modèle "Thread Pool" Sans Mutex (Data-Oriented Design)
+
+L'utilisation excessive de mutex **détruit** les performances. L'approche correcte est un Thread Pool avec des **points de synchronisation stricts** et **zéro communication pendant l'exécution** :
 
 ```
 Main Thread                    Thread Pool                    GPU
     │                              │                            │
-    │  1. Emballe les données      │                            │
+    │  1. Emballe TOUTES les       │                            │
+    │     données nécessaires      │                            │
     │─────────────────────────────→│                            │
     │                              │  2. Calcul en isolation    │
-    │                              │     (Perlin, Meshing...)   │
+    │     ❌ Aucune communication   │     (Perlin, Meshing...)   │
+    │     pendant cette phase      │     ❌ Ne demande RIEN au  │
+    │                              │        main thread          │
     │                              │                            │
-    │  3. Récupère le résultat    ←│                            │
+    │  3. Point de synchronisation │                            │
+    │     Récupère les buffers    ←│                            │
     │                              │                            │
     │  4. Upload OpenGL ──────────────────────────────────────→│
     │     (main thread obligatoire)│                            │
 ```
 
 **Règles :**
-1. Le **Main Thread** rassemble toutes les données nécessaires à une tâche.
-2. Il envoie ces données formatées à un **Worker** du pool.
-3. Le **Worker** travaille en **isolation totale** (ne demande jamais d'infos au Main Thread).
-4. Il place le résultat dans un buffer de sortie.
-5. Le **Main Thread** récupère et upload au GPU (OpenGL exige le main thread).
+1. Le **Main Thread** prépare un ensemble de tâches **indépendantes** (ex: "génère le mesh du chunk (3,5) avec ces données de voisins").
+2. Il fournit **toutes** les données nécessaires d'avance — pas d'accès partagé.
+3. Il envoie les tâches au **Thread Pool**.
+4. Pendant l'exécution : **aucune communication** entre les threads. Zéro mutex.
+5. Le Main Thread attend à un **point de synchronisation fixe**, récolte les résultats.
+6. Il upload au GPU (OpenGL exige le main thread).
 
 > ⚠️ **État actuel :** VoxPlace ne fait **pas** de multithreading. Tout (génération terrain, meshing, upload) se fait sur le main thread, de façon synchrone au démarrage.
 
@@ -815,14 +999,440 @@ Demander au client de générer les chunks à partir du Seed :
 - [x] **Cross-Chunk Face Culling** — `getBlockOrNeighbor()` + `unordered_map` ✅
 - [x] **Terrain Perlin Noise** — FastNoiseLite, 2 couches Simplex ✅
 - [x] **ImGui** — Debug UI (FPS, chunks, faces, vertices, camera, speed slider) ✅
-- [ ] **Frustum Culling** — ⭐ PRIORITÉ. Réduira les draw calls de ~3×. Test AABB vs 6 plans du frustum.
-- [x] ~~**Z-Prepass**~~ — ❌ Pas rentable : FS à 3 opérations + rendu 640×360. Double le VS pour rien. À réévaluer si FS devient complexe (AO, ombres).
-- [ ] **Activer le fog** — Décommenter le calcul fog dans `chunk2.fs` et ajuster `FOG_START`/`FOG_END`. Ajouter sliders ImGui.
-- [ ] **Génération serveur** — Déplacer la génération du monde côté serveur (lazy generation).
-- [ ] **MDI** — `glMultiDrawArraysIndirect` pour réduire les draw calls. Pas rentable tant que pas 2000+ chunks (voir discussion transparence/modifications).
-- [ ] **Multithreading** — Déplacer `meshGenerate()` et `fillChunk()` dans un thread pool.
-- [ ] **Dirty flag rebuild** — Max 1 chunk rebuild par frame dans la render loop.
-- [ ] **Load/unload dynamique** — Chunks chargés par render distance autour de la caméra.
+- [x] **Frustum Culling** — `Frustum.h`, test AABB vs 6 plans, compteur ImGui ✅
+- [x] **Fog** — Fog linéaire décommenté, sliders ImGui (fogStart/fogEnd) ✅
+- [x] **Ambient Occlusion** — Per-vertex AO, 4×2 bits packés, AO_CURVE interpolée ✅
+- [x] ~~**Z-Prepass**~~ — ❌ Pas rentable actuellement. À réévaluer après AO + full res.
+- [ ] **Front-to-back Sorting** — Trier les chunks par distance à la caméra (réduit overdraw)
+- [ ] **Résolution dynamique** — Toggle PS1 640×360 ↔ Full HD 1920×1080 (F11)
+- [ ] **Indirect Rendering** — `glMultiDrawArraysIndirect` : 1 seul draw call pour tous les chunks
+- [ ] **Chunk Sections** — Diviser le chunk en sous-sections de 16³ (skip sections vides)
+- [ ] **LODs** — Level of Detail : fusionner les blocs éloignés (2×2 puis 4×4) pour simplifier la géométrie
+- [ ] **Génération serveur** — Lazy generation côté serveur
+- [ ] **Multithreading** — Thread pool sans mutex pour `meshGenerate()` et `fillChunk()`
+- [ ] **Dirty flag rebuild** — Max 1 chunk rebuild par frame
+- [ ] **Load/unload dynamique** — Chunks chargés par render distance autour de la caméra
+- [ ] **Day/Night Cycle** — Interpolation lumière + skybox dynamique
+
+---
+
+## 11b. Analyse de ourCraft (LowLevelGameDev)
+
+> Référence : [github.com/meemknight/ourCraft](https://github.com/meemknight/ourCraft) — moteur voxel très avancé avec PBR, shadows, SSAO, multiplayer.
+
+### Optimisations de ourCraft pertinentes pour VoxPlace
+
+#### 1. Front-to-Back Chunk Sorting (✅ facile à implémenter)
+
+ourCraft trie les chunks **par distance à la caméra** avant de les dessiner (les plus proches d'abord). Cela exploite le **Early-Z rejection** du GPU :
+
+```
+  Sans tri (ordre aléatoire)              Avec tri (front-to-back)
+  ┌────────────────────────────┐         ┌────────────────────────────┐
+  │ chunk loin → écrit depth   │         │ chunk proche → écrit depth │
+  │ chunk proche → écrit depth │         │ chunk loin → SKIP (depth   │
+  │   mais le loin reste !     │         │   test fail = pas de FS) ! │
+  └────────────────────────────┘         └────────────────────────────┘
+  
+  FS exécuté pour des pixels qui sont ensuite cachés  →  OVERDRAW
+  Le GPU dessine le bloc proche SUR le bloc loin → gaspillage
+
+  Avec front-to-back, le depth buffer est rempli d'abord par les objets
+  proches, et les objets loin échouent au depth test → le GPU skip
+  automatiquement le fragment shader = Z-cull hardware
+```
+
+**Implémentation (dans le render loop) :**
+```cpp
+// Trier les chunks par distance² au joueur (pas besoin de sqrt)
+std::sort(chunkVector.begin(), chunkVector.end(),
+    [camX, camZ](Chunk* a, Chunk* b) {
+        int ax = a->chunkX - camX, az = a->chunkZ - camZ;
+        int bx = b->chunkX - camX, bz = b->chunkZ - camZ;
+        return (ax*ax + az*az) < (bx*bx + bz*bz);  // Plus proche en premier
+    });
+```
+
+> ✅ **C'est un Z-Prepass "gratuit"** grâce au hardware Early-Z du GPU. Pas de double pass, pas de changement de shader. Juste un `std::sort` une fois par frame.
+
+#### 2. Chunk Sections (subdiviser en 16³)
+
+ourCraft ne génère pas le mesh pour les Y-levels vides. Actuellement VoxPlace a un chunk de 16×256×16 — la boucle itère les 65 536 blocs même si la plupart sont de l'air.
+
+```
+  Chunk actuel (16 × 256 × 16)      Avec sections (16 × 16 × 16 × 16)
+  ┌──────────────────────┐          ┌──────────────────────┐
+  │ AIR AIR AIR AIR AIR  │  y=256   │ section 15 (SKIP!)   │ 
+  │ AIR AIR AIR AIR AIR  │          │ section 14 (SKIP!)   │
+  │ AIR AIR AIR AIR AIR  │          │ section 13 (SKIP!)   │
+  │ ...                  │          │ ...                  │
+  │ AIR AIR AIR AIR AIR  │          │ section  3 (SKIP!)   │
+  │ TERRAIN              │  y=35    │ section  2 (MESH!)   │
+  │ STONE STONE STONE    │  y=16    │ section  1 (MESH!)   │
+  │ BEDROCK              │  y=0     │ section  0 (MESH!)   │
+  └──────────────────────┘          └──────────────────────┘
+  
+  Itère 65 536 blocs                 Itère seulement 3×4096 = 12 288 blocs
+  (93% sont de l'air → gaspillage)   (skip les 13 sections vides)
+```
+
+#### 3. Indirect Rendering (glMultiDrawArraysIndirect)
+
+> **Question du To-Do : "Indirect rendering est une bonne idée ?"**
+
+**Réponse :** Oui, mais **pas maintenant**. Indirect rendering remplace 400 `glDrawArrays` par 1 `glMultiDrawArraysIndirect`. C'est pertinent quand :
+- Le nombre de chunks visibles dépasse ~2000
+- Le CPU est le bottleneck (pas le GPU)
+- Le monde est relativement statique
+
+Pour VoxPlace **avec les modifications de blocs en temps réel** (multijoueur), MDI ajoute de la complexité (buffer géant + fragmentation). L'approche actuelle (1 SSBO par chunk) est meilleure pour les mises à jour dynamiques.
+
+**Quand l'implémenter :** Après le multithreading et le load/unload dynamique, quand on aura beaucoup plus de chunks.
+
+#### 5. Level of Detail (LODs) — Géométrie simplifiée à distance
+
+> Source : LowLevelGameDev — [Chunk system & LODs](https://www.youtube.com/watch?v=yUUh5N2ZYHA)
+
+Pour afficher de **très grandes distances** (64+ chunks), le GPU ne peut pas traiter la même densité de triangles partout. Les LODs fusionnent les blocs éloignés pour réduire la géométrie :
+
+```
+  Distance       LOD    Résolution    Blocs
+  ─────────────────────────────────────────
+  0-16 chunks    LOD0   1×1 (normal)  16×256×16
+  16-32 chunks   LOD1   2×2 (merge)   8×128×8      ← 4× moins de faces
+  32-64 chunks   LOD2   4×4 (merge)   4×64×4       ← 16× moins de faces
+  
+  Vue de dessus :
+  
+  LOD0 (proche)     LOD1 (moyen)     LOD2 (loin)
+  ┌─┬─┬─┬─┐        ┌──┬──┐          ┌────┐
+  ├─┼─┼─┼─┤        │  │  │          │    │
+  ├─┼─┼─┼─┤   →    ├──┼──┤     →    │    │
+  ├─┼─┼─┼─┤        │  │  │          │    │
+  └─┴─┴─┴─┘        └──┴──┘          └────┘
+  16 faces           4 faces          1 face
+```
+
+**Le challenge :** le CPU/serveur doit pouvoir suivre la charge de génération des chunks LOD. C'est pas juste du rendering — il faut aussi des versions simplifiées des données de blocs.
+
+**Pour VoxPlace :** Pas prioritaire tant qu'on n'a pas le load/unload dynamique et le multithreading. La render distance actuelle (20 chunks) ne nécessite pas de LODs.
+
+#### 6. Architecture technique de ourCraft (deep-dive du code source)
+
+> Source locale : `/home/alpha/Documents/TFE/ourCraft/`
+
+##### Vertex Packing — 3 ints par vertex (SSBO)
+
+ourCraft utilise **3 entiers** par vertex envoyés via vertex attributes, avec le geometry lookup dans un **SSBO** :
+
+```c
+// rendering/chunk.cpp — pushFlagsLightAndPosition()
+// Format du int Y :
+//   0x    FF      FF      FF    FF
+//      ─flags───light───position─
+//  flags: isWater(1 bit) + isInWater(1 bit) + aoShape(4 bits haut)
+//  light: sunLight(4 bits) + torchLight(4 bits) mergés
+//  position: y (16 bits)
+
+// pushFaceShapeTextureAndColor()
+// Format du int texture :
+//   0bxxxxx000'00000000
+//    color(5b)  texture(11b)  → 2048 textures max + 32 couleurs
+
+// Layout vertex = 3 ints :
+// [0] x position (int)
+// [1] y position | light | flags (packed)
+// [2] z position (int)
+```
+
+Comparaison avec VoxPlace :
+
+| | ourCraft | VoxPlace |
+|--|---------|----------|
+| Données/vertex | 3 ints (12 bytes) | 1 uint32 (4 bytes) |
+| Geometry | SSBO lookup → `vertexData[orientation * 12 + vertexId * 3]` | Reconstruit dans VS |
+| Textures | 2048 via bindless (albedo + normal + material + parallax) | 32 couleurs palette |
+| Lumière | Sun (4 bits) + Torch (4 bits) par face | Aucune (face shading fixe) |
+| AO | aoShape (4 bits dans flags) | 4×2 bits dans packed data |
+
+##### Face Brightness — Facteurs extraits du vertex shader
+
+```glsl
+// defaultShader.vert — ligne 26-62
+float vertexColor[] = float[](
+    0.95,  // front
+    0.85,  // back
+    1.0,   // top
+    0.8,   // bottom
+    0.85,  // left
+    0.95   // right
+    // + grass variants, leaves variants...
+);
+
+// Appliqué avec la lumière :
+v_ambient = vertexColor[faceOrientation] * (ambientInt / 15.0);
+```
+
+Comparaison face shading :
+
+| Face | ourCraft | BetterSpades | VoxPlace |
+|------|---------|-------------|----------|
+| TOP | 1.00 | 1.00 | 1.00 |
+| BOTTOM | 0.80 | 0.50 | 0.50 |
+| FRONT | 0.95 | 0.875 | 0.80 |
+| BACK | 0.85 | 0.625 | 0.70 |
+| LEFT | 0.85 | 0.75 | 0.65 |
+| RIGHT | 0.95 | 0.75 | 0.60 |
+
+> ourCraft a des facteurs plus proches (0.80-1.0) → contraste plus doux car il compte sur l'éclairage dynamique pour la profondeur.
+
+##### LOD — Implémentation réelle dans le code
+
+```cpp
+// chunkSystem.cpp — determineLodLevel()
+int determineLodLevel(playerChunkPos, chunkPos) {
+    float distPercent[6] = {0, 0.8, 0.7, 0.6, 0.5, 0.5};
+    int distMax[6]       = {99, 30, 24, 16, 12, 8};
+
+    int firstLod = distPercent[lodStrength] * viewDistance;
+    firstLod = min(firstLod, distMax[lodStrength]);
+
+    if (distSquared > firstLod²) return 1;  // LOD1 = bake simplifié
+    else return 0;                           // LOD0 = full detail
+}
+```
+
+Le LOD est un argument passé directement à `bakeAndDontSendDataToOpenGl()` qui change la résolution du meshing. Binaire (LOD0/LOD1), pas de niveaux intermédiaires.
+
+##### Animations vertex shader — Eau et herbe
+
+```glsl
+// Herbe : déplacement sinusoïdal basé sur position monde + temps
+float offset = cos((facePosition.x * dir.x +
+    facePosition.z * dir.y - u_timeGrass * SPEED) * FREQUENCY) * AMPLITUDE;
+vertexShape.x += grassMask[vertexId] * offset;
+
+// Eau : double couche d'ondes (rapide + lente)
+vertexShape.y += waterMask * (offset_rapide + offset_lente - 0.08);
+```
+
+> Pour VoxPlace (filtre PS1), une animation d'eau en vertex shader serait très stylée et peu coûteuse.
+
+##### Multithreading — ThreadPool avec données per-thread
+
+```cpp
+// chunkSystem.cpp
+struct PerThreadData {
+    vector<TransparentCandidate> transparentCandidates;
+    vector<int> opaqueGeometry;
+    vector<int> transparentGeometry;
+    vector<ivec4> lights;
+    bool updateTransparency, updateGeometry;
+    Chunk* chunk;
+};
+
+// Chaque thread a SON propre set de buffers → zéro contention
+void bakeWorkerThread(int index, ThreadPool& threadPool) {
+    auto& data = perThreadData[index];
+    bakeLogicForOneThread(threadPool, data.opaque, data.transparent, ...);
+    threadPool.threIsWork[index] = false;  // Signal terminé
+}
+```
+
+> Confirme l'approche "zero mutex" — chaque worker a ses propres buffers, le main thread collecte les résultats et fait l'upload GPU (OpenGL = single thread only).
+
+##### Pipeline post-processing complet (43 shaders !)
+
+| Shader | Fichier | Pertinence VoxPlace |
+|--------|---------|---------------------|
+| **Z-Prepass** | `rendering/zpass.vert/frag` | Pas besoin (front-to-back suffit) |
+| **HBAO** (SSAO avancé) | `postprocess/hbao.frag` | ❌ On a du per-vertex AO |
+| **Tone Mapping** | `postprocess/toneMap.frag` | Possible futur |
+| **Bloom** (multi-pass) | `filterDown + filterBloom + applyBloom` | Esthétique |
+| **FXAA** | `postprocess/fxaa.frag` | ❌ Pixels nets voulus (PS1) |
+| **SSR** | `postprocess/ssr.frag` | ❌ Pas d'eau prévue |
+| **Atmospheric Scattering** | `skybox/atmosphericScattering.frag` | ✅ Day/night cycle |
+| **Shadow Maps** | `rendering/renderDepth.vert/frag` | Futur lointain |
+| **Radial Blur** | `postprocess/radialBlur.frag` | Effet stylé possible |
+| **PBR cubemap** | `skybox/convolute + preFilterSpecular` | Trop complex pour PS1 |
+
+##### Sun + Torch Light System
+
+```
+ourCraft stocke 2 valeurs de lumière par face :
+- sunLight (4 bits, 0-15) : lumière du ciel, diminue sous terre
+- torchLight (4 bits, 0-15) : lumière des sources placées
+
+// Dans le vertex shader :
+v_skyLight = max(skyLight - (15 - u_skyLightIntensity), 0);
+v_ambientInt = max(v_skyLight, v_normalLight);
+
+// u_skyLightIntensity varie dans le temps → DAY/NIGHT CYCLE !
+```
+
+> C'est comme ça qu'ourCraft fait le cycle jour/nuit : un seul uniform `u_skyLightIntensity` (15=midi, 4=nuit) qui module le skyLight de chaque face. **Très faisable pour VoxPlace** sans recalculer aucun mesh.
+---
+
+## 11c. Analyse de BetterSpades / Ace of Spades (Build & Shoot)
+
+> Référence : [github.com/xtreme8000/BetterSpades](https://github.com/xtreme8000/BetterSpades) — client C/OpenGL pour Ace of Spades 0.75.
+> Style visual : pixel art, couleurs plates, fog linéaire, face shading simple. Très proche de VoxPlace.
+
+### Couleur RGB par voxel (pas de palette)
+
+La différence fondamentale avec Minecraft/VoxPlace : chaque bloc stocke un **uint32_t RGBA unique** (pas un index dans une palette). Le format de map `.vxl` contient la couleur exacte de chaque voxel :
+
+```
+  VoxPlace                         Ace of Spades / BetterSpades
+  ┌───┬───┬───┬───┐               ┌───┬───┬───┬───┐
+  │ 7 │ 7 │ 7 │ 7 │  Même index   │#4a│#4d│#48│#4c│  Chaque bloc a
+  │   │   │   │   │  palette      │b3│b0│b5│b1│  un RGB unique
+  ├───┼───┼───┼───┤               ├───┼───┼───┼───┤
+  │ 7 │ 7 │ 7 │ 7 │  → couleur   │#4f│#4b│#4e│#49│  → variations
+  │   │   │   │   │  uniforme    │   │   │   │   │  subtiles = fondu
+  └───┴───┴───┴───┘               └───┴───┴───┴───┘
+```
+
+Le gradient de couleur (vert clair en haut des collines, sombre en bas) est créé **à la génération** du terrain côté serveur, pas dans le shader.
+
+### Face Shading — Facteurs extraits du code source
+
+BetterSpades utilise **exactement** la même technique que VoxPlace : multiplication de la couleur RGB par un facteur fixe par direction. Voici les facteurs exacts lus dans `chunk.c` :
+
+```c
+// BetterSpades — chunk.c (facteurs réels)
+Face TOP    (+Y) : rgba(r * 1.000, g * 1.000, b * 1.000, 255)  // plein soleil
+Face BOTTOM (-Y) : rgba(r * 0.500, g * 0.500, b * 0.500, 255)  // très sombre
+Face NORTH  (-Z) : rgba(r * 0.875, g * 0.875, b * 0.875, 255)  // bien éclairé
+Face SOUTH  (+Z) : rgba(r * 0.625, g * 0.625, b * 0.625, 255)  // ombre
+Face WEST   (-X) : rgba(r * 0.750, g * 0.750, b * 0.750, 255)  // ombre moyenne
+Face EAST   (+X) : rgba(r * 0.750, g * 0.750, b * 0.750, 255)  // ombre moyenne
+```
+
+Comparaison avec VoxPlace :
+
+| Face | BetterSpades | VoxPlace |
+|------|-------------|----------|
+| TOP | 1.00 | 1.00 |
+| BOTTOM | 0.50 | 0.50 |
+| NORTH | 0.875 | 0.80 |
+| SOUTH | 0.625 | 0.70 |
+| EAST | 0.75 | 0.60 |
+| WEST | 0.75 | 0.65 |
+
+> Les facteurs sont très proches. Pas de shadow maps, pas de lumière dynamique — juste un facteur fixe par direction comme nous.
+
+### "Illumination" quand on casse un bloc
+
+L'effet de "lumière" quand un bloc est cassé n'est **pas** un calcul de lumière. C'est du **face culling** :
+
+```
+  Avant                              Après avoir cassé le bloc X
+  ┌───┬───┐                          ┌───┬   ┐
+  │ A │ X │  La face entre A et X    │ A │   │  La face droite de A
+  │   │   │  n'existe pas (culled)   │   │ ← │  est maintenant VISIBLE
+  └───┴───┘                          └───┘   │  avec son face shading
+                                              │  → ça semble "illuminé"
+```
+
+La face droite de A (factor ×0.75) apparaît soudainement. Comme toutes les faces autour du trou deviennent visibles, la zone semble plus claire. C'est un effet émergent du face culling + face shading, pas un système de lumière.
+
+### `solid_sunblock()` — Ombres diagonales (le vrai secret !)
+
+C'est la technique qui crée l'effet de "gradient" sur les élévations. BetterSpades lance un **rayon diagonal** vers le haut depuis chaque bloc pour calculer une ombre douce :
+
+```c
+// BetterSpades — chunk.c, ligne 161-173
+float solid_sunblock(blocks, x, y, z) {
+    int dec = 18;   // Poids décroissant (18, 16, 14, 12, ...)
+    int i = 127;    // Luminosité max
+
+    while(dec && y < map_size_y) {
+        if(!isAir(blocks, x, ++y, --z))  // Monte en Y, recule en Z
+            i -= dec;                      // Bloc solide → assombrit
+        dec -= 2;                          // Blocs plus loin = moins d'impact
+    }
+    return (float)i / 127.0F;  // 0.0 = totalement ombré, 1.0 = plein soleil
+}
+```
+
+```
+  Vue de côté — le rayon va en diagonale ↗ (y+1, z-1)
+  
+          soleil ☀️ (angle ~45°)
+            ╲
+             ╲   ← le rayon vérifie les blocs sur cette diagonale
+              ╲
+  ┌───┐  ┌───┐╲┌───┐
+  │   │  │ X ││╲│   │  Si bloc X est solide → i -= dec
+  └───┘  └───┘│ └───┘  dec diminue à chaque pas (poids décroissant)
+              │ 
+         ┌───┐│         Bloc courant : shade = i / 127
+         │ ● ││         ● reçoit une ombre partielle
+         └───┘│           car X bloque partiellement le "soleil"
+              │
+  ═══════════╧══════════ sol
+```
+
+La couleur finale par vertex est : `RGB × shade × face_factor × AO`
+
+> C'est ça qui fait que les blocs sous des surplombs sont sombres et que les blocs exposés sont clairs — même sans vrai raytracing !
+
+### AO de BetterSpades vs VoxPlace
+
+Leur AO vient du **même article** que le nôtre : [0fps.net](https://0fps.net/2013/07/03/ambient-occlusion-for-minecraft-like-worlds/). Formule identique :
+
+```c
+// BetterSpades — chunk.c, ligne 562-569
+float vertexAO(side1, side2, corner) {
+    if (!side1 && !side2) return 0.25;        // Cas occluded
+    return 0.75 - (!s1 + !s2 + !corner) * 0.25 + 0.25;
+}
+
+// VoxPlace — Chunk2.h
+int computeVertexAO(side1, side2, corner) {
+    if (side1 && side2) return 0;             // Même cas, inversé (0=occluded)
+    return 3 - (side1 + side2 + corner);      // Même logique, échelle 0-3
+}
+```
+
+> ✅ **Même algorithme**, juste une échelle différente (0.25-1.0 vs 0-3 mappé par AO_CURVE).
+
+### Front-to-back Sorting (confirmé dans le code !)
+
+```c
+// BetterSpades — chunk.c, ligne 144-145
+qsort(chunks_draw, index, sizeof(struct chunk_render_call), chunk_sort);
+
+// chunk_sort compare distance2D au joueur → plus proche en premier
+```
+
+### Multithreading du Meshing
+
+BetterSpades utilise `pthread_create` avec un système de **channels** (producteur/consommateur) :
+1. Main thread empile des `chunk_work_packet` dans `chunk_work_queue`
+2. Worker threads consomment et génèrent le mesh
+3. Résultat dans `chunk_result_queue`
+4. Main thread drain les résultats et upload au GPU (OpenGL = main thread only)
+
+Le rebuild se fait en **spirale** depuis le centre (chunks proches du joueur en premier).
+
+### Ce que VoxPlace a déjà vs BetterSpades
+
+| Feature | BetterSpades | VoxPlace | Status |
+|---------|-------------|----------|--------|
+| Face shading fixe | ✅ × 0.5-1.0 | ✅ × 0.5-1.0 | ≈ Identique |
+| Face culling | ✅ | ✅ | Identique |
+| Fog linéaire | ✅ | ✅ | Identique |
+| Frustum culling | ✅ | ✅ | Identique |
+| Per-vertex AO | ✅ (même réf 0fps) | ✅ | Identique |
+| Front-to-back sort | ✅ `qsort` | ❌ | **→ prochaine étape** |
+| `solid_sunblock` (ombres diag.) | ✅ | ❌ | **Faisable dans le shader VS** |
+| Multithreaded meshing | ✅ pthread | ❌ | Futur |
+| RGB per-bloc libre | ✅ uint32 RGBA | ❌ (palette 32) | Palette suffit pour r/place |
+| Greedy meshing (option) | ✅ | ❌ (par choix) | Vertex pulling > greedy |
+
+> ✅ **VoxPlace est fonctionnellement très proche** de BetterSpades. Les 2 features manquantes les plus impactantes visuellement sont le **front-to-back sorting** (~5 lignes) et le **sunblock diagonal** (faisable dans le vertex shader en sampling la position monde).
 
 ---
 
@@ -838,6 +1448,24 @@ Demander au client de générer les chunks à partir du Seed :
 | Cheat sheet (SO) | https://stackoverflow.com/questions/2772570/opengl-cheat-sheet |
 | Cheat sheet (repo) | https://github.com/henkeldi/opengl_cheatsheet |
 | Shadertoy | https://www.shadertoy.com/ |
+| FantasyCraft Simple MinecraftClone| https://github.com/meemknight/fantasyCraft |
+| OurCraft Huge MinecraftClone| https://github.com/meemknight/ourCraft |
+| Veloren | https://github.com/veloren/veloren |
+| BetterSpades (AoS 0.75 client) | https://github.com/xtreme8000/BetterSpades |
+| OpenSpades | https://github.com/BuildandShoot/openspades |
+| BetterSpades | https://github.com/xtreme8000/BetterSpades |
+
+### Vidéos LowLevelGameDev 
+
+| Sujet | Lien |
+|-------|------|
+| Optimisations GPU (vertex pooling, Z-prepass) | https://www.youtube.com/watch?v=FWIFQVOhIgk |
+| Multithreading sans mutex | https://www.youtube.com/watch?v=ftHoJYvto7o |
+| Chunk system & LODs | https://www.youtube.com/watch?v=yUUh5N2ZYHA |
+| Architecture serveur & réseau | https://www.youtube.com/watch?v=0f0uH33X6ko |
+
+
+
 
 ---
 
