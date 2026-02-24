@@ -21,6 +21,7 @@
 #include <glm/trigonometric.hpp>
 #include <iostream>
 #include <vector>
+#include <thread>
 #include <unordered_map>
 
 // ImGui
@@ -215,6 +216,11 @@ int main()
 
 	// Charger le shader
 	Shader chunkShader("src/shader/chunk2.vs", "src/shader/chunk2.fs");
+	std::vector<std::thread> threads;
+
+	for (auto &thread : threads)
+	{
+	}
 
 	// Initialiser le rendu basse résolution
 	LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -222,7 +228,7 @@ int main()
 	// Terrain generator (Simplex Noise, seed 42)
 	TerrainGenerator gen(42);
 
-	// 1. Créer tous les chunks et remplir le terrain
+	// 1. Créer tous les chunks et remplir le terrain  Besoins de créer un thread pour generation simuler "serveur" ou passer direct sur serveur.cpp
 	std::cout << "Generating chunks..." << std::endl;
 	for (int cx = -10; cx < 10; cx++)
 	{
@@ -265,7 +271,6 @@ int main()
 
 		// Rendu basse résolution
 		LowResRenderer::beginFrame();
-
 		// Configurer le shader
 		chunkShader.use();
 

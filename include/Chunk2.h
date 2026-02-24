@@ -25,6 +25,13 @@ constexpr uint8_t BEDROCK_LAYER = 0;
 
 // 4
 
+// Chunks :
+//
+//	Besoins de passer la generation en mutltithreading pour fit le cache l1
+//	(Ryzen 7 5700x3d ) 512ko Un coeur a 32 ko de l1 pour la data + 32 ko pour instructions
+//		Dans le cad de blocks[][][] la structure fait 65 536 octets je peux fit que la moitier puis aller en l2
+//	(i7 4712mq) 256 Ko (au total), divisé en 4 x 32 Ko de cache d'instructions et 4 x 32 Ko de cache de données.
+
 class Chunk2
 {
 public:
