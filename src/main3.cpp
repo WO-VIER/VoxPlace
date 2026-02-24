@@ -1,10 +1,3 @@
-/**
- * main3.cpp - Test du système de chunks
- *
- * Affiche quelques chunks avec des blocs colorés
- */
-
-
 // GLAD doit être inclus en premier !
 #if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN_WEB)
 #include <GLFW/glfw3.h>
@@ -55,7 +48,7 @@ bool useAO = true;
 // ============================================================================
 
 GLFWwindow *g_window = nullptr;
-Camera camera(glm::vec3(8.0f, 35.0f, 30.0f)); // get value (0,0) genesis chunk et check max value block on y 
+Camera camera(glm::vec3(8.0f, 35.0f, 30.0f)); // get value (0,0) genesis chunk et check max value block on y
 float lastX = SCREEN_WIDTH / 2.0f;
 float lastY = SCREEN_HEIGHT / 2.0f;
 bool firstMouse = true;
@@ -70,17 +63,15 @@ float lastFrame = 0.0f;
 // ├────────┤  ├────────┤  ├────────┤
 // │(-1, 1) │  │( 0, 1) │  │( 1, 1) │
 // └────────┘  └────────┘  └────────┘
-std::unordered_map<int64_t, Chunk2 *> chunkMap;
-
+std::unordered_map<int64_t, Chunk2 *> chunkMap; // O(1)
 
 // Convertit (cx, cz) en clé unique 64 bits. En mémoire, cx occupe les 32 bits de poids fort
-// et cz les 32 bits de poids faible. Le décalage (<< 32) place cx en tête, tandis que 
+// et cz les 32 bits de poids faible. Le décalage (<< 32) place cx en tête, tandis que
 // le masque (& 0xFFFFFFFF) isole cz pour éviter l'extension de signe lors du transtypage.
 
-
-//On utilise bit packing 64bit pour stocker deux entiers 32bit(cx, cz) dans un seul entier 64bit
-// On convertit cx et cz en entier 64bit cx << 32 occupe les 32 bits de poids fort et cz & 0xFFFFFFFF occupe les 32 bits de poids faible la moitier basse le masque & 0xFFFFFFFF est pour éviter l'extension de signe lors du transtypage 
-// 64 bits le cpu fait CMP pour vérifier la clé alors que std::pair fait 2 CMP
+// On utilise bit packing 64bit pour stocker deux entiers 32bit(cx, cz) dans un seul entier 64bit
+//  On convertit cx et cz en entier 64bit cx << 32 occupe les 32 bits de poids fort et cz & 0xFFFFFFFF occupe les 32 bits de poids faible la moitier basse le masque & 0xFFFFFFFF est pour éviter l'extension de signe lors du transtypage
+//  64 bits le cpu fait CMP pour vérifier la clé alors que std::pair fait 2 CMP
 inline int64_t chunkKey(int cx, int cz)
 {
 	return ((int64_t)cx << 32) | ((int64_t)cz & 0xFFFFFFFF);
@@ -104,7 +95,7 @@ void framebuffer_size_callback(GLFWwindow *window, int width, int height)
 
 void mouse_callback(GLFWwindow *window, double xposIn, double yposIn)
 {
-// Modification pour le débogage : ignorer la souris si elle n'est pas capturée
+	// Modification pour le débogage : ignorer la souris si elle n'est pas capturée
 	if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL)
 		return;
 
@@ -127,7 +118,7 @@ void mouse_callback(GLFWwindow *window, double xposIn, double yposIn)
 	camera.ProcessMouseMovement(xoffset, yoffset);
 }
 
-void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
+void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
 {
 	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
 	{
@@ -148,7 +139,7 @@ void processInput(GLFWwindow *window)
 {
 	if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
 		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-		//glfwSetWindowShouldClose(window, true);
+	// glfwSetWindowShouldClose(window, true);
 
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
 		camera.ProcessKeyboard(FORWARD, deltaTime);
@@ -180,7 +171,7 @@ int main()
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-	g_window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "VoxPlace - Chunk Test", NULL, NULL);
+	g_window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "VoxPlace", NULL, NULL);
 	if (!g_window)
 	{
 		std::cerr << "Failed to create GLFW window" << std::endl;
@@ -208,7 +199,7 @@ int main()
 	std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
 
 	// Configuration OpenGL
-	glEnable(GL_DEPTH_TEST); 
+	glEnable(GL_DEPTH_TEST);
 	glClearColor(FOG_COLOR.r, FOG_COLOR.g, FOG_COLOR.b, 1.0f);
 
 	// ============================================================================
@@ -216,7 +207,7 @@ int main()
 	// ============================================================================
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
-	ImGuiIO& io = ImGui::GetIO();
+	ImGuiIO &io = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	ImGui::StyleColorsDark();
 	ImGui_ImplGlfw_InitForOpenGL(g_window, true);
@@ -245,7 +236,7 @@ int main()
 
 	// 2. Générer les meshes APRÈS avoir créé tous les chunks
 	//    (pour que les voisins existent au moment du face culling)
-
+	/*
 	for (auto &[key, chunk] : chunkMap)
 	{
 		int cx = chunk->chunkX;
@@ -259,8 +250,9 @@ int main()
 	}
 	std::cout << "Generated " << chunkMap.size() << " chunk(s)" << std::endl;
 
+	*/
 	// Afficher le profiler
-	//printChunkProfiler(chunkMap);
+	// printChunkProfiler(chunkMap);
 
 	// Render loop
 	while (!glfwWindowShouldClose(g_window))
@@ -274,14 +266,13 @@ int main()
 		// Rendu basse résolution
 		LowResRenderer::beginFrame();
 
-
 		// Configurer le shader
 		chunkShader.use();
 
 		glm::mat4 projection = glm::perspective(
 			glm::radians(camera.Zoom),
 			(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT,
-			0.1f, 200.0f); // avant 200.0f // Far plane
+			0.1f, 200.0f); // avant 200.0f // Far plane 200 / 16 = ~12 chunks 512 = 32chunks
 		glm::mat4 view = camera.GetViewMatrix();
 
 		chunkShader.setMat4("projection", projection);
@@ -297,6 +288,7 @@ int main()
 		// Frustum culling — extraire les plans depuis VP
 		Frustum frustum;
 		frustum.extractFromVP(projection * view);
+		// frustum.frustumProfiler();
 
 		// Dessiner les chunks visibles
 		int visibleChunks = 0;
@@ -336,7 +328,7 @@ int main()
 
 		// Compter le total de faces
 		uint64_t totalFaces = 0;
-		for (auto& [k, c] : chunkMap)
+		for (auto &[k, c] : chunkMap)
 			totalFaces += c->faceCount;
 
 		ImGui::Begin("VoxPlace Debug");

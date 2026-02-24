@@ -113,3 +113,119 @@ Un coté -> 2 triangles -> Un triangle -> 3 sommets (verticies / vertex )
         gl_Position = vec4(position,1.0);
 
     }
+
+Threads : 
+
+    Contexte Switch (os): Fake multitache (1 coeur physique)
+        1. Le thread tourne le cpu lit son rip et fait son F-D-E
+
+        2. L'os envoie un apele system environ toute les mesh
+
+        3. Le cpu s'arrete il prend tout le states de registres et les copies dans la ram dans un structure (Trhead control block)
+
+        4. Il va chercher les registres sauvegardé du thread B dans la ram et les injecte dans les registres
+
+        5. Le program counter pointe maintenent ver le code du thread B. Le fetch reprend
+
+            Un contexte switch coute des miliers de cylcles d' horloges perdu a copier des registres vers la ram
+    
+    Threads matériels (SMT/ Hyperthreading)
+        
+            Dans 1 coeur physique ils ont 2 jeux de registres physique et 2 Program Counters
+
+            Un coeur avec 2 threads matériel 
+
+            Le coeur a un seul gros pipeline de fetch-decode-execute. A chaques cycle d'horloge, il regarde les deux Program Counter.
+            Il fetch un peut du code du thread 1 et un peut du 2 
+
+            L'éxecution: Si le thread 1 a besoins de l'ALU mais qu'il est occupé par le thread 2, le thread 1 doit attendre.
+            Mais si le thread 1 fait une Addition(ALU) et que le thread 2 fait une multiplication flotante (FPU), le cpu envoie les deux opérations aux unités correspondantes en meme temps dans le meme cycle d'horloge
+    Un thread != Un process
+
+    en c un thread va attendre un pointeur de fonction mais c'est pas une fonction on va juste éguiller le thread sur un "job"
+    
+    pthread_create(&thread, NULL, my_meshing_function, chunk_pointer);
+
+        1. Création de sa propre Stack : (1 ou 2 mo)
+
+        2. Le registre RDI (ARGUMENT) : L'OS prend chunk_pointer(argument) et le place physiquement dans le registre RDI
+        (Regle x86_64) le premier argument d'une fonction va dans rdi
+
+        3. Le registre RIP (Instruction Pointer) L'os prend le pointeur de fonction (my_meshing_function) et le force dans RIP du cpu
+
+        4. Le cpu regarde son RIP voit l'adresse de la fonction et commence fetch-decode-execute
+
+    Un thread possede son propre Program Conter (RIP) et fait son fetch-decode-execute
+    
+
+    Tips Moteur : 
+
+        On fait pas 1 thread par chunk, cela va couter des dizaines de milier de cycles d'horloge.
+        On va créer et détruire des thread / chunk les syscall vont couter plus cher
+
+        Vrai solution : 
+
+            Au démarage on crée (n core - 1) "1 main thread et les autres threads pool"
+
+            1. Au démarage du jeux : n pthread_create ont une fonction infinie.
+
+            2. La Queue : Créer une std::queue<Chunks *> protéger par mutex 
+
+            3. Le Sleep : Si il y a pas de chunks a générer les threads se mettent en veille 
+
+            4. Job : Le joueur demand ede générer de chunks le main thread envoie n chunks pointers dans la queue et réveille les threads
+
+            5. Pas de cout de création de threads et se rendorment apres job
+
+    Cache :
+
+        En général les jeux sont designer en orienter-objet 
+
+            Si un jeux en 60 fps doit actualiser des donnée (position, vie, mana, ...) pour chaques frames pour Plusieurs charactere
+                Il faut jump sur chaque objet Entité boucler sur modif pour chaques caracters
+
+        ECS (Entity component system ) 
+
+            Repartie chaque data (position,...) dans un chunk qui stocke la valeur pour chaque Entité de et de facon contigue
+
+
+        Structure du cache : 
+
+            Instruction cache : Accélere les cycles de fetch decode execute 
+
+            Data cache : Accélere les acces donnée
+
+             Tag (Représente ou se trouve la donnée en RAM) + Le cache line est des 32/64/128 bytes (64 plus commun)
+
+             Les caches lines sont divisées en set qui contient Plusieurs caches lines 
+                        
+                        Row : Cache Bank (Way)      (0)              (1)
+                set 0 :                          Tag + Data, ..., Tag + Data
+                set 1 :                          Tag + Data, ..., Tag + Data
+
+
+                <-------------------------------------------------------->
+                     (ici 2)       N-Way Set associative cache
+
+
+                     64 GB RAM -> 32kb cache 
+
+                    2³⁶ Bytes = Pour representer chaques adress 
+
+                        Row : Cache Bank (Way)      (0)              (1)
+                set 0 :                          Tag + Data, ..., Tag + Data
+                set 1 :                          Tag + Data, ..., Tag + Data
+                    .
+                    .
+                    63:                           Tag + Data, ..., Tag + Data
+
+                            Data : (64 Bytes)
+                            Adress : (TAG(25 Bytes) Set Index(6 B) Offsets(6 B))
+
+
+                https://www.youtube.com/watch?v=zF4VMombo7U
+
+        Race Condition : 
+
+            Most operations are not atomic pour une ligne en c je peux avoir plusieurs instruction 
+

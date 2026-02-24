@@ -2,6 +2,8 @@
 #define FRUSTUM_H
 
 #include <glm/glm.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/string_cast.hpp>
 
 // ============================================================================
 // Frustum Culling — Méthode Gribb-Hartmann (1999)
@@ -32,8 +34,8 @@ struct Frustum
 	//	row[1] -> (0.0, 1.7, 0.0, 0.0) : Gère l'axe Y (haut/bas).
 	//	row[2] -> (0.0, 0.0, -1.0, -0.2) : Gère la profondeur (Near/Far).
 	//	row[3] -> (0.0, 0.0, -1.0, 0.0) : Gère le W (la perspective, ce qui fait que les objets lointains rapetissent).
-	//	
-	// 
+	//
+	//
 	//   Left   = row[3] + row[0]
 	//   Right  = row[3] - row[0]
 	//   Bottom = row[3] + row[1]
@@ -44,7 +46,7 @@ struct Frustum
 	// Puis on normalise chaque plan (divise par length de la normale)
 	// pour que la distance signée soit en unités monde.
 	// ════════════════════════════════════════════════════════════════
-	void extractFromVP(const glm::mat4& vp)
+	void extractFromVP(const glm::mat4 &vp)
 	{
 		// glm stocke en column-major : vp[col][row]
 		// Pour extraire row[i], on prend vp[0][i], vp[1][i], vp[2][i], vp[3][i]
@@ -56,14 +58,14 @@ struct Frustum
 			vp[2][3] + vp[2][0],
 			vp[3][3] + vp[3][0]);
 
-		// Right  = row3 - row0 
+		// Right  = row3 - row0
 		planes[1] = glm::vec4(
 			vp[0][3] - vp[0][0],
 			vp[1][3] - vp[1][0],
 			vp[2][3] - vp[2][0],
 			vp[3][3] - vp[3][0]); // -> Donne la normal (vecteur perpendiculaire a la surface du plan) du plan de droite qui pointe vers (gauche et vers l'arrière) l'intérieur de ce que la cam voit
-			// Le d est la distance du plan par rapport à l'origine du monde (0,0,0)
-			// Ensuite on normalise cette normale qui ramene a 1 sa longueur 
+								  // Le d est la distance du plan par rapport à l'origine du monde (0,0,0)
+								  // Ensuite on normalise cette normale qui ramene a 1 sa longueur
 		// Bottom = row3 + row1
 		planes[2] = glm::vec4(
 			vp[0][3] + vp[0][1],
@@ -113,7 +115,7 @@ struct Frustum
 	//
 	//   Si l'AABB passe les 6 tests → VISIBLE
 	// ════════════════════════════════════════════════════════════════
-	bool isAABBVisible(const glm::vec3& aabbMin, const glm::vec3& aabbMax) const
+	bool isAABBVisible(const glm::vec3 &aabbMin, const glm::vec3 &aabbMax) const
 	{
 		for (int i = 0; i < 6; i++)
 		{
@@ -138,6 +140,7 @@ struct Frustum
 	// ════════════════════════════════════════════════════════════════
 	// Helper : tester un chunk directement
 	//
+	//
 	//   AABB du chunk :
 	//   min = (chunkX × 16,   0, chunkZ × 16)
 	//   max = (chunkX × 16 + 16, 256, chunkZ × 16 + 16)
@@ -157,12 +160,32 @@ struct Frustum
 		return isAABBVisible(aabbMin, aabbMax);
 	}
 
-	void printFrustum()
+	void frustumProfiler()
 	{
 		for (int i = 0; i < 6; i++)
 		{
-			std::cout << "Plane " << i << ": " << glm::to_string(planes[i]) << std::endl;
-		}
+			switch (i)
+			{
+			case 0:
+				std::cout << "Left plan : " << glm::to_string(planes[i]) << std::endl;
+				break;
+			case 1:
+				std::cout << "Right plan : " << glm::to_string(planes[i]) << std::endl;
+				break;
+			case 2:
+				std::cout << "Bottom plan : " << glm::to_string(planes[i]) << std::endl;
+				break;
+			case 3:
+				std::cout << "Top plan : " << glm::to_string(planes[i]) << std::endl;
+				break;
+			case 4:
+				std::cout << "Near plan : " << glm::to_string(planes[i]) << std::endl;
+				break;
+			case 5:
+				std::cout << "Far plan : " << glm::to_string(planes[i]) << std::endl;
+				break;
+			};
+		};
 	}
 };
 

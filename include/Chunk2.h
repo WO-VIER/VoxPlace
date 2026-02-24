@@ -8,7 +8,7 @@
 #include <print>
 // Chunks Params
 
-constexpr uint8_t CHUNK_SIZE_X = 16;  // (0 - 255) all time
+constexpr uint8_t CHUNK_SIZE_X = 16;   // (0 - 255) all time
 constexpr uint16_t CHUNK_SIZE_Y = 256; // Hauteur (0-255, 0 = bedrock)
 constexpr uint8_t CHUNK_SIZE_Z = 16;
 constexpr uint8_t BEDROCK_LAYER = 0;
@@ -119,58 +119,58 @@ public:
 	static constexpr int AO_OFFSETS[6][4][3][3] = {
 		// Face 0: TOP (+Y) — check layer y+1
 		// v0(0,1,0) v1(1,1,0) v2(1,1,1) v3(0,1,1)
-		{{{-1,1,0}, {0,1,-1}, {-1,1,-1}},   // v0
-		 {{ 1,1,0}, {0,1,-1}, { 1,1,-1}},   // v1
-		 {{ 1,1,0}, {0,1, 1}, { 1,1, 1}},   // v2
-		 {{-1,1,0}, {0,1, 1}, {-1,1, 1}}},  // v3
+		{{{-1, 1, 0}, {0, 1, -1}, {-1, 1, -1}}, // v0
+		 {{1, 1, 0}, {0, 1, -1}, {1, 1, -1}},	// v1
+		 {{1, 1, 0}, {0, 1, 1}, {1, 1, 1}},		// v2
+		 {{-1, 1, 0}, {0, 1, 1}, {-1, 1, 1}}},	// v3
 
 		// Face 1: BOTTOM (-Y) — check layer y-1
 		// v0(0,0,1) v1(1,0,1) v2(1,0,0) v3(0,0,0)
-		{{{-1,-1,0}, {0,-1, 1}, {-1,-1, 1}},
-		 {{ 1,-1,0}, {0,-1, 1}, { 1,-1, 1}},
-		 {{ 1,-1,0}, {0,-1,-1}, { 1,-1,-1}},
-		 {{-1,-1,0}, {0,-1,-1}, {-1,-1,-1}}},
+		{{{-1, -1, 0}, {0, -1, 1}, {-1, -1, 1}},
+		 {{1, -1, 0}, {0, -1, 1}, {1, -1, 1}},
+		 {{1, -1, 0}, {0, -1, -1}, {1, -1, -1}},
+		 {{-1, -1, 0}, {0, -1, -1}, {-1, -1, -1}}},
 
 		// Face 2: NORTH (+Z) — check layer z+1
 		// v0(0,0,1) v1(0,1,1) v2(1,1,1) v3(1,0,1)
-		{{{-1,0,1}, {0,-1,1}, {-1,-1,1}},
-		 {{-1,0,1}, {0, 1,1}, {-1, 1,1}},
-		 {{ 1,0,1}, {0, 1,1}, { 1, 1,1}},
-		 {{ 1,0,1}, {0,-1,1}, { 1,-1,1}}},
+		{{{-1, 0, 1}, {0, -1, 1}, {-1, -1, 1}},
+		 {{-1, 0, 1}, {0, 1, 1}, {-1, 1, 1}},
+		 {{1, 0, 1}, {0, 1, 1}, {1, 1, 1}},
+		 {{1, 0, 1}, {0, -1, 1}, {1, -1, 1}}},
 
 		// Face 3: SOUTH (-Z) — check layer z-1
 		// v0(1,0,0) v1(1,1,0) v2(0,1,0) v3(0,0,0)
-		{{{ 1,0,-1}, {0,-1,-1}, { 1,-1,-1}},
-		 {{ 1,0,-1}, {0, 1,-1}, { 1, 1,-1}},
-		 {{-1,0,-1}, {0, 1,-1}, {-1, 1,-1}},
-		 {{-1,0,-1}, {0,-1,-1}, {-1,-1,-1}}},
+		{{{1, 0, -1}, {0, -1, -1}, {1, -1, -1}},
+		 {{1, 0, -1}, {0, 1, -1}, {1, 1, -1}},
+		 {{-1, 0, -1}, {0, 1, -1}, {-1, 1, -1}},
+		 {{-1, 0, -1}, {0, -1, -1}, {-1, -1, -1}}},
 
 		// Face 4: EAST (+X) — check layer x+1
 		// v0(1,0,1) v1(1,1,1) v2(1,1,0) v3(1,0,0)
-		{{{1,0, 1}, {1,-1,0}, {1,-1, 1}},
-		 {{1,0, 1}, {1, 1,0}, {1, 1, 1}},
-		 {{1,0,-1}, {1, 1,0}, {1, 1,-1}},
-		 {{1,0,-1}, {1,-1,0}, {1,-1,-1}}},
+		{{{1, 0, 1}, {1, -1, 0}, {1, -1, 1}},
+		 {{1, 0, 1}, {1, 1, 0}, {1, 1, 1}},
+		 {{1, 0, -1}, {1, 1, 0}, {1, 1, -1}},
+		 {{1, 0, -1}, {1, -1, 0}, {1, -1, -1}}},
 
 		// Face 5: WEST (-X) — check layer x-1
 		// v0(0,0,0) v1(0,1,0) v2(0,1,1) v3(0,0,1)
-		{{{-1,0,-1}, {-1,-1,0}, {-1,-1,-1}},
-		 {{-1,0,-1}, {-1, 1,0}, {-1, 1,-1}},
-		 {{-1,0, 1}, {-1, 1,0}, {-1, 1, 1}},
-		 {{-1,0, 1}, {-1,-1,0}, {-1,-1, 1}}}
-	};
+		{{{-1, 0, -1}, {-1, -1, 0}, {-1, -1, -1}},
+		 {{-1, 0, -1}, {-1, 1, 0}, {-1, 1, -1}},
+		 {{-1, 0, 1}, {-1, 1, 0}, {-1, 1, 1}},
+		 {{-1, 0, 1}, {-1, -1, 0}, {-1, -1, 1}}}};
 
 	int computeVertexAO(int bx, int by, int bz, int faceDir, int vertIdx,
-	                    Chunk2* north, Chunk2* south, Chunk2* east, Chunk2* west) const
+						Chunk2 *north, Chunk2 *south, Chunk2 *east, Chunk2 *west) const
 	{
-		auto& off = AO_OFFSETS[faceDir][vertIdx];
+		auto &off = AO_OFFSETS[faceDir][vertIdx];
 		bool s1 = getBlockOrNeighbor(bx + off[0][0], by + off[0][1], bz + off[0][2],
-		                             north, south, east, west) != 0;
+									 north, south, east, west) != 0;
 		bool s2 = getBlockOrNeighbor(bx + off[1][0], by + off[1][1], bz + off[1][2],
-		                             north, south, east, west) != 0;
+									 north, south, east, west) != 0;
 		bool corner = getBlockOrNeighbor(bx + off[2][0], by + off[2][1], bz + off[2][2],
-		                                 north, south, east, west) != 0;
-		if (s1 && s2) return 0; // Coin entièrement occluded
+										 north, south, east, west) != 0;
+		if (s1 && s2)
+			return 0; // Coin entièrement occluded
 		return 3 - (s1 + s2 + corner);
 	}
 
@@ -195,25 +195,19 @@ public:
 		Total : 32/32 bits utilisés !
 		*/
 
-		auto packFace = [&](int x, int y, int z, int faceDir, uint8_t color) {
+		auto packFace = [&](int x, int y, int z, int faceDir, uint8_t color)
+		{
 			int ao0 = computeVertexAO(x, y, z, faceDir, 0, north, south, east, west);
 			int ao1 = computeVertexAO(x, y, z, faceDir, 1, north, south, east, west);
 			int ao2 = computeVertexAO(x, y, z, faceDir, 2, north, south, east, west);
 			int ao3 = computeVertexAO(x, y, z, faceDir, 3, north, south, east, west);
 
-			uint32_t packed = (uint32_t)x
-				| ((uint32_t)y << 4)
-				| ((uint32_t)z << 12)
-				| ((uint32_t)faceDir << 16)
-				| ((uint32_t)(color - 1) << 19)  // color-1 car 0=air jamais rendu
-				| ((uint32_t)ao0 << 24)
-				| ((uint32_t)ao1 << 26)
-				| ((uint32_t)ao2 << 28)
-				| ((uint32_t)ao3 << 30);
+			uint32_t packed = (uint32_t)x | ((uint32_t)y << 4) | ((uint32_t)z << 12) | ((uint32_t)faceDir << 16) | ((uint32_t)(color - 1) << 19) // color-1 car 0=air jamais rendu
+							  | ((uint32_t)ao0 << 24) | ((uint32_t)ao1 << 26) | ((uint32_t)ao2 << 28) | ((uint32_t)ao3 << 30);
 
 			packedFaces.push_back(packed);
 		};
-		// Cache line , chache hit dans le l1 
+		// Cache line , chache hit dans le l1
 		for (int x = 0; x < CHUNK_SIZE_X; x++)
 		{
 			for (int y = 0; y < CHUNK_SIZE_Y; y++)
@@ -257,7 +251,9 @@ public:
 			malloc() -> memcpy() -> free()
 
 		*/
-		//printf("packedFaces.size() : %d\n", packedFaces.size());
+
+		packedFaces.reserve(4096);
+		// printf("packedFaces.size() : %d\n", packedFaces.size());
 		uploadMesh(packedFaces);
 	};
 
