@@ -1436,6 +1436,287 @@ Le rebuild se fait en **spirale** depuis le centre (chunks proches du joueur en 
 
 ---
 
+## 11d. Dilemme : `uint8_t` vs `uint32_t` pour le stockage des blocs
+
+### Le problème
+
+Pour reproduire l'esthétique de BetterSpades (fondu de couleurs, ombres douces), il faut stocker plus d'information par bloc. Deux approches s'affrontent :
+
+| | Option A : `uint8_t` palette | Option B : `uint32_t` RGBA |
+|--|---|---|
+| Comme | Minecraft, VoxPlace actuel | BetterSpades, AoS |
+| Stockage | Index → palette de 32/64 couleurs | RGB libre par bloc (16M couleurs) |
+| Avantage | Compact, cache-friendly | Fondu naturel, liberté totale |
+| Inconvénient | Palette limitée | 4× plus de mémoire |
+
+### Impact cache (réel, pas théorique)
+
+```
+  CPU : Ryzen 7 5700X3D → L1 = 32 KB data par cœur
+  
+  HAUTEUR 256 :
+  uint8_t[16][256][16]  = 65 536 octets = 64 KB  → ❌ L1 déborde (2× trop gros)
+  uint32_t[16][256][16] = 262 144 octets = 256 KB → ❌ Même L2 compliqué
+  
+  HAUTEUR 64 (comme BetterSpades) :
+  uint8_t[16][64][16]   = 16 384 octets = 16 KB  → ✅ Rentre dans L1 (50%)
+  uint32_t[16][64][16]  = 65 536 octets = 64 KB  → ❌ L1 déborde
+  uint16_t[16][64][16]  = 32 768 octets = 32 KB  → ⚠️ Pile poil L1
+
+  Nombre de blocs par cache line (64 bytes) :
+  uint8_t  → 64 blocs/line  (accès séquentiel Z = 1 miss pour 64 blocs)
+  uint32_t → 16 blocs/line  (4× plus de cache misses au meshing)
+```
+
+> ⚠️ **Le chunk actuel (64 KB) ne rentre déjà pas dans L1.** Passer à `uint32_t` n'aggrave la situation que si on garde Y=256.
+
+### La hauteur Y=64 : un bon compromis ?
+
+BetterSpades utilise `map_size_y = 64` (confirmé dans `map.c:45`). C'est suffisant pour le gameplay AoS.
+
+| | Y=256 (actuel) | Y=64 (comme BS) |
+|--|---|---|
+| Blocs/chunk | 65 536 | 16 384 |
+| `uint8_t` | 64 KB (L1 ❌) | 16 KB (L1 ✅✅) |
+| `uint32_t` | 256 KB (L2 ❌) | 64 KB = **même taille que uint8_t actuel** |
+| Bits Y packing | 8 bits (0-255) | 6 bits (0-63) → **2 bits libérés** |
+| Itérations mesh | 65 536 par chunk | 16 384 (4× moins) |
+
+> **En résumé :** `uint32_t[16][64][16]` utilise la même mémoire que `uint8_t[16][256][16]`. C'est un trade équitable : on sacrifie la hauteur (inutile pour r/place) pour avoir des couleurs RGB libres.
+
+### Nouveau packing possible avec Y=64 (2 bits libérés)
+
+```
+  Y=256 (actuel, 32/32 bits) :
+  x(4) y(8) z(4) face(3) color(5) ao0(2) ao1(2) ao2(2) ao3(2) = 32 ✅
+
+  Y=64 (nouveau, 32/32 bits) :
+  x(4) y(6) z(4) face(3) color(6) shade(1) ao0(2) ao1(2) ao2(2) ao3(2) = 32 ✅
+                  ↑ -2 bits        ↑ +1 bit  ↑ NOUVEAU !
+                                   64 couleurs  sunblock diagonal
+```
+
+Avec Y=64 + `uint32_t` : la couleur est directement dans le bloc, donc le champ `color` dans le packing n'est plus un index palette mais pourrait devenir un **face index** ou être remplacé par un buffer séparé per-vertex. Le sunblock serait pré-multiplié dans la couleur RGBA (comme BetterSpades fait).
+
+---
+
+## 11e. Génération de couleurs terrain dans BetterSpades
+
+> Source : `map.c` lignes 677-708 — `/home/alpha/Documents/TFE/BetterSpades/src/map.c`
+
+### BetterSpades ne fait PAS de génération procédurale
+
+Les maps AoS sont des fichiers `.vxl` pré-construits, téléchargés depuis le serveur au début de chaque partie. Il n'y a **aucun Perlin noise** dans BetterSpades. Le client ne fait que **recevoir** et **renderer** la map.
+
+La génération des couleurs se fait côté **serveur** (ou dans l'éditeur de map). BetterSpades fournit deux fonctions utilitaires pour coloriser les blocs :
+
+### `dirt_color_table[]` — Gradient vertical (9 paliers)
+
+```c
+// map.c:681-682
+int dirt_color_table[] = {
+    0x506050,  // y=63 (surface) — vert-gris clair
+    0x605848,  // y=55           — vert-marron
+    0x705040,  // y=47           — marron clair
+    0x804838,  // y=39           — marron
+    0x704030,  // y=31           — marron-rouge
+    0x603828,  // y=23           — marron foncé
+    0x503020,  // y=15           — terre sombre
+    0x402818,  // y=7            — très sombre
+    0x302010   // y=0  (fond)    — presque noir
+};
+```
+
+```
+  Visualisation du gradient vertical :
+  
+  y=63  ■■■  #506050  vert-gris (herbe)
+  y=55  ■■■  #605848  transition
+  y=47  ■■■  #705040  marron clair
+  y=39  ■■■  #804838  marron
+  y=31  ■■■  #704030  marron-rouge
+  y=23  ■■■  #603828  marron foncé
+  y=15  ■■■  #503020  terre sombre
+  y=7   ■■■  #402818  très foncé
+  y=0   ■■■  #302010  fond (presque noir)
+```
+
+Chaque tranche de 8 blocs en Y utilise un **lerp** entre deux couleurs consécutives :
+
+```c
+// map.c:685-693
+int map_dirt_color(int x, int y, int z) {
+    int slice = (63 - y) / 8;      // Quelle tranche (0-7)
+    int amt   = (63 - y) % 8;      // Position dans la tranche (0-7)
+    
+    int base = dirt_color_table[slice];
+    int next = dirt_color_table[slice + 1];
+    
+    // Lerp chaque composante R, G, B séparément
+    int red   = lerp(base & 0xFF0000, next & 0xFF0000, amt) >> 16;
+    int green = lerp(base & 0x00FF00, next & 0x00FF00, amt) >> 8;
+    int blue  = lerp(base & 0x0000FF, next & 0x0000FF, amt);
+```
+
+### Variation par position + bruit aléatoire
+
+```c
+    // Suite de map_dirt_color()...
+    int rng = ms_rand() % 8;                    // Bruit aléatoire ±8
+    red   += 4 * abs((x % 8) - 4) + rng;       // Onde triangulaire sur X
+    green += 4 * abs((z % 8) - 4) + rng;       // Onde triangulaire sur Z
+    blue  += 4 * abs(((63 - y) % 8) - 4) + rng; // Onde triangulaire sur Y
+    
+    return rgb(red, green, blue);
+}
+```
+
+```
+  L'onde triangulaire 4*abs(x%8 - 4) donne :
+  
+  x:     0  1  2  3  4  5  6  7  0  1  2  3 ...
+  val:  16 12  8  4  0  4  8 12 16 12  8  4 ...
+        ╲ ╲ ╲ ╱ ╱ ╱ ╲ ╲   → variation de ±16 par composante
+  
+  + rng (0-7) → chaque bloc a une couleur unique mais proche
+  → C'est ça le "fondu" ! Pas de palette, juste du bruit sur un gradient.
+```
+
+### Variation des blocs posés par les joueurs
+
+```c
+// map.c:703-708
+int map_placedblock_color(int color) {
+    color = color | 0x7F000000;            // Force alpha
+    gkrand = 0x1A4E86D * gkrand + 1;      // LCG pseudo-random
+    return color ^ (gkrand & 0x70707);     // XOR ±7 sur R, G, B
+}
+// → Chaque bloc posé a une variation de ±7 sur chaque composante
+```
+
+> Les joueurs choisissent UNE couleur, mais chaque bloc posé a un RGB légèrement différent (±7/255 = ~3% de variation). C'est imperceptible individuellement mais crée un effet naturel en masse.
+
+### Comment reproduire ça dans VoxPlace ?
+
+**Approche palette étendue (uint8_t, 64 couleurs) :**
+- 32 couleurs r/place pour les joueurs
+- 32 couleurs pour les nuances terrain (4 tons × 8 types de terrain)
+- Le `TerrainGenerator` choisit la nuance selon la profondeur Y
+- ⚠️ Le fondu sera moins fin (sauts de couleur palette vs gradient continu)
+
+**Approche RGBA (uint32_t) :**
+- Même algorithme que `map_dirt_color()` → gradient continu
+- `TerrainGenerator` applique `dirt_color_table` + bruit triangulaire
+- Le fondu est identique à BetterSpades
+- Le sunblock peut être pré-multiplié dans la couleur directement
+- ✅ Résultat visuellement identique
+
+### 🔑 Le trick : fondu dans le shader (meilleur des deux mondes)
+
+> **Idée :** garder `uint8_t` palette côté CPU, mais calculer la variation de couleur **dans le fragment shader** basée sur la position monde du bloc. Résultat : look BetterSpades avec 16 KB de stockage.
+
+```glsl
+// chunk2.fs — Trick "fondu shader"
+uniform vec3 palette[64]; // Palette de base envoyée une fois
+
+vec3 baseColor = palette[colorIndex]; // Couleur du bloc (index palette)
+
+// Variation déterministe = onde triangulaire (identique à BetterSpades)
+float noiseR = 4.0 * abs(mod(worldPos.x, 8.0) - 4.0);
+float noiseG = 4.0 * abs(mod(worldPos.z, 8.0) - 4.0);
+float noiseB = 4.0 * abs(mod(worldPos.y, 8.0) - 4.0);
+
+// Pseudo-random déterministe basé sur la position (remplace ms_rand())
+float rng = fract(sin(dot(worldPos.xz, vec2(12.9898, 78.233))) * 43758.5453) * 8.0;
+
+// Variation ±16/255 ≈ ±6% — comme BetterSpades
+vec3 finalColor = baseColor + vec3(noiseR + rng, noiseG + rng, noiseB + rng) / 255.0;
+```
+
+**Bilan du trick :**
+
+| | BetterSpades (uint32_t) | VoxPlace trick (uint8_t + shader) |
+|--|---|---|
+| Stockage/bloc | 4 bytes | 1 byte |
+| Chunk 16×64×16 | 64 KB | 16 KB (L1 ✅) |
+| Fondu terrain | CPU : `dirt_color_table + bruit` | Shader : même onde triangulaire |
+| Fondu joueur | CPU : `XOR 0x70707` | Shader : même hash position |
+| Sunblock | CPU pré-multiplié | SSBO heightmap (16×16 par chunk) |
+| Qualité visuelle | ≈ identique | ≈ identique |
+| Bande passante réseau | 4 bytes/bloc | **1 byte/bloc (4× moins)** |
+
+> **Pour le multijoueur, c'est un gros avantage** — un chunk entier ne fait que 16 KB à transmettre au lieu de 64 KB.
+
+### Ce trick est-il courant dans les jeux ?
+
+**Oui**, la variation de couleur par shader est un pattern classique de l'industrie du jeu vidéo :
+
+- **Minecraft** : les teintes du biome (herbe verte ↔ marron) sont un color multiply appliqué dans le shader basé sur un `biome map`. Le bloc stocke juste "GRASS", c'est le shader qui choisit la nuance.
+- **Terraria / Starbound** : variation de lumière per-tile calculée à partir de la position, pas stockée.
+- **Cel-shading** en général : la couleur finale est souvent `baseColor × lightingFunction(position)`, pas une couleur stockée par vertex.
+- **Le principe** : stocker le **minimum** côté CPU/réseau, recalculer le **maximum** côté GPU (il est rapide et gratuit par pixel).
+
+Ce que BetterSpades fait (stocker l'RGBA pré-calculé par bloc) est en fait l'approche **la moins optimale** — c'est hérité du protocole AoS 0.75 (2011) où les GPU étaient plus limités et les shaders simples. Aujourd'hui, le calcul shader est quasi gratuit.
+
+> Le `uint32_t` de BetterSpades n'est pas un choix d'optimisation, c'est une **contrainte du protocole réseau AoS**. Pour un projet neuf comme VoxPlace, le trick shader est supérieur.
+
+---
+
+## 11f. Architecture multijoueur — impact sur le stockage
+
+### Le flux de données client-serveur (objectif futur)
+
+```
+  SERVEUR (authoritative)                    CLIENT (VoxPlace)
+  ┌─────────────────────┐                   ┌─────────────────────┐
+  │                     │   chunk data      │                     │
+  │   TerrainGenerator  │───────────────►   │   blocks[16][64][16]│
+  │   (Perlin noise)    │   uint8_t[16KB]   │   meshGenerate()    │
+  │                     │                   │   render()          │
+  │  World              │                   │                     │
+  │  blocks[512][64][512│   place/break     │   Player input      │
+  │  ]                  │◄───────────────   │   click → (x,y,z,   │
+  │                     │   (x, y, z, color)│    colorIndex)       │
+  └─────────────────────┘                   └─────────────────────┘
+```
+
+### Ce que le serveur envoie au client
+
+1. **Connexion** : chunks dans un rayon autour du joueur (`uint8_t[16][64][16]` = 16 KB/chunk)
+2. **Déplacement** : nouveaux chunks qui entrent dans le rayon, déchargement des chunks qui sortent
+3. **Block update** : un joueur pose/casse un bloc → broadcast `(x, y, z, colorIndex)` = **7 bytes**
+
+### Impact du choix de stockage sur le réseau
+
+| | uint8_t (palette) | uint32_t (RGBA) |
+|--|---|---|
+| Taille chunk réseau | 16 KB | 64 KB |
+| 100 chunks (spawn) | 1.6 MB | 6.4 MB |
+| Block update | 7 bytes (xyz + colorIdx) | 10 bytes (xyz + RGBA) |
+| Serveur RAM (512×64×512) | 16 MB | 64 MB |
+
+> **16 KB par chunk vs 64 KB** → 4× moins de bande passante, 4× moins de RAM serveur. C'est significatif pour un jeu multijoueur.
+
+### Workflow quand un joueur pose un bloc
+
+```
+  Joueur clique "poser bloc" avec couleur index 5
+  
+  1. Client envoie au serveur : { x=42, y=30, z=15, color=5 }
+  2. Serveur valide (anti-cheat, distance, permissions)
+  3. Serveur met à jour world[42][30][15] = 5
+  4. Serveur broadcast à tous les clients : { x=42, y=30, z=15, color=5 }
+  5. Chaque client : chunk.blocks[localX][30][localZ] = 5
+  6. Chaque client : chunk.needsMeshRebuild = true
+  7. Au prochain frame : meshGenerate() reconstruit le mesh
+  8. Le shader ajoute la variation de couleur automatiquement
+     (le fondu est *gratuit* — tous les clients voient la même variation)
+```
+
+> ✅ Le fondu shader est **déterministe** (basé sur la position monde, pas sur du random) → tous les clients voient exactement les mêmes couleurs sans rien synchroniser de plus.
+
+---
+
 ## 12. Liens Utiles
 
 | Ressource | Lien |

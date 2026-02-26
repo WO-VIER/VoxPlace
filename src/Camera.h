@@ -110,8 +110,10 @@ public:
         Zoom -= (float)yoffset;
         if (Zoom < 1.0f)
             Zoom = 1.0f;
-        if (Zoom > 45.0f)
-            Zoom = 45.0f;
+        if(Zoom > 120.0f) // Quake pro FOV
+            Zoom = 120.0f;
+        //if (Zoom > 45.0f)
+            //Zoom = 45.0f;
     }
 
 private:
