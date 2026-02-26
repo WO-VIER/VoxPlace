@@ -8,29 +8,23 @@
 #include <print>
 // Chunks Params
 
-constexpr uint8_t CHUNK_SIZE_X = 16;   // (0 - 255) all time
-constexpr uint16_t CHUNK_SIZE_Y = 256; // Hauteur (0-255, 0 = bedrock)
-constexpr uint8_t CHUNK_SIZE_Z = 16;
+constexpr uint8_t CHUNK_SIZE_X = 16;  // Largeur (0-15)
+constexpr uint8_t CHUNK_SIZE_Y = 64;  // Hauteur (0-63, 0 = bedrock)
+constexpr uint8_t CHUNK_SIZE_Z = 16;  // Profondeur (0-15)
 constexpr uint8_t BEDROCK_LAYER = 0;
 
-// 16 * 16 * 64 = 16384 octets blocs par chunk
-// 1 bloc = une couleur qui peut etre 16 ou 32 couleurs 1 (byte)
 
-//  Chaques faces de chaque blocs sont composées de 4 points
-// Liste de points : 4 * (3 float) = 12 floats par faces = 12 * 4 = 48 octets par faces
-// Liste de triangles : 2 (triangles) * 3 int (indicies) = 6 int * 4 = 24 octets par faces
-//  points * positions * tailles en octet
-//  triangles * indices * tailles en octet
-// 72 octets par faces dans ram et vram pour chaques faces + texture par point 4 * 2 float = 104 octets par faces
 
-// 4
-
-// Chunks :
+// Mémoire par chunk :
+//   uint8_t blocks[16][64][16] = 16 384 octets = 16 KB
+//   → Rentre dans le cache L1 (32 KB data par cœur) !
 //
-//	Besoins de passer la generation en mutltithreading pour fit le cache l1
-//	(Ryzen 7 5700x3d ) 512ko Un coeur a 32 ko de l1 pour la data + 32 ko pour instructions
-//		Dans le cad de blocks[][][] la structure fait 65 536 octets je peux fit que la moitier puis aller en l2
-//	(i7 4712mq) 256 Ko (au total), divisé en 4 x 32 Ko de cache d'instructions et 4 x 32 Ko de cache de données.
+// Avant (Y=256) : 65 536 octets = 64 KB → débordait du L1
+//
+// Cache L1 :
+//   (Ryzen 7 5700X3D) 32 KB data + 32 KB instructions par cœur
+//   (i7 4712MQ) 4 × 32 KB data + 4 × 32 KB instructions
+//   → 16 KB = 50% du L1, laisse de la place pour les voisins au meshing
 
 class Chunk2
 {
@@ -39,7 +33,8 @@ public:
 	int chunkX;
 	int chunkZ;
 
-	// Données des blocs 1-15 index de couleur 0 = air
+	// Données des blocs : index palette (0 = air, 1-64 = couleurs)
+	// 16 × 64 × 16 = 16 384 octets = 16 KB
 	uint8_t blocks[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
 
 	// Mesh Opengl
@@ -181,23 +176,66 @@ public:
 		return 3 - (s1 + s2 + corner);
 	}
 
+	// ════════════════════════════════════════════════════════════════════
+	// Sunblock — Ombre diagonale
+	//
+	// Lance un rayon en diagonale vers le haut (y+1) et l'arrière (z-1)
+	// pour simuler un soleil à ~45°. Chaque bloc solide rencontré
+	// diminue la luminosité avec un poids décroissant.
+	//
+	//   soleil ☀ (~45°)
+	//     ╲
+	//      ╲  ← le rayon vérifie les blocs sur cette diagonale
+	//       ╲
+	//        ● bloc courant → shade = i / 127
+	//
+	// Retourne 1 si le bloc est éclairé, 0 s'il est ombré.
+	// ════════════════════════════════════════════════════════════════════
+	int computeSunblock(int bx, int by, int bz) const
+	{
+		int dec = 18;    // Poids décroissant (18, 16, 14, 12, ...)
+		int i = 127;     // Luminosité max
+		int cy = by;
+		int cz = bz;
+
+		while (dec > 0 && cy < CHUNK_SIZE_Y - 1)
+		{
+			cy++;
+			cz--;
+			// Si la position Z sort du chunk, on considère "air"
+			if (cz < 0)
+				break;
+			if (blocks[bx][cy][cz] != 0)
+			{
+				i -= dec;
+			}
+			dec -= 2;
+		}
+
+		// Seuil : si la luminosité est sous 100/127 (~79%), le bloc est "ombré"
+		if (i < 100)
+			return 0;
+		return 1;
+	}
+
 	// north = +Z, south = -Z, east = +X, west = -X
 	void meshGenerate(Chunk2 *north = nullptr, Chunk2 *south = nullptr,
 					  Chunk2 *east = nullptr, Chunk2 *west = nullptr)
 	{
 		std::vector<uint32_t> packedFaces;
 		/*
-		NOUVEAU BIT LAYOUT (avec AO per-vertex) :
+		BIT LAYOUT Phase 2 — Y=64 (6 bits), 64 couleurs, shade sunblock :
 
-		Bits [0-3]   : X local (0-15)      → 4 bits
-		Bits [4-11]  : Y local (0-255)      → 8 bits
-		Bits [12-15] : Z local (0-15)       → 4 bits
-		Bits [16-18] : Face Direction (0-5) → 3 bits
-		Bits [19-23] : Color (color-1, 0-31)→ 5 bits   ← réduit de 6 à 5
-		Bits [24-25] : AO vertex 0          → 2 bits
-		Bits [26-27] : AO vertex 1          → 2 bits
-		Bits [28-29] : AO vertex 2          → 2 bits
-		Bits [30-31] : AO vertex 3          → 2 bits
+		Bits [0-3]   : X local (0-15)       → 4 bits
+		Bits [4-9]   : Y local (0-63)        → 6 bits   ← was 8, freed 2 bits
+		Bits [10-13] : Z local (0-15)        → 4 bits
+		Bits [14-16] : Face Direction (0-5)  → 3 bits
+		Bits [17-22] : Color (color-1, 0-63) → 6 bits   ← was 5, +1 bit = 64 couleurs
+		Bits [23]    : Shade (sunblock)      → 1 bit    ← NOUVEAU
+		Bits [24-25] : AO vertex 0           → 2 bits
+		Bits [26-27] : AO vertex 1           → 2 bits
+		Bits [28-29] : AO vertex 2           → 2 bits
+		Bits [30-31] : AO vertex 3           → 2 bits
 
 		Total : 32/32 bits utilisés !
 		*/
@@ -208,9 +246,18 @@ public:
 			int ao1 = computeVertexAO(x, y, z, faceDir, 1, north, south, east, west);
 			int ao2 = computeVertexAO(x, y, z, faceDir, 2, north, south, east, west);
 			int ao3 = computeVertexAO(x, y, z, faceDir, 3, north, south, east, west);
+			int shade = computeSunblock(x, y, z);
 
-			uint32_t packed = (uint32_t)x | ((uint32_t)y << 4) | ((uint32_t)z << 12) | ((uint32_t)faceDir << 16) | ((uint32_t)(color - 1) << 19) // color-1 car 0=air jamais rendu
-							  | ((uint32_t)ao0 << 24) | ((uint32_t)ao1 << 26) | ((uint32_t)ao2 << 28) | ((uint32_t)ao3 << 30);
+			uint32_t packed = (uint32_t)x
+				| ((uint32_t)y << 4)
+				| ((uint32_t)z << 10)
+				| ((uint32_t)faceDir << 14)
+				| ((uint32_t)(color - 1) << 17)  // color-1 car 0=air jamais rendu
+				| ((uint32_t)shade << 23)
+				| ((uint32_t)ao0 << 24)
+				| ((uint32_t)ao1 << 26)
+				| ((uint32_t)ao2 << 28)
+				| ((uint32_t)ao3 << 30);
 
 			packedFaces.push_back(packed);
 		};

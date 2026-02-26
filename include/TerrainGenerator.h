@@ -29,10 +29,10 @@
 class TerrainGenerator
 {
 public:
-	// Paramètres ajustables
-	int baseHeight = 20;        // Hauteur de base du sol
-	float continentAmp = 15.0f; // Amplitude des grandes collines (±15 blocs)
-	float detailAmp = 4.0f;     // Amplitude des micro-variations (±4 blocs)
+	// Paramètres ajustables (adapté pour Y=64)
+	int baseHeight = 20;         // Hauteur de base du sol
+	float continentAmp = 10.0f;  // Amplitude des grandes collines (±10 blocs)
+	float detailAmp = 3.0f;      // Amplitude des micro-variations (±3 blocs)
 
 	TerrainGenerator(int seed = 42)
 	{
@@ -49,7 +49,7 @@ public:
 
 	// ════════════════════════════════════════════════════════════════════
 	// Calcule la hauteur du terrain pour une position monde (wx, wz)
-	// Retourne une valeur entre 1 et CHUNK_SIZE_Y - 1 (1 - 255)
+	// Retourne une valeur entre 1 et 63 (CHUNK_SIZE_Y - 1)
 	// ════════════════════════════════════════════════════════════════════
 	int getHeight(int worldX, int worldZ) const
 	{
@@ -57,8 +57,8 @@ public:
 		float wz = static_cast<float>(worldZ);
 
 		float h = static_cast<float>(baseHeight);
-		h += continent.GetNoise(wx, wz) * continentAmp;  // [-1,1] × 15
-		h += detail.GetNoise(wx, wz) * detailAmp;        // [-1,1] × 4
+		h += continent.GetNoise(wx, wz) * continentAmp;  // [-1,1] × 10
+		h += detail.GetNoise(wx, wz) * detailAmp;        // [-1,1] × 3
 
 		return std::clamp(static_cast<int>(h), 1, static_cast<int>(CHUNK_SIZE_Y) - 1);
 	}
@@ -68,9 +68,11 @@ public:
 	//
 	// Pour chaque colonne (x, z) :
 	//   y = 0           → Bedrock (incassable)
-	//   y = 1..height-3 → Pierre
-	//   y = height-2..height-1 → Terre
-	//   y = height      → Herbe (surface)
+	//   y = 1..height-3 → Pierre (palette 45-47)
+	//   y = height-2..height-1 → Terre (palette 33-41 basé sur profondeur Y)
+	//   y = height      → Herbe (palette 42-44)
+	//
+	// Les indices 33-64 sont les nuances terrain 
 	// ════════════════════════════════════════════════════════════════════
 	void fillChunk(Chunk2& chunk) const
 	{
@@ -83,8 +85,7 @@ public:
 				int worldZ = chunk.chunkZ * CHUNK_SIZE_Z + z;
 				int height = getHeight(worldX, worldZ);
 
-				// Bedrock (y = 0) — déjà dans le constructeur de Chunk2
-				// mais on le force au cas où
+				// Bedrock (y = 0) — déjà dans le constructeur, on force
 				chunk.blocks[x][0][z] = 28; // Noir (bedrock)
 
 				// Remplir de y=1 jusqu'à height
@@ -92,18 +93,28 @@ public:
 				{
 					if (y == height)
 					{
-						uint8_t random = 1 + (rand() % 32); // 1-32 = couleurs
-						while(random == 28)
-							random = 1 + (rand() % 32);
-						chunk.blocks[x][y][z] = random;   // Vert clair (herbe)
+						// Surface : herbe — nuance basée sur la hauteur
+						// Plus haut = plus clair (indice 42), plus bas = plus sombre (44)
+						int herbeIdx = 42;
+						if (height < 15)
+							herbeIdx = 44; // Herbe sombre en bas
+						else if (height < 22)
+							herbeIdx = 43; // Herbe moyenne
+						chunk.blocks[x][y][z] = herbeIdx;
 					}
 					else if (y > height - 3)
 					{
-						chunk.blocks[x][y][z] = 26;  // Marron (terre)
+						// Terre : gradient basé sur la profondeur Y
+						// dirt_color_table : indices 33 (surface) à 41 (fond)
+						int slice = (CHUNK_SIZE_Y - 1 - y) / 8;
+						int dirtIdx = 33 + std::clamp(slice, 0, 8);
+						chunk.blocks[x][y][z] = dirtIdx;
 					}
 					else
 					{
-						chunk.blocks[x][y][z] = 29;  // Gris foncé (pierre)
+						// Pierre : 3 nuances
+						int pierreIdx = 45 + (y % 3); // 45, 46, 47 en alternance
+						chunk.blocks[x][y][z] = pierreIdx;
 					}
 				}
 			}

@@ -1,7 +1,7 @@
 #version 460 core
 
 // ============================================================================
-// VERTEX PULLING SHADER — Chunk2 (avec Ambient Occlusion per-vertex)
+// VERTEX PULLING SHADER — Chunk2 (Phase 2 : Y=64, 64 couleurs, sunblock)
 // Pas de VBO, pas d'attributs. Tout vient du SSBO.
 // ============================================================================
 
@@ -17,7 +17,9 @@ uniform vec3 chunkPos; // Position monde du chunk (remplace model matrix)
 // Sorties vers le fragment shader
 out flat int vColorIndex;
 out flat int vFaceDir;
+out flat int vShade;    // 1 = éclairé, 0 = ombré (sunblock)
 out vec3 vFragPos;
+out flat vec3 vWorldBlockPos; // Position monde du bloc (flat = même pour tous les fragments d'une face)
 out float vAO;  // Valeur AO interpolée (0.0 = sombre, 1.0 = lumineux)
 
 // ============================================================================
@@ -59,13 +61,15 @@ void main()
     int vertID = gl_VertexID % 6;   // Quel sommet du triangle (0..5) ?
 
     // B. Récupération et dépacking des bits
+    //    Phase 2 layout : x(4) y(6) z(4) face(3) color(6) shade(1) ao(8)
     uint data = faces[faceID];
 
-    int x        = int(data & 0xFu);            // Bits [0-3]   : X (0-15)
-    int y        = int((data >> 4u) & 0xFFu);    // Bits [4-11]  : Y (0-255)
-    int z        = int((data >> 12u) & 0xFu);    // Bits [12-15] : Z (0-15)
-    int faceDir  = int((data >> 16u) & 0x7u);    // Bits [16-18] : Face (0-5)
-    int colorIdx = int((data >> 19u) & 0x1Fu) + 1; // Bits [19-23] : Color (+1 car packed color-1)
+    int x        = int(data & 0xFu);             // Bits [0-3]   : X (0-15)
+    int y        = int((data >> 4u) & 0x3Fu);     // Bits [4-9]   : Y (0-63)
+    int z        = int((data >> 10u) & 0xFu);     // Bits [10-13] : Z (0-15)
+    int faceDir  = int((data >> 14u) & 0x7u);     // Bits [14-16] : Face (0-5)
+    int colorIdx = int((data >> 17u) & 0x3Fu) + 1; // Bits [17-22] : Color (+1 car packed color-1)
+    int shade    = int((data >> 23u) & 0x1u);     // Bits [23]    : Shade (sunblock)
 
     // AO per-vertex : 4 valeurs × 2 bits chacune
     int ao0 = int((data >> 24u) & 0x3u);  // Bits [24-25]
@@ -88,6 +92,8 @@ void main()
     gl_Position = projection * view * vec4(worldPos, 1.0);
     vColorIndex = colorIdx;
     vFaceDir = faceDir;
+    vShade = shade;
     vFragPos = worldPos;
+    vWorldBlockPos = chunkPos + vec3(float(x), float(y), float(z));
     vAO = ao;  // Interpolé par le rasterizer entre les 3 sommets du triangle
 }

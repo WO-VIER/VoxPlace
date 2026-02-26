@@ -143,7 +143,7 @@ struct Frustum
 	//
 	//   AABB du chunk :
 	//   min = (chunkX × 16,   0, chunkZ × 16)
-	//   max = (chunkX × 16 + 16, 256, chunkZ × 16 + 16)
+	//   max = (chunkX × 16 + 16, 64, chunkZ × 16 + 16)    ← Y=64
 	// ════════════════════════════════════════════════════════════════
 	bool isChunkVisible(int chunkX, int chunkZ) const
 	{
@@ -154,7 +154,7 @@ struct Frustum
 
 		glm::vec3 aabbMax(
 			static_cast<float>(chunkX * 16 + 16),
-			256.0f,
+			64.0f,   // CHUNK_SIZE_Y = 64
 			static_cast<float>(chunkZ * 16 + 16));
 
 		return isAABBVisible(aabbMin, aabbMax);

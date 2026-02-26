@@ -1662,7 +1662,64 @@ Ce que BetterSpades fait (stocker l'RGBA pré-calculé par bloc) est en fait l'a
 
 ---
 
-## 11f. Architecture multijoueur — impact sur le stockage
+## 11f. Phase 2 — Notes d'implémentation
+
+### Refactor Y=64 (fait)
+
+```
+  AVANT : uint8_t blocks[16][256][16] = 64 KB (L1 ❌)
+  APRÈS : uint8_t blocks[16][64][16]  = 16 KB (L1 ✅)
+```
+
+### Nouveau bit packing (32 bits)
+
+```
+  x(4) y(6) z(4) face(3) color(6) shade(1) ao0(2) ao1(2) ao2(2) ao3(2) = 32
+  │     │    │     │       │        │        └─────── per-vertex AO ───────┘
+  │     │    │     │       │        └── sunblock diagonal (BetterSpades)
+  │     │    │     │       └── index palette 0-63 (stocké color-1)
+  │     │    │     └── 0=TOP 1=BOT 2=N 3=S 4=E 5=W
+  │     │    └── 0-15
+  │     └── 0-63 (was 0-255)
+  └── 0-15
+```
+
+### Bug fix : `flat` qualifier pour le fondu shader
+
+Sans `flat`, le GPU **interpole** `vWorldBlockPos` entre les 3 sommets du triangle.
+La fonction noise `mod(pos.x, 8.0)` reçoit des valeurs interpolées → gradient visible
+**à l'intérieur** de chaque face, ressemble à du z-fighting.
+
+```glsl
+// AVANT (bug) :
+out vec3 vWorldBlockPos;       // interpolé → gradient par fragment
+
+// APRÈS (fix) :
+out flat vec3 vWorldBlockPos;  // flat = même valeur pour tous les fragments
+```
+
+> **Règle :** tout ce qui doit être **uniforme par face** (couleur, index, position bloc) doit être `flat`. Seul l'AO est intentionnellement interpolé pour le lissage.
+
+### Sunblock — Ombre diagonale (implémenté)
+
+Algo identique à BetterSpades `map_sunblock()` (`map.c:474`) :
+
+```cpp
+int computeSunblock(int bx, int by, int bz) const  // dans Chunk2.h
+{
+    int dec = 18;    // poids décroissant
+    int i = 127;     // luminosité max
+    // rayon diagonal : y+1, z-1 (soleil ~45°)
+    while (dec > 0 && cy < 63) { cy++; cz--; if (solid) i -= dec; dec -= 2; }
+    return (i < 100) ? 0 : 1;  // 0 = ombré, 1 = éclairé
+}
+```
+
+Résultat : 1 bit dans le packing → fragment shader multiplie `color *= 0.7` si ombré.
+
+---
+
+## 11g. Architecture multijoueur — impact sur le stockage
 
 ### Le flux de données client-serveur (objectif futur)
 
