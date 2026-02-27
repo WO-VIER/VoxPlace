@@ -202,7 +202,7 @@ int main()
 	// Configuration OpenGL
 	glEnable(GL_DEPTH_TEST);
 	glClearColor(FOG_COLOR.r, FOG_COLOR.g, FOG_COLOR.b, 1.0f);
-
+	glfwSwapInterval(0);
 	// ============================================================================
 	// IMGUI INIT
 	// ============================================================================
