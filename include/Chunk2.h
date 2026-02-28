@@ -183,15 +183,14 @@ public:
 	// pour simuler un soleil à ~45°. Chaque bloc solide rencontré
 	// diminue la luminosité avec un poids décroissant.
 	//
-	//   soleil ☀ (~45°)
-	//     ╲
-	//      ╲  ← le rayon vérifie les blocs sur cette diagonale
-	//       ╲
-	//        ● bloc courant → shade = i / 127
+	// Utilise getBlockOrNeighbor pour traverser les frontières de chunks
+	// et éviter les seams visibles aux jonctions.
 	//
 	// Retourne 1 si le bloc est éclairé, 0 s'il est ombré.
 	// ════════════════════════════════════════════════════════════════════
-	int computeSunblock(int bx, int by, int bz) const
+	int computeSunblock(int bx, int by, int bz,
+						Chunk2 *north, Chunk2 *south,
+						Chunk2 *east, Chunk2 *west) const
 	{
 		int dec = 18;    // Poids décroissant (18, 16, 14, 12, ...)
 		int i = 127;     // Luminosité max
@@ -202,10 +201,10 @@ public:
 		{
 			cy++;
 			cz--;
-			// Si la position Z sort du chunk, on considère "air"
-			if (cz < 0)
+			// Utilise getBlockOrNeighbor pour traverser les frontières de chunk
+			if (cy >= CHUNK_SIZE_Y)
 				break;
-			if (blocks[bx][cy][cz] != 0)
+			if (getBlockOrNeighbor(bx, cy, cz, north, south, east, west) != 0)
 			{
 				i -= dec;
 			}
@@ -246,7 +245,7 @@ public:
 			int ao1 = computeVertexAO(x, y, z, faceDir, 1, north, south, east, west);
 			int ao2 = computeVertexAO(x, y, z, faceDir, 2, north, south, east, west);
 			int ao3 = computeVertexAO(x, y, z, faceDir, 3, north, south, east, west);
-			int shade = computeSunblock(x, y, z);
+			int shade = computeSunblock(x, y, z, north, south, east, west);
 
 			uint32_t packed = (uint32_t)x
 				| ((uint32_t)y << 4)
@@ -405,16 +404,18 @@ private:
 			return 0;
 
 		// X hors limites → chunk east/west
+		// x=16 → blocks[0], x=17 → blocks[1], x=-1 → blocks[15], x=-2 → blocks[14]
 		if (x >= CHUNK_SIZE_X)
-			return east ? east->blocks[0][y][z] : 0;
+			return east ? east->blocks[x - CHUNK_SIZE_X][y][z] : 0;
 		if (x < 0)
-			return west ? west->blocks[CHUNK_SIZE_X - 1][y][z] : 0;
+			return west ? west->blocks[CHUNK_SIZE_X + x][y][z] : 0;
 
 		// Z hors limites → chunk north/south
+		// z=16 → blocks[][0], z=-1 → blocks[][15], z=-2 → blocks[][14]
 		if (z >= CHUNK_SIZE_Z)
-			return north ? north->blocks[x][y][0] : 0;
+			return north ? north->blocks[x][y][z - CHUNK_SIZE_Z] : 0;
 		if (z < 0)
-			return south ? south->blocks[x][y][CHUNK_SIZE_Z - 1] : 0;
+			return south ? south->blocks[x][y][CHUNK_SIZE_Z + z] : 0;
 
 		// Dans les limites → bloc local
 		return blocks[x][y][z];

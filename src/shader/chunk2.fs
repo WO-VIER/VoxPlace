@@ -105,10 +105,10 @@ const vec3 PALETTE[65] = vec3[65](
 const float FACE_BRIGHTNESS[6] = float[6](
     1.000,  // 0: TOP     — plein soleil
     0.500,  // 1: BOTTOM  — très sombre
-    0.875,  // 2: NORTH   — bien éclairé  (était 0.80)
-    0.625,  // 3: SOUTH   — ombre          (était 0.70)
-    0.750,  // 4: EAST    — ombre moyenne  (était 0.60)
-    0.750   // 5: WEST    — ombre moyenne  (était 0.65)
+    0.875,  // 2: NORTH   — bien éclairé
+    0.625,  // 3: SOUTH   — ombre
+    0.750,  // 4: EAST    — ombre moyenne
+    0.750   // 5: WEST    — ombre moyenne
 );
 
 // ============================================================================
@@ -120,15 +120,14 @@ void main()
     // 1. Couleur depuis la palette
     vec3 color = PALETTE[vColorIndex];
 
-    // 2. Variation de couleur par position (fondu BetterSpades)
-    //    Onde triangulaire + hash déterministe → chaque bloc a une teinte unique
-    float noiseR = 4.0 * abs(mod(vWorldBlockPos.x, 8.0) - 4.0);
-    float noiseG = 4.0 * abs(mod(vWorldBlockPos.z, 8.0) - 4.0);
-    float noiseB = 4.0 * abs(mod(vWorldBlockPos.y, 8.0) - 4.0);
-    float rng = fract(sin(dot(vWorldBlockPos.xz, vec2(12.9898, 78.233))) * 43758.5453) * 8.0;
-    color += vec3(noiseR + rng, noiseG + rng, noiseB + rng) / 255.0;
+    // 2. Variation de couleur par position (fondu)
+    //    Hash pur par bloc — pas d'onde triangulaire (évite les patterns visibles)
+    float h1 = fract(sin(dot(vWorldBlockPos.xyz, vec3(12.9898, 78.233, 45.164))) * 43758.5453);
+    float h2 = fract(sin(dot(vWorldBlockPos.xyz, vec3(93.9898, 67.345, 18.724))) * 28461.6271);
+    float h3 = fract(sin(dot(vWorldBlockPos.xyz, vec3(27.1653, 14.892, 91.537))) * 61539.2847);
+    color += vec3(h1, h2, h3) * 0.06;  // ±3% de variation max
 
-    // 3. Face shading (éclairage directionnel simple — facteurs BetterSpades)
+    // 3. Face shading (éclairage directionnel)
     color *= FACE_BRIGHTNESS[vFaceDir];
 
     // 4. Sunblock shade (ombre diagonale)

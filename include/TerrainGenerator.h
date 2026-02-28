@@ -85,8 +85,8 @@ public:
 				int worldZ = chunk.chunkZ * CHUNK_SIZE_Z + z;
 				int height = getHeight(worldX, worldZ);
 
-				// Bedrock (y = 0) — déjà dans le constructeur, on force
-				chunk.blocks[x][0][z] = 28; // Noir (bedrock)
+				// Bedrock (y = 0) — pierre sombre incassable (sera protégé côté serveur)
+				chunk.blocks[x][0][z] = 47; // Pierre sombre (incassable plus tard)
 
 				// Remplir de y=1 jusqu'à height
 				for (int y = 1; y <= height && y < CHUNK_SIZE_Y; y++)
@@ -112,8 +112,10 @@ public:
 					}
 					else
 					{
-						// Pierre : 3 nuances
-						int pierreIdx = 45 + (y % 3); // 45, 46, 47 en alternance
+						// Pierre : 3 nuances distribuées par hash position
+						// Utilise les coordonnées monde pour casser le pattern régulier
+						int hash = (worldX * 73856093) ^ (y * 19349663) ^ (worldZ * 83492791);
+						int pierreIdx = 45 + (std::abs(hash) % 3); // 45, 46, 47 pseudo-random
 						chunk.blocks[x][y][z] = pierreIdx;
 					}
 				}
