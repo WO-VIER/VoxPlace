@@ -31,7 +31,7 @@ class TerrainGenerator
 public:
 	// Paramètres ajustables (adapté pour Y=64)
 	int baseHeight = 20;         // Hauteur de base du sol
-	float continentAmp = 10.0f;  // Amplitude des grandes collines (±10 blocs)
+	float continentAmp = 15.0f;  // Amplitude des grandes collines (±10 blocs)
 	float detailAmp = 3.0f;      // Amplitude des micro-variations (±3 blocs)
 
 	TerrainGenerator(int seed = 42)

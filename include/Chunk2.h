@@ -17,7 +17,7 @@ constexpr uint8_t BEDROCK_LAYER = 0;
 
 // Mémoire par chunk :
 //   uint8_t blocks[16][64][16] = 16 384 octets = 16 KB
-//   → Rentre dans le cache L1 (32 KB data par cœur) !
+//   → Rentre dans le cache L1 (32 KB data par coeur) !
 //
 // Avant (Y=256) : 65 536 octets = 64 KB → débordait du L1
 //
@@ -162,17 +162,18 @@ public:
 		 {{-1, 0, 1}, {-1, -1, 0}, {-1, -1, 1}}}};
 
 	int computeVertexAO(int bx, int by, int bz, int faceDir, int vertIdx,
-						Chunk2 *north, Chunk2 *south, Chunk2 *east, Chunk2 *west) const
+						Chunk2 *n, Chunk2 *s, Chunk2 *e, Chunk2 *w,
+						Chunk2 *ne, Chunk2 *nw, Chunk2 *se, Chunk2 *sw) const
 	{
 		auto &off = AO_OFFSETS[faceDir][vertIdx];
 		bool s1 = getBlockOrNeighbor(bx + off[0][0], by + off[0][1], bz + off[0][2],
-									 north, south, east, west) != 0;
+									 n, s, e, w, ne, nw, se, sw) != 0;
 		bool s2 = getBlockOrNeighbor(bx + off[1][0], by + off[1][1], bz + off[1][2],
-									 north, south, east, west) != 0;
+									 n, s, e, w, ne, nw, se, sw) != 0;
 		bool corner = getBlockOrNeighbor(bx + off[2][0], by + off[2][1], bz + off[2][2],
-										 north, south, east, west) != 0;
+										 n, s, e, w, ne, nw, se, sw) != 0;
 		if (s1 && s2)
-			return 0; // Coin entièrement occluded
+			return 0;
 		return 3 - (s1 + s2 + corner);
 	}
 
@@ -189,11 +190,11 @@ public:
 	// Retourne 1 si le bloc est éclairé, 0 s'il est ombré.
 	// ════════════════════════════════════════════════════════════════════
 	int computeSunblock(int bx, int by, int bz,
-						Chunk2 *north, Chunk2 *south,
-						Chunk2 *east, Chunk2 *west) const
+						Chunk2 *n, Chunk2 *s, Chunk2 *e, Chunk2 *w,
+						Chunk2 *ne, Chunk2 *nw, Chunk2 *se, Chunk2 *sw) const
 	{
-		int dec = 18;    // Poids décroissant (18, 16, 14, 12, ...)
-		int i = 127;     // Luminosité max
+		int dec = 18;
+		int i = 127;
 		int cy = by;
 		int cz = bz;
 
@@ -201,17 +202,15 @@ public:
 		{
 			cy++;
 			cz--;
-			// Utilise getBlockOrNeighbor pour traverser les frontières de chunk
 			if (cy >= CHUNK_SIZE_Y)
 				break;
-			if (getBlockOrNeighbor(bx, cy, cz, north, south, east, west) != 0)
+			if (getBlockOrNeighbor(bx, cy, cz, n, s, e, w, ne, nw, se, sw) != 0)
 			{
 				i -= dec;
 			}
 			dec -= 2;
 		}
 
-		// Seuil : si la luminosité est sous 100/127 (~79%), le bloc est "ombré"
 		if (i < 100)
 			return 0;
 		return 1;
@@ -219,18 +218,20 @@ public:
 
 	// north = +Z, south = -Z, east = +X, west = -X
 	void meshGenerate(Chunk2 *north = nullptr, Chunk2 *south = nullptr,
-					  Chunk2 *east = nullptr, Chunk2 *west = nullptr)
+					  Chunk2 *east = nullptr, Chunk2 *west = nullptr,
+					  Chunk2 *ne = nullptr, Chunk2 *nw = nullptr,
+					  Chunk2 *se = nullptr, Chunk2 *sw = nullptr)
 	{
 		std::vector<uint32_t> packedFaces;
 		/*
 		BIT LAYOUT Phase 2 — Y=64 (6 bits), 64 couleurs, shade sunblock :
 
 		Bits [0-3]   : X local (0-15)       → 4 bits
-		Bits [4-9]   : Y local (0-63)        → 6 bits   ← was 8, freed 2 bits
+		Bits [4-9]   : Y local (0-63)        → 6 bits
 		Bits [10-13] : Z local (0-15)        → 4 bits
 		Bits [14-16] : Face Direction (0-5)  → 3 bits
-		Bits [17-22] : Color (color-1, 0-63) → 6 bits   ← was 5, +1 bit = 64 couleurs
-		Bits [23]    : Shade (sunblock)      → 1 bit    ← NOUVEAU
+		Bits [17-22] : Color (color-1, 0-63) → 6 bits
+		Bits [23]    : Shade (sunblock)      → 1 bit
 		Bits [24-25] : AO vertex 0           → 2 bits
 		Bits [26-27] : AO vertex 1           → 2 bits
 		Bits [28-29] : AO vertex 2           → 2 bits
@@ -241,17 +242,17 @@ public:
 
 		auto packFace = [&](int x, int y, int z, int faceDir, uint8_t color)
 		{
-			int ao0 = computeVertexAO(x, y, z, faceDir, 0, north, south, east, west);
-			int ao1 = computeVertexAO(x, y, z, faceDir, 1, north, south, east, west);
-			int ao2 = computeVertexAO(x, y, z, faceDir, 2, north, south, east, west);
-			int ao3 = computeVertexAO(x, y, z, faceDir, 3, north, south, east, west);
-			int shade = computeSunblock(x, y, z, north, south, east, west);
+			int ao0 = computeVertexAO(x, y, z, faceDir, 0, north, south, east, west, ne, nw, se, sw);
+			int ao1 = computeVertexAO(x, y, z, faceDir, 1, north, south, east, west, ne, nw, se, sw);
+			int ao2 = computeVertexAO(x, y, z, faceDir, 2, north, south, east, west, ne, nw, se, sw);
+			int ao3 = computeVertexAO(x, y, z, faceDir, 3, north, south, east, west, ne, nw, se, sw);
+			int shade = computeSunblock(x, y, z, north, south, east, west, ne, nw, se, sw);
 
 			uint32_t packed = (uint32_t)x
 				| ((uint32_t)y << 4)
 				| ((uint32_t)z << 10)
 				| ((uint32_t)faceDir << 14)
-				| ((uint32_t)(color - 1) << 17)  // color-1 car 0=air jamais rendu
+				| ((uint32_t)(color - 1) << 17)
 				| ((uint32_t)shade << 23)
 				| ((uint32_t)ao0 << 24)
 				| ((uint32_t)ao1 << 26)
@@ -277,17 +278,13 @@ public:
 					// Face 1 : BOTTOM (-Y)
 					if (getBlock(x, y - 1, z) == 0)
 						packFace(x, y, z, 1, block);
-					// Face 2 : NORTH (+Z)
-					if (getBlockOrNeighbor(x, y, z + 1, north, south, east, west) == 0)
+					if (getBlockOrNeighbor(x, y, z + 1, north, south, east, west, ne, nw, se, sw) == 0)
 						packFace(x, y, z, 2, block);
-					// Face 3 : SOUTH (-Z)
-					if (getBlockOrNeighbor(x, y, z - 1, north, south, east, west) == 0)
+					if (getBlockOrNeighbor(x, y, z - 1, north, south, east, west, ne, nw, se, sw) == 0)
 						packFace(x, y, z, 3, block);
-					// Face 4 : EAST (+X)
-					if (getBlockOrNeighbor(x + 1, y, z, north, south, east, west) == 0)
+					if (getBlockOrNeighbor(x + 1, y, z, north, south, east, west, ne, nw, se, sw) == 0)
 						packFace(x, y, z, 4, block);
-					// Face 5 : WEST (-X)
-					if (getBlockOrNeighbor(x - 1, y, z, north, south, east, west) == 0)
+					if (getBlockOrNeighbor(x - 1, y, z, north, south, east, west, ne, nw, se, sw) == 0)
 						packFace(x, y, z, 5, block);
 				};
 			};
@@ -397,27 +394,33 @@ private:
 	// ──────────────────────────────────────────────────────────────────
 	uint8_t getBlockOrNeighbor(int x, int y, int z,
 							   Chunk2 *north, Chunk2 *south,
-							   Chunk2 *east, Chunk2 *west) const
+							   Chunk2 *east, Chunk2 *west,
+							   Chunk2 *ne, Chunk2 *nw,
+							   Chunk2 *se, Chunk2 *sw) const
 	{
-		// Y hors limites → air (dessus/dessous du monde)
 		if (y < 0 || y >= CHUNK_SIZE_Y)
 			return 0;
 
-		// X hors limites → chunk east/west
-		// x=16 → blocks[0], x=17 → blocks[1], x=-1 → blocks[15], x=-2 → blocks[14]
+		// Diagonal : X ET Z hors limites
+		if (x >= CHUNK_SIZE_X && z >= CHUNK_SIZE_Z)
+			return ne ? ne->blocks[x - CHUNK_SIZE_X][y][z - CHUNK_SIZE_Z] : 0;
+		if (x >= CHUNK_SIZE_X && z < 0)
+			return se ? se->blocks[x - CHUNK_SIZE_X][y][CHUNK_SIZE_Z + z] : 0;
+		if (x < 0 && z >= CHUNK_SIZE_Z)
+			return nw ? nw->blocks[CHUNK_SIZE_X + x][y][z - CHUNK_SIZE_Z] : 0;
+		if (x < 0 && z < 0)
+			return sw ? sw->blocks[CHUNK_SIZE_X + x][y][CHUNK_SIZE_Z + z] : 0;
+
+		// Cardinal
 		if (x >= CHUNK_SIZE_X)
 			return east ? east->blocks[x - CHUNK_SIZE_X][y][z] : 0;
 		if (x < 0)
 			return west ? west->blocks[CHUNK_SIZE_X + x][y][z] : 0;
-
-		// Z hors limites → chunk north/south
-		// z=16 → blocks[][0], z=-1 → blocks[][15], z=-2 → blocks[][14]
 		if (z >= CHUNK_SIZE_Z)
 			return north ? north->blocks[x][y][z - CHUNK_SIZE_Z] : 0;
 		if (z < 0)
 			return south ? south->blocks[x][y][CHUNK_SIZE_Z + z] : 0;
 
-		// Dans les limites → bloc local
 		return blocks[x][y][z];
 	}
 

@@ -304,10 +304,15 @@ int main()
 				int cx = chunk->chunkX;
 				int cz = chunk->chunkZ;
 				chunk->meshGenerate(
-					getChunkAt(cx, cz + 1),
-					getChunkAt(cx, cz - 1),
-					getChunkAt(cx + 1, cz),
-					getChunkAt(cx - 1, cz));
+					getChunkAt(cx, cz + 1),     // north
+					getChunkAt(cx, cz - 1),     // south
+					getChunkAt(cx + 1, cz),     // east
+					getChunkAt(cx - 1, cz),     // west
+					getChunkAt(cx + 1, cz + 1), // NE
+					getChunkAt(cx - 1, cz + 1), // NW
+					getChunkAt(cx + 1, cz - 1), // SE
+					getChunkAt(cx - 1, cz - 1)  // SW
+				);
 			}
 
 			// Skip si hors frustum
@@ -336,7 +341,7 @@ int main()
 		for (auto &[k, c] : chunkMap)
 			totalFaces += c->faceCount;
 
-		ImGui::Begin("VoxPlace Debug");
+		ImGui::Begin("VoxPlace");
 		ImGui::Text("FPS: %.0f (%.1f ms)", 1.0f / deltaTime, deltaTime * 1000.0f);
 		ImGui::Separator();
 		ImGui::Text("Chunks: %d / %zu visible", visibleChunks, chunkMap.size());
