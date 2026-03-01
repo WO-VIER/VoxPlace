@@ -277,7 +277,7 @@ int main()
 		glm::mat4 projection = glm::perspective(
 			glm::radians(camera.Zoom),
 			(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT,
-			0.1f, 200.0f); // avant 200.0f // Far plane 200 / 16 = ~12 chunks 512 = 32chunks
+			0.1f, 512.0f); // avant 200.0f // Far plane 200 / 16 = ~12 chunks 512 = 32chunks
 		glm::mat4 view = camera.GetViewMatrix();
 
 		chunkShader.setMat4("projection", projection);

@@ -5,3 +5,4 @@ build
 build_wasm
 build_asan
 *.pdf
+.agents/rules/cpp-style.md
