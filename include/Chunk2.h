@@ -16,26 +16,21 @@ constexpr uint8_t BEDROCK_LAYER = 0;
 
 
 // Mémoire par chunk :
-//   uint8_t blocks[16][64][16] = 16 384 octets = 16 KB
-//   → Rentre dans le cache L1 (32 KB data par coeur) !
+//   uint32_t blocks[16][64][16] = 65 536 octets = 64 KB
+//   → Rentre dans le cache L2 (512 KB+), sort du L1 (32 KB)
 //
-// Avant (Y=256) : 65 536 octets = 64 KB → débordait du L1
-//
-// Cache L1 :
-//   (Ryzen 7 5700X3D) 32 KB data + 32 KB instructions par cœur
-//   (i7 4712MQ) 4 × 32 KB data + 4 × 32 KB instructions
-//   → 16 KB = 50% du L1, laisse de la place pour les voisins au meshing
+// Chaque bloc stocke sa couleur RGB directe (0 = air)
+// Format : 0x00BBGGRR (R bits 0-7, G bits 8-15, B bits 16-23)
 
 class Chunk2
 {
 public:
-	// Position du chunk dans le monde
 	int chunkX;
 	int chunkZ;
 
-	// Données des blocs : index palette (0 = air, 1-64 = couleurs)
-	// 16 × 64 × 16 = 16 384 octets = 16 KB
-	uint8_t blocks[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
+	// Chaque bloc = couleur RGB complète (0 = air)
+	// 16 × 64 × 16 × 4 = 65 536 octets = 64 KB
+	uint32_t blocks[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
 
 	// Mesh Opengl
 	GLuint ssbo = 0;
@@ -48,19 +43,12 @@ public:
 	Chunk2(int cx = 0, int cz = 0) : chunkX(cx), chunkZ(cz)
 	{
 		memset(blocks, 0, sizeof(blocks));
-
-		for (int x = 0; x < CHUNK_SIZE_X; x++)
-		{
-			for (int z = 0; z < CHUNK_SIZE_Z; z++)
-			{
-				blocks[x][BEDROCK_LAYER][z] = 29; /// couleur
-			};
-		};
 	};
-	// Acesseurs
+	// ════════════════════════════════════════════════════════════════════
+	// Accesseurs
+	// ════════════════════════════════════════════════════════════════════
 
-	// Obtenir un bloc (verif des limits)
-	uint8_t getBlock(int x, int y, int z) const
+	uint32_t getBlock(int x, int y, int z) const
 	{
 		if (x < 0 || x >= CHUNK_SIZE_X ||
 			y < 0 || y >= CHUNK_SIZE_Y ||
@@ -69,29 +57,42 @@ public:
 			return 0;
 		}
 		return blocks[x][y][z];
-	};
+	}
 
-	bool setBlock(int x, int y, int z, uint8_t blockType)
+	bool setBlock(int x, int y, int z, uint32_t color)
 	{
-		// Vérifier les limites
 		if (x < 0 || x >= CHUNK_SIZE_X ||
 			y < 0 || y >= CHUNK_SIZE_Y ||
 			z < 0 || z >= CHUNK_SIZE_Z)
 		{
 			return false;
 		}
-
-		// Empêcher de casser la bedrock
-		if (y == BEDROCK_LAYER && blockType == 0)
+		if (y == BEDROCK_LAYER && color == 0)
 		{
 			return false;
 		}
-
-		blocks[x][y][z] = blockType;
+		blocks[x][y][z] = color;
 		needsMeshRebuild = true;
 		isEmpty = false;
 		return true;
 	}
+
+	// ════════════════════════════════════════════════════════════════════
+	// Helpers couleur RGB
+	// ════════════════════════════════════════════════════════════════════
+
+	static int colorR(uint32_t c) { return c & 0xFF; }
+	static int colorG(uint32_t c) { return (c >> 8) & 0xFF; }
+	static int colorB(uint32_t c) { return (c >> 16) & 0xFF; }
+	static uint32_t makeColor(int r, int g, int b)
+	{
+		if (r < 0) r = 0; if (r > 255) r = 255;
+		if (g < 0) g = 0; if (g > 255) g = 255;
+		if (b < 0) b = 0; if (b > 255) b = 255;
+		return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16);
+	}
+
+
 
 	// north = +Z, south = -Z, east = +X, west = -X
 	// ════════════════════════════════════════════════════════════════════
@@ -223,24 +224,30 @@ public:
 					  Chunk2 *se = nullptr, Chunk2 *sw = nullptr)
 	{
 		std::vector<uint32_t> packedFaces;
+		packedFaces.reserve(8192); // 2 uints par face
 		/*
-		BIT LAYOUT Phase 2 — Y=64 (6 bits), 64 couleurs, shade sunblock :
+		BIT LAYOUT uint32 — 2 words par face (8 bytes/face) :
 
-		Bits [0-3]   : X local (0-15)       → 4 bits
-		Bits [4-9]   : Y local (0-63)        → 6 bits
-		Bits [10-13] : Z local (0-15)        → 4 bits
-		Bits [14-16] : Face Direction (0-5)  → 3 bits
-		Bits [17-22] : Color (color-1, 0-63) → 6 bits
-		Bits [23]    : Shade (sunblock)      → 1 bit
-		Bits [24-25] : AO vertex 0           → 2 bits
-		Bits [26-27] : AO vertex 1           → 2 bits
-		Bits [28-29] : AO vertex 2           → 2 bits
-		Bits [30-31] : AO vertex 3           → 2 bits
+		Word 0:
+		  Bits [0-3]   : X local (0-15)       → 4 bits
+		  Bits [4-9]   : Y local (0-63)       → 6 bits
+		  Bits [10-13] : Z local (0-15)       → 4 bits
+		  Bits [14-16] : Face Direction (0-5) → 3 bits
+		  Bits [17]    : Shade (sunblock)     → 1 bit
+		  Bits [18-23] : unused               → 6 bits
+		  Bits [24-25] : AO vertex 0          → 2 bits
+		  Bits [26-27] : AO vertex 1          → 2 bits
+		  Bits [28-29] : AO vertex 2          → 2 bits
+		  Bits [30-31] : AO vertex 3          → 2 bits
 
-		Total : 32/32 bits utilisés !
+		Word 1:
+		  Bits [0-7]   : R                    → 8 bits
+		  Bits [8-15]  : G                    → 8 bits
+		  Bits [16-23] : B                    → 8 bits
+		  Bits [24-31] : unused               → 8 bits
 		*/
 
-		auto packFace = [&](int x, int y, int z, int faceDir, uint8_t color)
+		auto packFace = [&](int x, int y, int z, int faceDir, uint32_t blockColor)
 		{
 			int ao0 = computeVertexAO(x, y, z, faceDir, 0, north, south, east, west, ne, nw, se, sw);
 			int ao1 = computeVertexAO(x, y, z, faceDir, 1, north, south, east, west, ne, nw, se, sw);
@@ -248,18 +255,22 @@ public:
 			int ao3 = computeVertexAO(x, y, z, faceDir, 3, north, south, east, west, ne, nw, se, sw);
 			int shade = computeSunblock(x, y, z, north, south, east, west, ne, nw, se, sw);
 
-			uint32_t packed = (uint32_t)x
+			// Word 0 : position + face + shade + AO
+			uint32_t word0 = (uint32_t)x
 				| ((uint32_t)y << 4)
 				| ((uint32_t)z << 10)
 				| ((uint32_t)faceDir << 14)
-				| ((uint32_t)(color - 1) << 17)
-				| ((uint32_t)shade << 23)
+				| ((uint32_t)shade << 17)
 				| ((uint32_t)ao0 << 24)
 				| ((uint32_t)ao1 << 26)
 				| ((uint32_t)ao2 << 28)
 				| ((uint32_t)ao3 << 30);
 
-			packedFaces.push_back(packed);
+			// Word 1 : couleur RGB directe
+			uint32_t word1 = blockColor;
+
+			packedFaces.push_back(word0);
+			packedFaces.push_back(word1);
 		};
 		// Cache line , chache hit dans le l1
 		for (int x = 0; x < CHUNK_SIZE_X; x++)
@@ -268,14 +279,12 @@ public:
 			{
 				for (int z = 0; z < CHUNK_SIZE_Z; z++)
 				{
-					uint8_t block = blocks[x][y][z];
+					uint32_t block = blocks[x][y][z];
 					if (block == 0)
-						continue; // air
+						continue;
 
-					// Face 0 : TOP (+Y)
 					if (getBlock(x, y + 1, z) == 0)
 						packFace(x, y, z, 0, block);
-					// Face 1 : BOTTOM (-Y)
 					if (getBlock(x, y - 1, z) == 0)
 						packFace(x, y, z, 1, block);
 					if (getBlockOrNeighbor(x, y, z + 1, north, south, east, west, ne, nw, se, sw) == 0)
@@ -286,9 +295,9 @@ public:
 						packFace(x, y, z, 4, block);
 					if (getBlockOrNeighbor(x - 1, y, z, north, south, east, west, ne, nw, se, sw) == 0)
 						packFace(x, y, z, 5, block);
-				};
-			};
-		};
+				}
+			}
+		}
 		/*
 		push_back #1 : alloue [] -> 1 slot
 		push_back #2 : Trop petit, alloue [][] copie l'ancien -> 2slot
@@ -392,7 +401,7 @@ private:
 	//  │        │   │  (-1,y,z)  │   │(16,y,z)│
 	//  └────────┘   └────────────┘   └────────┘
 	// ──────────────────────────────────────────────────────────────────
-	uint8_t getBlockOrNeighbor(int x, int y, int z,
+	uint32_t getBlockOrNeighbor(int x, int y, int z,
 							   Chunk2 *north, Chunk2 *south,
 							   Chunk2 *east, Chunk2 *west,
 							   Chunk2 *ne, Chunk2 *nw,
@@ -445,7 +454,7 @@ private:
 		if (!vao)
 			glGenVertexArrays(1, &vao);
 
-		faceCount = faces.size();
+		faceCount = faces.size() / 2; // 2 uints par face
 		needsMeshRebuild = false;
 	};
 };

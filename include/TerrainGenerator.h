@@ -4,6 +4,8 @@
 #include <FastNoiseLite.h>
 #include <Chunk2.h>
 #include <algorithm>
+#include <cstdlib>
+#include <cmath>
 
 // ============================================================================
 // TerrainGenerator — Génère un terrain naturel avec Simplex Noise
@@ -14,109 +16,161 @@
 //                + continent(x,z) × continentAmp   ← collines douces
 //                + detail(x,z)    × detailAmp       ← micro-variations
 //
-//     continent seul           + detail              = résultat
-//    ╭───────────────╮     ╭─~─~─~─~─~─~╮     ╭──~──~──~─~──╮
-//    │   ╱╲          │     │ ╱╲╱╲╱╲╱╲╱╲ │     │  ╱╲╱╲       │
-//    │  ╱  ╲   ╱╲   │  +  │            │  =  │ ╱    ╲╱╲╱╲  │
-//    │ ╱    ╲ ╱  ╲  │     │            │     │╱          ╲ │
-//    ╰───────────────╯     ╰────────────╯     ╰─────────────╯
-//    freq = 0.005            freq = 0.02          naturel !
-//
-// Le bruit est évalué en coordonnées MONDE (pas locales au chunk),
-// donc les transitions entre chunks sont automatiquement continues.
+// Les couleurs sont stockées en RGB direct (uint32_t) avec :
+//   - dirt_color_table[9] (gradient profondeur BetterSpades)
+//   - Onde triangulaire + hash déterministe par position
+//   - mod8() pour continuité aux coordonnées négatives
 // ============================================================================
 
 class TerrainGenerator
 {
 public:
-	// Paramètres ajustables (adapté pour Y=64)
-	int baseHeight = 20;         // Hauteur de base du sol
-	float continentAmp = 15.0f;  // Amplitude des grandes collines (±10 blocs)
-	float detailAmp = 3.0f;      // Amplitude des micro-variations (±3 blocs)
+	int baseHeight = 20;
+	float continentAmp = 15.0f;
+	float detailAmp = 3.0f;
 
 	TerrainGenerator(int seed = 42)
 	{
-		// Couche 1 : continent — grandes collines douces
 		continent.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
 		continent.SetSeed(seed);
-		continent.SetFrequency(0.005f); // Basse fréquence = formes larges
+		continent.SetFrequency(0.005f);
 
-		// Couche 2 : détail — petites bosses sur les collines
 		detail.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-		detail.SetSeed(seed + 1); // Seed différente pour éviter la corrélation
-		detail.SetFrequency(0.02f); // Haute fréquence = détails fins
+		detail.SetSeed(seed + 1);
+		detail.SetFrequency(0.02f);
 	}
 
-	// ════════════════════════════════════════════════════════════════════
-	// Calcule la hauteur du terrain pour une position monde (wx, wz)
-	// Retourne une valeur entre 1 et 63 (CHUNK_SIZE_Y - 1)
-	// ════════════════════════════════════════════════════════════════════
 	int getHeight(int worldX, int worldZ) const
 	{
 		float wx = static_cast<float>(worldX);
 		float wz = static_cast<float>(worldZ);
-
 		float h = static_cast<float>(baseHeight);
-		h += continent.GetNoise(wx, wz) * continentAmp;  // [-1,1] × 10
-		h += detail.GetNoise(wx, wz) * detailAmp;        // [-1,1] × 3
-
+		h += continent.GetNoise(wx, wz) * continentAmp;
+		h += detail.GetNoise(wx, wz) * detailAmp;
 		return std::clamp(static_cast<int>(h), 1, static_cast<int>(CHUNK_SIZE_Y) - 1);
 	}
 
 	// ════════════════════════════════════════════════════════════════════
-	// Remplit un chunk avec le terrain généré
-	//
-	// Pour chaque colonne (x, z) :
-	//   y = 0           → Bedrock (incassable)
-	//   y = 1..height-3 → Pierre (palette 45-47)
-	//   y = height-2..height-1 → Terre (palette 33-41 basé sur profondeur Y)
-	//   y = height      → Herbe (palette 42-44)
-	//
-	// Les indices 33-64 sont les nuances terrain 
+	// dirt_color_table — exact copie de BetterSpades (map.c:681-682)
+	// 9 couleurs interpolées par profondeur Y (surface → fond)
 	// ════════════════════════════════════════════════════════════════════
-	void fillChunk(Chunk2& chunk) const
+	static constexpr int DIRT_COLORS[9] = {
+		0x506050, // 0: Surface — gris-vert
+		0x605848, // 1: Brun clair
+		0x705040, // 2: Brun
+		0x804838, // 3: Brun-rouge
+		0x704030, // 4: Brun foncé
+		0x603828, // 5: Terre foncée
+		0x503020, // 6: Terre très foncée
+		0x402818, // 7: Presque noir
+		0x302010  // 8: Fond
+	};
+
+	// ════════════════════════════════════════════════════════════════════
+	// Modulo positif — C++ : -1 % 8 = -1 (cassé pour la wave)
+	// mod8 : -1 → 7 (continu à travers les coordonnées négatives)
+	// ════════════════════════════════════════════════════════════════════
+	static int mod8(int v)
+	{
+		return ((v % 8) + 8) % 8;
+	}
+
+	// ════════════════════════════════════════════════════════════════════
+	// Hash déterministe par position monde — remplace rand()
+	// ════════════════════════════════════════════════════════════════════
+	static int posHash(int x, int y, int z)
+	{
+		int h = (x * 73856093) ^ (y * 19349663) ^ (z * 83492791);
+		if (h < 0) h = -h;
+		return h % 8;
+	}
+
+	static int lerpChannel(int a, int b, int amt)
+	{
+		return a + (b - a) * amt / 8;
+	}
+
+	// ════════════════════════════════════════════════════════════════════
+	// map_dirt_color — exact BetterSpades (map.c:685-700)
+	// ════════════════════════════════════════════════════════════════════
+	static uint32_t dirtColor(int x, int y, int z)
+	{
+		int invY = CHUNK_SIZE_Y - 1 - y;
+		int slice = invY / 8;
+		int lerp_amt = invY % 8;
+
+		if (slice < 0) slice = 0;
+		if (slice >= 8) slice = 7;
+
+		int base = DIRT_COLORS[slice];
+		int next = DIRT_COLORS[slice + 1];
+
+		int red   = lerpChannel((base >> 16) & 0xFF, (next >> 16) & 0xFF, lerp_amt);
+		int green = lerpChannel((base >> 8) & 0xFF, (next >> 8) & 0xFF, lerp_amt);
+		int blue  = lerpChannel(base & 0xFF, next & 0xFF, lerp_amt);
+
+		int rng = posHash(x, y, z);
+		red   += 4 * std::abs(mod8(x) - 4) + rng;
+		green += 4 * std::abs(mod8(z) - 4) + rng;
+		blue  += 4 * std::abs(mod8(invY) - 4) + rng;
+
+		return Chunk2::makeColor(red, green, blue);
+	}
+
+	// ════════════════════════════════════════════════════════════════════
+	// Couleur herbe — surface verte avec variation
+	// ════════════════════════════════════════════════════════════════════
+	static uint32_t grassColor(int x, int y, int z)
+	{
+		int rng = posHash(x, y, z);
+		int r = 70 + 4 * std::abs(mod8(x) - 4) + rng;
+		int g = 110 + 4 * std::abs(mod8(z) - 4) + rng;
+		int b = 70 + 4 * std::abs(mod8(CHUNK_SIZE_Y - 1 - y) - 4) + rng;
+		return Chunk2::makeColor(r, g, b);
+	}
+
+	// ════════════════════════════════════════════════════════════════════
+	// Couleur pierre — gris avec variation
+	// ════════════════════════════════════════════════════════════════════
+	static uint32_t stoneColor(int x, int y, int z)
+	{
+		int rng = posHash(x, y, z);
+		int base = 80 + 4 * std::abs(mod8(x) - 4) + rng;
+		int r = base;
+		int g = base;
+		int b = base + 5;
+		return Chunk2::makeColor(r, g, b);
+	}
+
+	// ════════════════════════════════════════════════════════════════════
+	// Remplit un chunk avec le terrain (herbe/terre/pierre en RGB direct)
+	// ════════════════════════════════════════════════════════════════════
+	void fillChunk(Chunk2 &chunk) const
 	{
 		for (int x = 0; x < CHUNK_SIZE_X; x++)
 		{
 			for (int z = 0; z < CHUNK_SIZE_Z; z++)
 			{
-				// Position monde = position chunk × taille + position locale
 				int worldX = chunk.chunkX * CHUNK_SIZE_X + x;
 				int worldZ = chunk.chunkZ * CHUNK_SIZE_Z + z;
 				int height = getHeight(worldX, worldZ);
 
-				// Bedrock (y = 0) — pierre sombre incassable (sera protégé côté serveur)
-				chunk.blocks[x][0][z] = 47; // Pierre sombre (incassable plus tard)
+				// Bedrock (y=0)
+				chunk.blocks[x][0][z] = stoneColor(worldX, 0, worldZ);
 
-				// Remplir de y=1 jusqu'à height
 				for (int y = 1; y <= height && y < CHUNK_SIZE_Y; y++)
 				{
 					if (y == height)
 					{
-						// Surface : herbe — nuance basée sur la hauteur
-						// Plus haut = plus clair (indice 42), plus bas = plus sombre (44)
-						int herbeIdx = 42;
-						if (height < 15)
-							herbeIdx = 44; // Herbe sombre en bas
-						else if (height < 22)
-							herbeIdx = 43; // Herbe moyenne
-						chunk.blocks[x][y][z] = herbeIdx;
+						chunk.blocks[x][y][z] = grassColor(worldX, y, worldZ);
 					}
 					else if (y > height - 3)
 					{
-						// Terre : gradient basé sur la profondeur Y
-						// dirt_color_table : indices 33 (surface) à 41 (fond)
-						int slice = (CHUNK_SIZE_Y - 1 - y) / 8;
-						int dirtIdx = 33 + std::clamp(slice, 0, 8);
-						chunk.blocks[x][y][z] = dirtIdx;
+						chunk.blocks[x][y][z] = dirtColor(worldX, y, worldZ);
 					}
 					else
 					{
-						// Pierre : 3 nuances distribuées par hash position
-						// Utilise les coordonnées monde pour casser le pattern régulier
-						int hash = (worldX * 73856093) ^ (y * 19349663) ^ (worldZ * 83492791);
-						int pierreIdx = 45 + (std::abs(hash) % 3); // 45, 46, 47 pseudo-random
-						chunk.blocks[x][y][z] = pierreIdx;
+						chunk.blocks[x][y][z] = stoneColor(worldX, y, worldZ);
 					}
 				}
 			}
@@ -125,46 +179,9 @@ public:
 		chunk.isEmpty = false;
 	}
 
-	void fillChunkBench(Chunk2& chunk) const
-{
-    // On s'assure que la couche Y=0 est bien de la bedrock
-	/*    
-	for (int x = 0; x < CHUNK_SIZE_X; x++) 
-    {
-        for (int z = 0; z < CHUNK_SIZE_Z; z++)
-        {
-            chunk.blocks[x][0][z] = 28; // Bedrock
-        }
-    }
-	*/
-    // Remplissage du reste (1 à 255) avec le motif damier 3D
-    for (int y = 0; y < CHUNK_SIZE_Y; y++) 
-    {
-        for (int x = 0; x < CHUNK_SIZE_X; x++) 
-        {
-            for (int z = 0; z < CHUNK_SIZE_Z; z++)
-            {
-                // La magie du damier : on additionne les coordonnées.
-                // Si c'est pair, on met un bloc. Si c'est impair, on met de l'air.
-                if ((x + y + z) % 2 == 0)
-                {
-                    chunk.blocks[x][y][z] = 1; // Bloc (ex: herbe)
-                }
-                else
-                {
-                    chunk.blocks[x][y][z] = 0; // Air
-                }
-            }
-        }
-    }
-
-    chunk.needsMeshRebuild = true;
-    chunk.isEmpty = false;
-}
-
 private:
-	FastNoiseLite continent; // Basse fréquence — grandes collines
-	FastNoiseLite detail;    // Haute fréquence — détails
+	FastNoiseLite continent;
+	FastNoiseLite detail;
 };
 
 #endif // TERRAIN_GENERATOR_H
