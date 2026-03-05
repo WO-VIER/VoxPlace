@@ -49,7 +49,7 @@ bool useAO = true;
 // ============================================================================
 
 GLFWwindow *g_window = nullptr;
-Camera camera(glm::vec3(8.0f, 35.0f, 30.0f)); // get value (0,0) genesis chunk et check max value block on y
+Camera camera(glm::vec3(0.0f, 35.0f, 0.0f)); // get value (0,0) genesis chunk et check max value block on y
 float lastX = SCREEN_WIDTH / 2.0f;
 float lastY = SCREEN_HEIGHT / 2.0f;
 bool firstMouse = true;
@@ -230,9 +230,9 @@ int main()
 
 	// 1. Créer tous les chunks et remplir le terrain  Besoins de créer un thread pour generation simuler "serveur" ou passer direct sur serveur.cpp
 	std::cout << "Generating chunks..." << std::endl;
-	for (int cx = -10; cx < 10; cx++)
+	for (int cx = 0; cx < 1; cx++)
 	{
-		for (int cz = -10; cz < 10; cz++)
+		for (int cz = 0; cz < 1; cz++)
 		{
 			Chunk2 *chunk = new Chunk2(cx, cz);
 			gen.fillChunk(*chunk);
@@ -277,7 +277,7 @@ int main()
 		glm::mat4 projection = glm::perspective(
 			glm::radians(camera.Zoom),
 			(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT,
-			0.1f, 512.0f); // avant 200.0f // Far plane 200 / 16 = ~12 chunks 512 = 32chunks
+			0.1f, 200.0f); // avant 200.0f // Far plane 200 / 16 = ~12 chunks 512 = 32chunks
 		glm::mat4 view = camera.GetViewMatrix();
 
 		chunkShader.setMat4("projection", projection);
