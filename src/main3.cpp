@@ -23,6 +23,7 @@
 #include <vector>
 #include <thread>
 #include <unordered_map>
+#include <algorithm>
 
 // ImGui
 #include <imgui.h>
@@ -198,6 +199,9 @@ int main()
 
 	std::cout << "OpenGL Renderer: " << glGetString(GL_RENDERER) << std::endl;
 	std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);       // Jeter les faces arrière (dos à la caméra)
+
 
 	// Configuration OpenGL
 	glEnable(GL_DEPTH_TEST);
@@ -230,9 +234,9 @@ int main()
 
 	// 1. Créer tous les chunks et remplir le terrain  Besoins de créer un thread pour generation simuler "serveur" ou passer direct sur serveur.cpp
 	std::cout << "Generating chunks..." << std::endl;
-	for (int cx = 0; cx < 1; cx++)
+	for (int cx = -10; cx < 10; cx++)
 	{
-		for (int cz = 0; cz < 1; cz++)
+		for (int cz = -10; cz < 10; cz++)
 		{
 			Chunk2 *chunk = new Chunk2(cx, cz);
 			gen.fillChunk(*chunk);
@@ -295,8 +299,15 @@ int main()
 		frustum.extractFromVP(projection * view);
 		// frustum.frustumProfiler();
 
-		// Dessiner les chunks visibles
-		int visibleChunks = 0;
+		// Collecter les chunks visibles + trier front-to-back (Early-Z)
+		struct ChunkDraw
+		{
+			Chunk2 *chunk;
+			float distSq;
+		};
+		std::vector<ChunkDraw> visibleList;
+		visibleList.reserve(chunkMap.size());
+
 		for (auto &[key, chunk] : chunkMap)
 		{
 			if (chunk->needsMeshRebuild)
@@ -319,12 +330,26 @@ int main()
 			if (!frustum.isChunkVisible(chunk->chunkX, chunk->chunkZ))
 				continue;
 
+			// Centre du chunk en monde
+			float centerX = chunk->chunkX * CHUNK_SIZE_X + CHUNK_SIZE_X * 0.5f;
+			float centerZ = chunk->chunkZ * CHUNK_SIZE_Z + CHUNK_SIZE_Z * 0.5f;
+			float dx = centerX - camera.Position.x;
+			float dz = centerZ - camera.Position.z;
+			visibleList.push_back({chunk, dx * dx + dz * dz});
+		}
+
+		// Tri front-to-back : les chunks proches d'abord → meilleur Early-Z
+		std::sort(visibleList.begin(), visibleList.end(),
+			[](const ChunkDraw &a, const ChunkDraw &b) { return a.distSq < b.distSq; });
+
+		int visibleChunks = (int)visibleList.size();
+		for (auto &cd : visibleList)
+		{
 			chunkShader.setVec3("chunkPos", glm::vec3(
-												chunk->chunkX * CHUNK_SIZE_X,
-												0.0f,
-												chunk->chunkZ * CHUNK_SIZE_Z));
-			chunk->render();
-			visibleChunks++;
+										cd.chunk->chunkX * CHUNK_SIZE_X,
+										0.0f,
+										cd.chunk->chunkZ * CHUNK_SIZE_Z));
+			cd.chunk->render();
 		}
 		// Afficher le résultat upscalé
 		LowResRenderer::endFrame();

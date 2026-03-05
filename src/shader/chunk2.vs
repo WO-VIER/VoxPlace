@@ -28,7 +28,7 @@ out float vAO;
 // TABLES DE LOOKUP
 // ============================================================================
 
-const int QUAD_INDICES[6] = int[6](0, 1, 2, 0, 2, 3);
+const int QUAD_INDICES[6] = int[6](0, 2, 1, 0, 3, 2);
 
 const vec3 FACE_OFFSETS[24] = vec3[24](
     // Face 0: TOP (+Y)

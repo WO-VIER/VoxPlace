@@ -285,7 +285,8 @@ public:
 
 					if (getBlock(x, y + 1, z) == 0)
 						packFace(x, y, z, 0, block);
-					if (getBlock(x, y - 1, z) == 0)
+					// Skip BOTTOM face au bedrock (y==0) : jamais visible par le joueur
+					if (y > 0 && getBlock(x, y - 1, z) == 0)
 						packFace(x, y, z, 1, block);
 					if (getBlockOrNeighbor(x, y, z + 1, north, south, east, west, ne, nw, se, sw) == 0)
 						packFace(x, y, z, 2, block);
