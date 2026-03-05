@@ -4,7 +4,7 @@
 // VERTEX PULLING SHADER — Chunk2 (uint32 blocks, full RGB)
 //
 // SSBO : 2 × uint32 par face
-//   Word 0 : x(4) y(6) z(4) face(3) shade(1) unused(6) ao0(2) ao1(2) ao2(2) ao3(2)
+//   Word 0 : x(4) y(6) z(4) face(3) sun(7) ao0(2) ao1(2) ao2(2) ao3(2)
 //   Word 1 : R(8) G(8) B(8) unused(8)
 // ============================================================================
 
@@ -60,13 +60,12 @@ void main()
     uint word0 = faces[faceID * 2];
     uint word1 = faces[faceID * 2 + 1];
 
-    // Dépacking Word 0 : position + face + shade + AO
+    // Dépacking Word 0 : position + face + sunblock + AO
     int x       = int(word0 & 0xFu);
     int y       = int((word0 >> 4u) & 0x3Fu);
     int z       = int((word0 >> 10u) & 0xFu);
     int faceDir = int((word0 >> 14u) & 0x7u);
-    // Bit 17 = legacy shade (ignoré), bits 18-23 = sunblock 6-bit gradient
-    int sunQ    = int((word0 >> 18u) & 0x3Fu);
+    int sunQ    = int((word0 >> 17u) & 0x7Fu);
 
     int ao0 = int((word0 >> 24u) & 0x3u);
     int ao1 = int((word0 >> 26u) & 0x3u);
@@ -92,7 +91,7 @@ void main()
     gl_Position = projection * view * vec4(worldPos, 1.0);
     vColor = vec3(r, g, b);
     vFaceDir = faceDir;
-    vSunblock = float(sunQ) / 63.0;  // 0.0-1.0 continu
+    vSunblock = float(sunQ) / 127.0;  // Parité BetterSpades (7-bit)
     vFragPos = worldPos;
     vWorldBlockPos = chunkPos + vec3(float(x), float(y), float(z));
     vAO = ao;

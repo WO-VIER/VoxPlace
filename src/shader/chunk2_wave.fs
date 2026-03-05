@@ -110,8 +110,8 @@ const vec3 PALETTE[65] = vec3[65](
 const float FACE_BRIGHTNESS[6] = float[6](
     1.000,  // 0: TOP
     0.500,  // 1: BOTTOM
-    0.875,  // 2: NORTH
-    0.625,  // 3: SOUTH
+    0.625,  // 2: +Z (north in VoxPlace naming), BetterSpades parity
+    0.875,  // 3: -Z (south in VoxPlace naming), BetterSpades parity
     0.750,  // 4: EAST
     0.750   // 5: WEST
 );

@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <vector>
 #include <cstring>
-#include <print>
 // Chunks Params
 
 constexpr uint8_t CHUNK_SIZE_X = 16;  // Largeur (0-15)
@@ -182,11 +181,11 @@ public:
 	// Sunblock — retourne un float (0.29 à 1.0) comme BetterSpades
 	//
 	// Rayon diagonal (y+1, z-1) vérifie 9 blocs max.
-	// La valeur est stockée sur 6 bits (0-63) dans word0.
+	// La valeur est stockée sur 7 bits (0-127) dans word0.
 	// ════════════════════════════════════════════════════════════════════
-	float computeSunblock(int bx, int by, int bz,
-						Chunk2 *n, Chunk2 *s, Chunk2 *e, Chunk2 *w,
-						Chunk2 *ne, Chunk2 *nw, Chunk2 *se, Chunk2 *sw) const
+	int computeSunblockQ127(int bx, int by, int bz,
+							Chunk2 *n, Chunk2 *s, Chunk2 *e, Chunk2 *w,
+							Chunk2 *ne, Chunk2 *nw, Chunk2 *se, Chunk2 *sw) const
 	{
 		int dec = 18;
 		int i = 127;
@@ -206,9 +205,12 @@ public:
 			dec -= 2;
 		}
 
-		// Clamp minimum à 37 (= 37/127 ≈ 0.29, comme BetterSpades)
-		if (i < 37) i = 37;
-		return (float)i / 127.0f;
+		// Minimum naturel de l'algo BetterSpades: 127 - (18+...+2) = 37
+		if (i < 37)
+			i = 37;
+		if (i > 127)
+			i = 127;
+		return i;
 	}
 
 	// north = +Z, south = -Z, east = +X, west = -X
@@ -222,17 +224,16 @@ public:
 		/*
 		BIT LAYOUT uint32 — 2 words par face (8 bytes/face) :
 
-		Word 0:
-		  Bits [0-3]   : X local (0-15)       → 4 bits
-		  Bits [4-9]   : Y local (0-63)       → 6 bits
-		  Bits [10-13] : Z local (0-15)       → 4 bits
-		  Bits [14-16] : Face Direction (0-5) → 3 bits
-		  Bits [17]    : Shade (sunblock)     → 1 bit
-		  Bits [18-23] : unused               → 6 bits
-		  Bits [24-25] : AO vertex 0          → 2 bits
-		  Bits [26-27] : AO vertex 1          → 2 bits
-		  Bits [28-29] : AO vertex 2          → 2 bits
-		  Bits [30-31] : AO vertex 3          → 2 bits
+			Word 0:
+			  Bits [0-3]   : X local (0-15)       → 4 bits
+			  Bits [4-9]   : Y local (0-63)       → 6 bits
+			  Bits [10-13] : Z local (0-15)       → 4 bits
+			  Bits [14-16] : Face Direction (0-5) → 3 bits
+			  Bits [17-23] : Sunblock (0-127)     → 7 bits
+			  Bits [24-25] : AO vertex 0          → 2 bits
+			  Bits [26-27] : AO vertex 1          → 2 bits
+			  Bits [28-29] : AO vertex 2          → 2 bits
+			  Bits [30-31] : AO vertex 3          → 2 bits
 
 		Word 1:
 		  Bits [0-7]   : R                    → 8 bits
@@ -247,20 +248,14 @@ public:
 			int ao1 = computeVertexAO(x, y, z, faceDir, 1, north, south, east, west, ne, nw, se, sw);
 			int ao2 = computeVertexAO(x, y, z, faceDir, 2, north, south, east, west, ne, nw, se, sw);
 			int ao3 = computeVertexAO(x, y, z, faceDir, 3, north, south, east, west, ne, nw, se, sw);
-			float sunF = computeSunblock(x, y, z, north, south, east, west, ne, nw, se, sw);
+			int sunQ = computeSunblockQ127(x, y, z, north, south, east, west, ne, nw, se, sw);
 
-			// Quantize sunblock float (0.29-1.0) → 6 bits (0-63)
-			int sunQ = (int)(sunF * 63.0f);
-			if (sunQ > 63) sunQ = 63;
-			if (sunQ < 0) sunQ = 0;
-
-			// Word 0 : position + face + shade(1-bit legacy) + sun(6-bit) + AO
+			// Word 0 : position + face + sun(7-bit) + AO
 			uint32_t word0 = (uint32_t)x
 				| ((uint32_t)y << 4)
 				| ((uint32_t)z << 10)
 				| ((uint32_t)faceDir << 14)
-				| ((uint32_t)(sunF < 0.79f ? 0 : 1) << 17)  // legacy 1-bit
-				| ((uint32_t)sunQ << 18)                     // 6-bit gradient
+				| ((uint32_t)sunQ << 17) // 7-bit gradient (0-127)
 				| ((uint32_t)ao0 << 24)
 				| ((uint32_t)ao1 << 26)
 				| ((uint32_t)ao2 << 28)

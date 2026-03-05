@@ -1774,6 +1774,32 @@ Résultat : 1 bit dans le packing → fragment shader multiplie `color *= 0.7` s
 
 ---
 
+## 5/03 Mise à jour esthétique BetterSpades (mars 2026)
+
+- Convention conservée dans VoxPlace : `north = +Z`, `south = -Z`.
+- Parité visuelle BetterSpades sur l'axe Z :
+- face `+Z` (index 2) = `0.625`
+- face `-Z` (index 3) = `0.875`
+- Le grain GPU additionnel de `chunk2.fs` est retiré : la variation vient du CPU (génération couleur) comme look BetterSpades.
+- `TerrainGenerator` utilise une formule `dirt_color_table` style BetterSpades adoucie (onde X/Z faible + onde Y modérée + `rng(0..1)`), avec RNG déterministe par position pour stabilité des chunks.
+- Placement debug local : clic droit (souris capturée) place la couleur exacte choisie (sans microvariation), pour gameplay pixel-art fidèle.
+- Clic gauche (souris capturée) casse le bloc visé.
+- Une croix de visée (crosshair) est affichée au centre de l'écran (toggle ImGui).
+- Le bruit couleur de génération terrain a été encore adouci pour réduire les motifs trop visibles et obtenir des couches plus droites.
+- Toggle ImGui `Sunblock debug` : affiche `vec3(vSunblock)` en grayscale pour valider le diagonal lighting.
+- Génération hauteur remplacée par un modèle multi-couches plus naturel : domain warp + continent + collines + ridges + micro-détail (look "elevation" plus organique).
+- Sun diagonal stocké sur 7 bits (0..127) dans le mesh chunk pour coller à la précision BetterSpades.
+- Le panneau debug affiche maintenant le cap cardinal de la caméra (`West -X`, `East +X`, etc.) pour valider orientation et lighting.
+- Profil terrain ajusté vers un rendu plus "Minecraft-like" : relief moins agressif + plaines plus étendues via terracing doux.
+- `Render Dist (chunks)` ajouté dans ImGui : le `far plane` suit automatiquement la distance choisie.
+- Culling chunks aligné fog : un chunk est dessiné dès que son bord proche peut entrer dans la zone de fog (moins de "tranches" visibles).
+- Fog style Minecraft : début du fog piloté par `%` de la render distance, fin du fog alignée au `far plane`.
+- `Limit to generated world` ajouté : empêche le joueur de sortir d'une zone de jeu circulaire centrée sur la map.
+- `World Border Pad (chunks)` ajouté : réserve une couronne de chunks hors zone jouable pour masquer les coupes en bord de monde.
+- TODO architecture serveur : déplacer la génération chunk côté serveur et, plus tard, supporter une génération guidée par les blocs posés pour concentrer les zones d'activité joueur.
+
+---
+
 ## 12. Liens Utiles
 
 | Ressource | Lien |
