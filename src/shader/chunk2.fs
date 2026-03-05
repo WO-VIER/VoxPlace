@@ -9,9 +9,9 @@
 
 out vec4 FragColor;
 
-in flat vec3 vColor;         // Couleur RGB directe du bloc
+in flat vec3 vColor;
 in flat int vFaceDir;
-in flat int vShade;          // 1 = éclairé, 0 = ombré
+in float vSunblock;          // Sunblock gradient continu (0.29-1.0)
 in vec3 vFragPos;
 in flat vec3 vWorldBlockPos;
 in float vAO;
@@ -55,9 +55,8 @@ void main()
     // 3. Face shading
     color *= FACE_BRIGHTNESS[vFaceDir];
 
-    // 4. Sunblock shade
-    if (vShade == 0)
-        color *= 0.7;
+    // 4. Sunblock gradient continu (0.29-1.0 comme BetterSpades)
+    color *= vSunblock;
 
     // 5. Ambient Occlusion
     if (useAO == 1)

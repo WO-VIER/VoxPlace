@@ -17,9 +17,9 @@ uniform mat4 projection;
 uniform vec3 chunkPos;
 
 // Sorties vers le fragment shader
-out flat vec3 vColor;        // Couleur RGB directe du bloc
+out flat vec3 vColor;
 out flat int vFaceDir;
-out flat int vShade;
+out float vSunblock;         // Sunblock gradient (0.29-1.0)
 out vec3 vFragPos;
 out flat vec3 vWorldBlockPos;
 out float vAO;
@@ -65,7 +65,8 @@ void main()
     int y       = int((word0 >> 4u) & 0x3Fu);
     int z       = int((word0 >> 10u) & 0xFu);
     int faceDir = int((word0 >> 14u) & 0x7u);
-    int shade   = int((word0 >> 17u) & 0x1u);
+    // Bit 17 = legacy shade (ignoré), bits 18-23 = sunblock 6-bit gradient
+    int sunQ    = int((word0 >> 18u) & 0x3Fu);
 
     int ao0 = int((word0 >> 24u) & 0x3u);
     int ao1 = int((word0 >> 26u) & 0x3u);
@@ -91,7 +92,7 @@ void main()
     gl_Position = projection * view * vec4(worldPos, 1.0);
     vColor = vec3(r, g, b);
     vFaceDir = faceDir;
-    vShade = shade;
+    vSunblock = float(sunQ) / 63.0;  // 0.0-1.0 continu
     vFragPos = worldPos;
     vWorldBlockPos = chunkPos + vec3(float(x), float(y), float(z));
     vAO = ao;

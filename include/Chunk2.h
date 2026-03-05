@@ -179,18 +179,12 @@ public:
 	}
 
 	// ════════════════════════════════════════════════════════════════════
-	// Sunblock — Ombre diagonale
+	// Sunblock — retourne un float (0.29 à 1.0) comme BetterSpades
 	//
-	// Lance un rayon en diagonale vers le haut (y+1) et l'arrière (z-1)
-	// pour simuler un soleil à ~45°. Chaque bloc solide rencontré
-	// diminue la luminosité avec un poids décroissant.
-	//
-	// Utilise getBlockOrNeighbor pour traverser les frontières de chunks
-	// et éviter les seams visibles aux jonctions.
-	//
-	// Retourne 1 si le bloc est éclairé, 0 s'il est ombré.
+	// Rayon diagonal (y+1, z-1) vérifie 9 blocs max.
+	// La valeur est stockée sur 6 bits (0-63) dans word0.
 	// ════════════════════════════════════════════════════════════════════
-	int computeSunblock(int bx, int by, int bz,
+	float computeSunblock(int bx, int by, int bz,
 						Chunk2 *n, Chunk2 *s, Chunk2 *e, Chunk2 *w,
 						Chunk2 *ne, Chunk2 *nw, Chunk2 *se, Chunk2 *sw) const
 	{
@@ -212,9 +206,9 @@ public:
 			dec -= 2;
 		}
 
-		if (i < 100)
-			return 0;
-		return 1;
+		// Clamp minimum à 37 (= 37/127 ≈ 0.29, comme BetterSpades)
+		if (i < 37) i = 37;
+		return (float)i / 127.0f;
 	}
 
 	// north = +Z, south = -Z, east = +X, west = -X
@@ -253,14 +247,20 @@ public:
 			int ao1 = computeVertexAO(x, y, z, faceDir, 1, north, south, east, west, ne, nw, se, sw);
 			int ao2 = computeVertexAO(x, y, z, faceDir, 2, north, south, east, west, ne, nw, se, sw);
 			int ao3 = computeVertexAO(x, y, z, faceDir, 3, north, south, east, west, ne, nw, se, sw);
-			int shade = computeSunblock(x, y, z, north, south, east, west, ne, nw, se, sw);
+			float sunF = computeSunblock(x, y, z, north, south, east, west, ne, nw, se, sw);
 
-			// Word 0 : position + face + shade + AO
+			// Quantize sunblock float (0.29-1.0) → 6 bits (0-63)
+			int sunQ = (int)(sunF * 63.0f);
+			if (sunQ > 63) sunQ = 63;
+			if (sunQ < 0) sunQ = 0;
+
+			// Word 0 : position + face + shade(1-bit legacy) + sun(6-bit) + AO
 			uint32_t word0 = (uint32_t)x
 				| ((uint32_t)y << 4)
 				| ((uint32_t)z << 10)
 				| ((uint32_t)faceDir << 14)
-				| ((uint32_t)shade << 17)
+				| ((uint32_t)(sunF < 0.79f ? 0 : 1) << 17)  // legacy 1-bit
+				| ((uint32_t)sunQ << 18)                     // 6-bit gradient
 				| ((uint32_t)ao0 << 24)
 				| ((uint32_t)ao1 << 26)
 				| ((uint32_t)ao2 << 28)

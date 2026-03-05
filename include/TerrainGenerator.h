@@ -77,12 +77,17 @@ public:
 
 	// ════════════════════════════════════════════════════════════════════
 	// Hash déterministe par position monde — remplace rand()
+	//
+	// BetterSpades utilise ms_rand() (séquentiel) → chaque bloc a un rng
+	// différent qui casse le pattern de l'onde triangulaire.
+	// Nous utilisons un hash positionnel avec amplitude élargie (0-23)
+	// pour que le bruit domine l'onde (amplitude 0-8 réduite).
 	// ════════════════════════════════════════════════════════════════════
 	static int posHash(int x, int y, int z)
 	{
 		int h = (x * 73856093) ^ (y * 19349663) ^ (z * 83492791);
 		if (h < 0) h = -h;
-		return h % 8;
+		return h % 24; // 0-23 (3× l'amplitude originale de BetterSpades)
 	}
 
 	static int lerpChannel(int a, int b, int amt)
@@ -91,7 +96,10 @@ public:
 	}
 
 	// ════════════════════════════════════════════════════════════════════
-	// map_dirt_color — exact BetterSpades (map.c:685-700)
+	// map_dirt_color — basé sur BetterSpades (map.c:685-700)
+	//
+	// Onde triangulaire RÉDUITE (2× au lieu de 4×) + hash ÉLARGI (0-23)
+	// → le bruit domine le pattern répétitif → pas de lignes visibles
 	// ════════════════════════════════════════════════════════════════════
 	static uint32_t dirtColor(int x, int y, int z)
 	{
@@ -110,9 +118,9 @@ public:
 		int blue  = lerpChannel(base & 0xFF, next & 0xFF, lerp_amt);
 
 		int rng = posHash(x, y, z);
-		red   += 4 * std::abs(mod8(x) - 4) + rng;
-		green += 4 * std::abs(mod8(z) - 4) + rng;
-		blue  += 4 * std::abs(mod8(invY) - 4) + rng;
+		red   += 2 * std::abs(mod8(x) - 4) + rng;
+		green += 2 * std::abs(mod8(z) - 4) + rng;
+		blue  += 2 * std::abs(mod8(invY) - 4) + rng;
 
 		return Chunk2::makeColor(red, green, blue);
 	}
@@ -122,10 +130,11 @@ public:
 	// ════════════════════════════════════════════════════════════════════
 	static uint32_t grassColor(int x, int y, int z)
 	{
+		// Base = DIRT_COLORS[0] = 0x506050 (R=80, G=96, B=80)
 		int rng = posHash(x, y, z);
-		int r = 70 + 4 * std::abs(mod8(x) - 4) + rng;
-		int g = 110 + 4 * std::abs(mod8(z) - 4) + rng;
-		int b = 70 + 4 * std::abs(mod8(CHUNK_SIZE_Y - 1 - y) - 4) + rng;
+		int r = 75 + 2 * std::abs(mod8(x) - 4) + rng;
+		int g = 92 + 2 * std::abs(mod8(z) - 4) + rng;
+		int b = 75 + 2 * std::abs(mod8(CHUNK_SIZE_Y - 1 - y) - 4) + rng;
 		return Chunk2::makeColor(r, g, b);
 	}
 
@@ -135,7 +144,7 @@ public:
 	static uint32_t stoneColor(int x, int y, int z)
 	{
 		int rng = posHash(x, y, z);
-		int base = 80 + 4 * std::abs(mod8(x) - 4) + rng;
+		int base = 80 + 2 * std::abs(mod8(x) - 4) + rng;
 		int r = base;
 		int g = base;
 		int b = base + 5;
