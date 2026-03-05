@@ -239,11 +239,11 @@ Version 32bit a de meilleur perf avec far plane 200 meme fog :
 
         32 bit 
             boucle  320 3.1
-            1 chunk 580 1.7
+            1 chunk 450 2.2
     
         8 bit 
             boucle  320 3.1
-            1 chunk 430 2.3
+            1 chunk 4.5 2.3
 
 
 
