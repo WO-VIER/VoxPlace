@@ -235,4 +235,15 @@ Version 32bit a de meilleur perf avec far plane 200 meme fog :
 	Avec i7 4712mq et hd graphic 4600 : sur la version 32 bit (123fps / 8.1 ms) et avec la version 8bit j'ai (117 / 8.6)
 	Avec un chunk 32(240 fps / 4.1) 8bit(210 fps / 4.8)
 
+    Avec amd radeon vega 8 (2gb vram plus récent):
+
+        32 bit 
+            boucle  320 3.1
+            1 chunk 580 1.7
+    
+        8 bit 
+            boucle  320 3.1
+            1 chunk 430 2.3
+
+
 
