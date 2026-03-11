@@ -9,36 +9,38 @@
 #include <cstdint>
 
 // ============================================================================
-// TerrainGenerator — Génère un relief naturel (style "elevation" organique)
+// TerrainGenerator — Génère un relief Minecraft-style avec fondu de couleurs
 //
-// Utilise plusieurs couches de bruit combinées :
-//
-//   1) Domain warp (déforme les coordonnées pour casser les motifs répétitifs)
-//   2) Continent noise (macro relief)
-//   3) Hill noise (collines intermédiaires)
-//   4) Ridged noise (massifs et crêtes)
+// Shape : plaines plates dominantes + collines localisées + terracing agressif
+//   1) Domain warp (déforme les coordonnées)
+//   2) Continent noise (macro relief réduit → plaines étendues)
+//   3) Hill noise (haute fréquence → collines localisées Minecraft)
+//   4) Ridged noise (montagnes rares)
 //   5) Detail noise (micro-relief)
+//   6) Terracing agressif en plaine (plateaux nets comme MC Beta)
 //
-// Les couleurs sont stockées en RGB direct (uint32_t) avec :
-//   - dirt_color_table[9] (gradient profondeur BetterSpades)
-//   - Onde triangulaire + hash déterministe par position
-//   - mod8() pour continuité aux coordonnées négatives
+// Couleurs : fondu naturel multi-couche
+//   - Herbe biome-aware (altitude + biome noise → vert-jaune / vert / gris-alpin)
+//   - Terre visible sur les pentes raides (slope >= 4)
+//   - dirt_color_table enrichie (brun chaud en surface)
+//   - Pierre claire en haute altitude
+//   - Onde triangulaire + hash déterministe par position (BetterSpades)
 // ============================================================================
 
 class TerrainGenerator
 {
 public:
-	int baseHeight = 22;
-	float continentAmp = 14.0f;
-	float hillAmp = 4.0f;
-	float mountainAmp = 10.0f;
-	float detailAmp = 0.8f;
+	int baseHeight = 25;
+	float continentAmp = 12.0f;    // Macro relief (plaines ↔ highlands)
+	float hillAmp = 8.0f;          // Collines localisées (±8 blocs)
+	float mountainAmp = 18.0f;     // Montagnes ridged
+	float detailAmp = 1.5f;        // Micro-relief visible
 
 	TerrainGenerator(int seed = 42)
 	{
 		continent.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
 		continent.SetSeed(seed);
-		continent.SetFrequency(0.0018f);
+		continent.SetFrequency(0.004f);  // Était 0.0018 → 1 cycle = 250 blocs (visible dans la map)
 		continent.SetFractalType(FastNoiseLite::FractalType_FBm);
 		continent.SetFractalOctaves(4);
 		continent.SetFractalLacunarity(2.0f);
@@ -46,15 +48,15 @@ public:
 
 		hills.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
 		hills.SetSeed(seed + 11);
-		hills.SetFrequency(0.0075f);
+		hills.SetFrequency(0.008f);  // 1 cycle ≈ 125 blocs → collines MC
 		hills.SetFractalType(FastNoiseLite::FractalType_FBm);
 		hills.SetFractalOctaves(3);
 		hills.SetFractalLacunarity(2.0f);
-		hills.SetFractalGain(0.55f);
+		hills.SetFractalGain(0.50f);
 
 		ridges.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
 		ridges.SetSeed(seed + 23);
-		ridges.SetFrequency(0.0042f);
+		ridges.SetFrequency(0.005f);  // Légèrement plus fréquent
 		ridges.SetFractalType(FastNoiseLite::FractalType_Ridged);
 		ridges.SetFractalOctaves(4);
 		ridges.SetFractalLacunarity(2.0f);
@@ -80,8 +82,8 @@ public:
 		warp.SetDomainWarpType(FastNoiseLite::DomainWarpType_OpenSimplex2);
 		warp.SetFractalType(FastNoiseLite::FractalType_DomainWarpProgressive);
 		warp.SetFractalOctaves(2);
-		warp.SetFrequency(0.0025f);
-		warp.SetDomainWarpAmp(18.0f);
+		warp.SetFrequency(0.003f);
+		warp.SetDomainWarpAmp(25.0f);  // Plus de déformation → casse les grilles
 	}
 
 	static float saturate(float v)
@@ -110,46 +112,52 @@ public:
 
 		float continentNoise = continent.GetNoise(warpedX, warpedZ);
 		float continent01 = 0.5f * (continentNoise + 1.0f);
-		float continentMask = smoothstep01((continent01 - 0.28f) / 0.58f);
-		float mountainMask = smoothstep01((continent01 - 0.60f) / 0.35f);
+
+		// mountainMask : seuil bas (0.45) pour que les montagnes apparaissent
+		// dans ~30% du terrain (au lieu de ~10% avec 0.60)
+		float mountainMask = smoothstep01((continent01 - 0.45f) / 0.35f);
 
 		float hillNoise = hills.GetNoise(warpedX, warpedZ);
 		float ridgeNoise = ridges.GetNoise(warpedX, warpedZ);
 		float detailNoise = detail.GetNoise(wx, wz);
 
+		// ── Base + continent ──
+		// Le continent donne le macro-relief : plaines basses ↔ highlands
 		float h = static_cast<float>(baseHeight);
 		h += (continent01 - 0.5f) * continentAmp;
-		h += hillNoise * hillAmp * (0.35f + 0.65f * continentMask);
 
+		// ── Collines (±hillAmp) ──
+		// PAS de abs() : on veut des vallées ET des collines
+		// → variation réelle de ±8 blocs, c'est ça qui donne le look MC
+		h += hillNoise * hillAmp;
+
+		// ── Montagnes ridged ──
+		// Apparaissent où mountainMask > 0 (continent01 > 0.45)
+		// Ridged² donne des pics pointus
 		float ridge01 = 0.5f * (ridgeNoise + 1.0f);
 		float ridgeShape = ridge01 * ridge01;
 		h += ridgeShape * mountainAmp * mountainMask;
 
+		// ── Micro-détail ──
 		h += detailNoise * detailAmp;
 
-		// Applatit les plaines pour un look plus "Minecraft-like" tout en gardant
-		// des zones montagneuses localisées.
-		float plainMask = 1.0f - mountainMask;
-		float terraceMix = 0.45f * plainMask;
-		float terracedHeight = std::floor(h * 0.5f) * 2.0f;
-		h = h * (1.0f - terraceMix) + terracedHeight * terraceMix;
 		return std::clamp(static_cast<int>(h), 1, static_cast<int>(CHUNK_SIZE_Y) - 1);
 	}
 
 	// ════════════════════════════════════════════════════════════════════
-	// dirt_color_table — exact copie de BetterSpades (map.c:681-682)
-	// 9 couleurs interpolées par profondeur Y (surface → fond)
+	// dirt_color_table — enrichie par rapport à BetterSpades
+	// Surface plus chaude (brun-ocre) → fond sombre
 	// ════════════════════════════════════════════════════════════════════
 	static constexpr int DIRT_COLORS[9] = {
-		0x506050, // 0: Surface — gris-vert
-		0x605848, // 1: Brun clair
-		0x705040, // 2: Brun
-		0x804838, // 3: Brun-rouge
-		0x704030, // 4: Brun foncé
-		0x603828, // 5: Terre foncée
-		0x503020, // 6: Terre très foncée
-		0x402818, // 7: Presque noir
-		0x302010  // 8: Fond
+		0x6B5A34, // 0: Surface — brun-ocre chaud (était gris-vert 0x506050)
+		0x625240, // 1: Brun clair chaud
+		0x5A4838, // 2: Brun
+		0x7A4430, // 3: Brun-rouge
+		0x6A3C2A, // 4: Brun foncé
+		0x5A3424, // 5: Terre foncée
+		0x4A2C1C, // 6: Terre très foncée
+		0x3A2414, // 7: Presque noir
+		0x2A1C0C  // 8: Fond
 	};
 
 	// ════════════════════════════════════════════════════════════════════
@@ -189,18 +197,18 @@ public:
 		return posRand8(x, y, z) / 2;
 	}
 
-	static constexpr int TERRAIN_WAVE_XZ = 1;
-	static constexpr int TERRAIN_WAVE_Y = 2;
-	static constexpr int GRASS_COLORS[3] = {
-		0x336633, // ancien index 42 (herbe vive)
-		0x2E592E, // ancien index 43 (herbe moyenne)
-		0x294D29  // ancien index 44 (herbe sombre)
-	};
-	static constexpr int STONE_COLORS[3] = {
-		0x66666B, // ancien index 45 (pierre claire)
-		0x59595E, // ancien index 46 (pierre)
-		0x4D4D52  // ancien index 47 (pierre sombre)
-	};
+	// ════════════════════════════════════════════════════════════════════
+	// Micro-variation : RNG pur par position (pas d'onde triangulaire)
+	// Chaque bloc reçoit un shift pseudo-aléatoire sur chaque canal RGB
+	// → UNE couleur perçue globalement, mais chaque bloc est unique
+	// → Pas de motif visible (contrairement à mod8 qui faisait des lignes)
+	// ════════════════════════════════════════════════════════════════════
+
+	// UNE couleur de base herbe — vert naturel (ton moyen, pas trop vif)
+	static constexpr int GRASS_BASE = 0x4A7A2E;
+
+	// UNE couleur de base pierre — gris neutre
+	static constexpr int STONE_BASE = 0x5E5E64;
 
 	static uint32_t colorFromHex(int rgb)
 	{
@@ -211,8 +219,33 @@ public:
 	}
 
 	// ════════════════════════════════════════════════════════════════════
-	// map_dirt_color — style BetterSpades adouci pour terrain procédural
-	// Onde triangulaire adoucie: X/Z léger + Y un peu plus marqué.
+	// Micro-variation RGB — hash RNG uniquement
+	//
+	// Prend une couleur de base et ajoute un shift aléatoire par canal.
+	// Utilise 3 hash avec des seeds différentes pour R, G, B
+	// → variation indépendante par canal, pas de motif visible.
+	// ════════════════════════════════════════════════════════════════════
+	static uint32_t microVary(int baseHex, int x, int y, int z)
+	{
+		int r = (baseHex >> 16) & 0xFF;
+		int g = (baseHex >> 8) & 0xFF;
+		int b = baseHex & 0xFF;
+
+		// 3 hash indépendants pour R, G, B (seeds différentes)
+		int rngR = posRand8(x, y, z);           // 0-7
+		int rngG = posRand8(x + 37, y, z + 59); // 0-7, seed décalée
+		int rngB = posRand8(x + 71, y + 13, z); // 0-7, seed décalée
+
+		r += rngR - 3;  // shift ±3-4 (centré)
+		g += rngG - 3;
+		b += rngB - 3;
+
+		return Chunk2::makeColor(r, g, b);
+	}
+
+	// ════════════════════════════════════════════════════════════════════
+	// map_dirt_color — gradient vertical (surface chaude → fond sombre)
+	// + micro-variations par bloc
 	// ════════════════════════════════════════════════════════════════════
 	static uint32_t dirtColor(int x, int y, int z)
 	{
@@ -230,60 +263,79 @@ public:
 		int green = lerp(base & 0x00FF00, next & 0x00FF00, lerp_amt) >> 8;
 		int blue = lerp(base & 0x0000FF, next & 0x0000FF, lerp_amt);
 
-		int rng = terrainRand(x, y, z);
-		red += TERRAIN_WAVE_XZ * std::abs(mod8(x) - 4) + rng;
-		green += TERRAIN_WAVE_XZ * std::abs(mod8(z) - 4) + rng;
-		blue += TERRAIN_WAVE_Y * std::abs(mod8(invY) - 4) + rng;
+		// Micro-variation RNG pur (pas d'onde triangulaire)
+		int rngR = posRand8(x, y, z);
+		int rngG = posRand8(x + 37, y, z + 59);
+		int rngB = posRand8(x + 71, y + 13, z);
+		red += rngR - 3;
+		green += rngG - 3;
+		blue += rngB - 3;
 
 		return Chunk2::makeColor(red, green, blue);
 	}
 
 	// ════════════════════════════════════════════════════════════════════
-	// Couleur herbe — base palette "main" + variation biome
+	// Couleur herbe — UNE couleur de base + micro-variations
+	//
+	// Tous les blocs d'herbe ont la même couleur perçue (GRASS_BASE),
+	// mais chaque bloc individuel a un RGB légèrement différent.
+	// Le biome noise module très subtilement la teinte (±5 sur le vert).
 	// ════════════════════════════════════════════════════════════════════
 	static uint32_t grassColor(int x, int y, int z, float biome01)
 	{
-		int grassVariant = 0;
-		if (y < 15)
-			grassVariant = 2;
-		else if (y < 22)
-			grassVariant = 1;
+		int r = (GRASS_BASE >> 16) & 0xFF;
+		int g = (GRASS_BASE >> 8) & 0xFF;
+		int b = GRASS_BASE & 0xFF;
 
-		uint32_t base = colorFromHex(GRASS_COLORS[grassVariant]);
-		int r = Chunk2::colorR(base);
-		int g = Chunk2::colorG(base);
-		int b = Chunk2::colorB(base);
+		// Micro-variation RNG pur (3 hash indépendants)
+		int rngR = posRand8(x, y, z);
+		int rngG = posRand8(x + 37, y, z + 59);
+		int rngB = posRand8(x + 71, y + 13, z);
 
-		int invY = CHUNK_SIZE_Y - 1 - y;
-		int rng = terrainRand(x, y, z);
-		int lush = static_cast<int>((biome01 - 0.5f) * 18.0f);
+		r += rngR - 3;
+		g += rngG - 3;
+		b += rngB - 3;
 
-		r += TERRAIN_WAVE_XZ * std::abs(mod8(x) - 4) + rng + lush / 3;
-		g += TERRAIN_WAVE_XZ * std::abs(mod8(z) - 4) + rng + lush;
-		b += TERRAIN_WAVE_Y * std::abs(mod8(invY) - 4) + rng + lush / 4;
+		// Biome : subtile modulation du vert (±5 max)
+		int lush = static_cast<int>((biome01 - 0.5f) * 10.0f);
+		g += lush;
+
 		return Chunk2::makeColor(r, g, b);
 	}
 
 	// ════════════════════════════════════════════════════════════════════
-	// Couleur pierre — reprend les 3 teintes de la branche main
+	// Couleur terre/herbe transitionnelle — entre surface herbe et dirt
+	// Mélange la teinte herbe et la teinte terre pour un fondu naturel
+	// ════════════════════════════════════════════════════════════════════
+	static uint32_t transitionColor(int x, int y, int z, float biome01)
+	{
+		uint32_t grass = grassColor(x, y, z, biome01);
+		uint32_t dirt = dirtColor(x, y, z);
+
+		// 50/50 entre herbe et terre
+		int r = (Chunk2::colorR(grass) + Chunk2::colorR(dirt)) / 2;
+		int g = (Chunk2::colorG(grass) + Chunk2::colorG(dirt)) / 2;
+		int b = (Chunk2::colorB(grass) + Chunk2::colorB(dirt)) / 2;
+		return Chunk2::makeColor(r, g, b);
+	}
+
+	// ════════════════════════════════════════════════════════════════════
+	// Couleur pierre — UNE couleur de base + micro-variations
 	// ════════════════════════════════════════════════════════════════════
 	static uint32_t stoneColor(int x, int y, int z)
 	{
-		int variant = posRand8(x, y, z) % 3;
-		uint32_t baseColor = colorFromHex(STONE_COLORS[variant]);
-		int r = Chunk2::colorR(baseColor);
-		int g = Chunk2::colorG(baseColor);
-		int b = Chunk2::colorB(baseColor);
-		int rng = terrainRand(x, y, z);
-		int grain = std::abs(mod8(x + z) - 4);
-		r += grain / 2 + rng;
-		g += grain / 2 + rng;
-		b += grain / 2 + rng + 1;
-		return Chunk2::makeColor(r, g, b);
+		return microVary(STONE_BASE, x, y, z);
 	}
 
 	// ════════════════════════════════════════════════════════════════════
-	// Remplit un chunk avec le terrain (herbe/terre/pierre en RGB direct)
+	// Remplit un chunk avec le terrain — fondu couleur Minecraft-style
+	//
+	// Couches de haut en bas :
+	//   height     : herbe (ou terre si pente >= 4, ou pierre si pente >= 7)
+	//   height - 1 : herbe/terre transition (ou terre si pente élevée)
+	//   height - 2..depth : terre (dirtColor)
+	//   dessous   : pierre (stoneColor, claire si haute altitude)
+	//   y=0       : bedrock (pierre)
 	// ════════════════════════════════════════════════════════════════════
 	void fillChunk(Chunk2 &chunk) const
 	{
@@ -298,23 +350,36 @@ public:
 					static_cast<float>(worldX),
 					static_cast<float>(worldZ)) + 1.0f);
 
+				// Calcul de la pente (gradient local)
 				int eastH = getHeight(worldX + 1, worldZ);
 				int westH = getHeight(worldX - 1, worldZ);
 				int northH = getHeight(worldX, worldZ + 1);
 				int southH = getHeight(worldX, worldZ - 1);
 				int slope = std::abs(eastH - westH) + std::abs(northH - southH);
 
+				// Classification surface :
+				// slope >= 7 ou altitude >= 52 → rocher pur
+				// slope >= 4 → terre visible (flancs raides)
+				// slope 4-6 avec 50% chance → mélange terre/herbe
 				bool rockySurface = false;
+				bool dirtSurface = false;
 				if (slope >= 7)
 					rockySurface = true;
-				if (height >= 54)
+				else if (slope >= 4)
+					dirtSurface = true;
+				if (height >= 52)
 					rockySurface = true;
 
+				// Profondeur terre variable par biome
 				int dirtDepth = 3;
 				if (biome01 > 0.65f)
+					dirtDepth = 5;
+				else if (biome01 > 0.45f)
 					dirtDepth = 4;
 				if (rockySurface)
 					dirtDepth = 1;
+				else if (dirtSurface)
+					dirtDepth = 2;
 
 				// Bedrock (y=0)
 				chunk.blocks[x][0][z] = stoneColor(worldX, 0, worldZ);
@@ -323,17 +388,41 @@ public:
 				{
 					if (y == height)
 					{
+						// ── Couche de surface ──
 						if (rockySurface)
+						{
 							chunk.blocks[x][y][z] = stoneColor(worldX, y, worldZ);
+						}
+						else if (dirtSurface)
+						{
+							// Pentes moyennes : 50% terre / 50% transition herbe-terre
+							if (posRand8(worldX, y, worldZ) < 4)
+								chunk.blocks[x][y][z] = dirtColor(worldX, y, worldZ);
+							else
+								chunk.blocks[x][y][z] = transitionColor(worldX, y, worldZ, biome01);
+						}
 						else
+						{
 							chunk.blocks[x][y][z] = grassColor(worldX, y, worldZ, biome01);
+						}
+					}
+					else if (y == height - 1 && !rockySurface)
+					{
+						// ── Couche de transition (juste sous la surface) ──
+						// Herbe-terre ou terre pure selon pente
+						if (dirtSurface)
+							chunk.blocks[x][y][z] = dirtColor(worldX, y, worldZ);
+						else
+							chunk.blocks[x][y][z] = transitionColor(worldX, y, worldZ, biome01);
 					}
 					else if (y > height - dirtDepth)
 					{
+						// ── Couches de terre ──
 						chunk.blocks[x][y][z] = dirtColor(worldX, y, worldZ);
 					}
 					else
 					{
+						// ── Pierre ──
 						chunk.blocks[x][y][z] = stoneColor(worldX, y, worldZ);
 					}
 				}

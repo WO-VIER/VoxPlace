@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <Crosshair.h>
 
 // ImGui
 #include <imgui.h>
@@ -55,7 +56,7 @@ int worldBorderPaddingChunks = 2;
 bool useAO = true;
 bool debugSunblockOnly = false;
 float placedBlockColor[3] = {0.62f, 0.62f, 0.62f};
-bool showCrosshair = true;
+Crosshair crosshair;
 
 constexpr int WORLD_CHUNK_MIN_X = -10;
 constexpr int WORLD_CHUNK_MAX_X_EXCLUSIVE = 10;
@@ -587,6 +588,9 @@ int main()
 	// Configuration OpenGL
 	glEnable(GL_DEPTH_TEST);
 	glClearColor(FOG_COLOR.r, FOG_COLOR.g, FOG_COLOR.b, 1.0f);
+
+	// Crosshair Minecraft
+	crosshair.init("assets/crosshair.png");
 	glfwSwapInterval(0);
 	// ============================================================================
 	// IMGUI INIT
@@ -760,8 +764,11 @@ int main()
 										cd.chunk->chunkZ * CHUNK_SIZE_Z));
 			cd.chunk->render();
 		}
-		// Afficher le résultat upscalé
-		LowResRenderer::endFrame();
+		// Afficher le résultat upscalé (taille actuelle de la fenêtre)
+		int currentFbW = 0;
+		int currentFbH = 0;
+		glfwGetFramebufferSize(g_window, &currentFbW, &currentFbH);
+		LowResRenderer::endFrame(currentFbW, currentFbH);
 
 		// ============================================================
 		// IMGUI (rendu après LowResRenderer pour être en full res)
@@ -809,32 +816,12 @@ int main()
 		ImGui::Checkbox("Ambient Occlusion", &useAO);
 		ImGui::Checkbox("Sunblock debug", &debugSunblockOnly);
 		ImGui::ColorEdit3("Placed block color", placedBlockColor);
-		ImGui::Checkbox("Crosshair", &showCrosshair);
+		ImGui::Checkbox("Crosshair", &crosshair.visible);
 		ImGui::Text("Left click: break block");
 		ImGui::Text("Right click: place block");
 		ImGui::End();
 
-		if (showCrosshair)
-		{
-			ImDrawList *drawList = ImGui::GetForegroundDrawList();
-			ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-			float centerX = displaySize.x * 0.5f;
-			float centerY = displaySize.y * 0.5f;
-			float halfLen = 7.0f;
-			float gap = 3.0f;
-			ImU32 colOutline = IM_COL32(0, 0, 0, 220);
-			ImU32 colMain = IM_COL32(255, 255, 255, 220);
-
-			drawList->AddLine(ImVec2(centerX - halfLen - 1.0f, centerY), ImVec2(centerX - gap + 1.0f, centerY), colOutline, 3.0f);
-			drawList->AddLine(ImVec2(centerX + gap - 1.0f, centerY), ImVec2(centerX + halfLen + 1.0f, centerY), colOutline, 3.0f);
-			drawList->AddLine(ImVec2(centerX, centerY - halfLen - 1.0f), ImVec2(centerX, centerY - gap + 1.0f), colOutline, 3.0f);
-			drawList->AddLine(ImVec2(centerX, centerY + gap - 1.0f), ImVec2(centerX, centerY + halfLen + 1.0f), colOutline, 3.0f);
-
-			drawList->AddLine(ImVec2(centerX - halfLen, centerY), ImVec2(centerX - gap, centerY), colMain, 1.6f);
-			drawList->AddLine(ImVec2(centerX + gap, centerY), ImVec2(centerX + halfLen, centerY), colMain, 1.6f);
-			drawList->AddLine(ImVec2(centerX, centerY - halfLen), ImVec2(centerX, centerY - gap), colMain, 1.6f);
-			drawList->AddLine(ImVec2(centerX, centerY + gap), ImVec2(centerX, centerY + halfLen), colMain, 1.6f);
-		}
+		crosshair.render(g_window);
 
 		ImGui::Render();
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -852,6 +839,7 @@ int main()
 	{
 		delete chunk;
 	}
+	crosshair.cleanup();
 	LowResRenderer::cleanup();
 	glfwTerminate();
 

@@ -202,12 +202,14 @@ void main()
 	/**
 	 * Termine le rendu et affiche le résultat upscalé sur l'écran
 	 * Appeler après avoir rendu la scène
+	 * @param currentW Largeur actuelle du framebuffer (depuis glfwGetFramebufferSize)
+	 * @param currentH Hauteur actuelle du framebuffer
 	 */
-	inline void endFrame()
+	inline void endFrame(int currentW, int currentH)
 	{
 		// Revenir au framebuffer par défaut (écran)
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		glViewport(0, 0, screenWidth, screenHeight);
+		glViewport(0, 0, currentW, currentH);
 		glClear(GL_COLOR_BUFFER_BIT);
 		glDisable(GL_DEPTH_TEST);
 
