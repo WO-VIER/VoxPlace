@@ -8,7 +8,6 @@ option(ENABLE_GL_DEBUG "Enable OpenGL debug output for native builds" ON)
 option(ENABLE_ASAN "Enable Address Sanitizer for debugging" OFF)
 
 if(NOT EMSCRIPTEN)
-    # Disable optimizations and warnings for a raw build
     add_compile_options(-O0 -w)
 
     if(ENABLE_ASAN)
@@ -16,42 +15,54 @@ if(NOT EMSCRIPTEN)
         add_link_options(-fsanitize=address)
     endif()
 endif()
-# Native vs Emscripten handling
+
 if(NOT EMSCRIPTEN)
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(GLFW REQUIRED glfw3)
+    pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
+    pkg_check_modules(ENET QUIET IMPORTED_TARGET libenet)
+    if(NOT ENET_FOUND)
+        pkg_check_modules(ENET REQUIRED IMPORTED_TARGET enet)
+    endif()
     set(OpenGL_GL_PREFERENCE "GLVND")
     find_package(OpenGL REQUIRED)
 else()
-    # For Emscripten builds we won't use system pkg-config glfw3.
-    # Use Emscripten ports via linker flags below instead.
-    set(GLFW_LIBRARIES "")
-    set(GLFW_INCLUDE_DIRS "")
     set(OPENGL_gl_LIBRARY "")
 endif()
 
-# sources
-set(SOURCES
+set(CORE_SOURCES
+    src/WorldProtocol.cpp
+)
+
+add_library(voxplace_core STATIC ${CORE_SOURCES})
+
+target_include_directories(voxplace_core PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/dependencies
+    ${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
+)
+
+set(CLIENT_SOURCES
     src/main3.cpp
+    src/WorldClient.cpp
     src/profiler.cpp
-    # ImGui core
     thirdparty/imgui/imgui.cpp
     thirdparty/imgui/imgui_draw.cpp
     thirdparty/imgui/imgui_tables.cpp
     thirdparty/imgui/imgui_widgets.cpp
     thirdparty/imgui/imgui_demo.cpp
-    # ImGui backends (GLFW + OpenGL3)
     thirdparty/imgui/backends/imgui_impl_glfw.cpp
     thirdparty/imgui/backends/imgui_impl_opengl3.cpp
 )
+
 if(NOT EMSCRIPTEN)
-    list(APPEND SOURCES src/glad.c)
+    list(APPEND CLIENT_SOURCES src/glad.c)
     if(ENABLE_GL_DEBUG)
-        list(APPEND SOURCES src/errorReporting.cpp)
+        list(APPEND CLIENT_SOURCES src/errorReporting.cpp)
     endif()
 endif()
 
-add_executable(VoxPlace ${SOURCES})
+add_executable(VoxPlace ${CLIENT_SOURCES})
 
 if(NOT EMSCRIPTEN)
     if(ENABLE_GL_DEBUG)
@@ -59,19 +70,18 @@ if(NOT EMSCRIPTEN)
     endif()
 endif()
 
-# includes
 target_include_directories(VoxPlace PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/dependencies
     ${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
     ${CMAKE_SOURCE_DIR}/thirdparty/imgui
     ${CMAKE_SOURCE_DIR}/thirdparty/imgui/backends
-    ${GLFW_INCLUDE_DIRS}
 )
 
+target_link_libraries(VoxPlace PRIVATE voxplace_core)
+
 if(EMSCRIPTEN)
-    # build for web: prefer WebGL2 and use the GLFW port
     set_target_properties(VoxPlace PROPERTIES SUFFIX ".html")
     target_compile_definitions(VoxPlace PRIVATE EMSCRIPTEN_WEB)
     target_link_options(VoxPlace PRIVATE
@@ -83,8 +93,27 @@ if(EMSCRIPTEN)
     )
 else()
     target_link_libraries(VoxPlace PRIVATE
-        ${GLFW_LIBRARIES}
+        PkgConfig::GLFW
+        PkgConfig::ENET
         ${OPENGL_gl_LIBRARY}
     )
-    add_definitions(${GLFW_CFLAGS_OTHER})
 endif()
+
+set(SERVER_SOURCES
+    src/server_main.cpp
+    src/WorldServer.cpp
+)
+
+add_executable(VoxPlaceServer ${SERVER_SOURCES})
+
+target_include_directories(VoxPlaceServer PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/dependencies
+    ${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
+)
+
+target_link_libraries(VoxPlaceServer PRIVATE
+    voxplace_core
+    PkgConfig::ENET
+)

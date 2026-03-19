@@ -916,46 +916,138 @@ Le serveur doit être pensé comme un OS gérant des ressources limitées : **bu
 
 ## 8. Architecture VoxPlace : Lazy Generation
 
-**Concept Core :** Moteur Client-Serveur où la génération procédurale (Perlin Noise) est pilotée dynamiquement par l'exploration et le placement de blocs par les joueurs. Pas de structures prédéfinies.
+**État implémenté (mars 2026) :** VoxPlace tourne maintenant avec un vrai **serveur ENet autoritaire** (`VoxPlaceServer`) et un **client de rendu** (`VoxPlace`) qui ne génère plus le monde localement.
 
-### Spatial Hashing (Table de Hachage)
+### Découplage data / rendu
 
-Le monde n'alloue de la mémoire **QUE** pour les chunks qui existent. Recherche en `O(1)`.
+La donnée de chunk est sortie de `Chunk2` dans `VoxelChunkData` :
 
-**Méthode recommandée (avec struct custom) :**
 ```cpp
-struct ChunkCoord {
-    int x, z;
-    bool operator==(const ChunkCoord& o) const {
-        return x == o.x && z == o.z;
-    }
+struct VoxelChunkData {
+    int chunkX, chunkZ;
+    uint64_t revision;
+    uint32_t blocks[16][64][16];
 };
-
-struct ChunkHash {
-    std::size_t operator()(const ChunkCoord& pos) const {
-        return std::hash<int>()(pos.x) ^ (std::hash<int>()(pos.z) << 1);
-    }
-};
-
-std::unordered_map<ChunkCoord, Chunk2*, ChunkHash> activeChunks;
 ```
 
-**Méthode actuelle (implémentation simplifiée dans `main3.cpp`) :**
-```cpp
-// Clé int64_t par bit shift — plus simple, pas besoin de struct/hash
-std::unordered_map<int64_t, Chunk2*> chunkMap;
+- `VoxelChunkData` est partagé entre client et serveur.
+- `Chunk2` hérite maintenant de `VoxelChunkData` et ne garde que :
+- l'état OpenGL (`ssbo`, `vao`)
+- les flags de rebuild (`needsMeshRebuild`, `isEmpty`)
+- le meshing (`meshGenerate`) et le rendu (`render`)
 
-inline int64_t chunkKey(int cx, int cz) {
-    return ((int64_t)cx << 32) | ((int64_t)cz & 0xFFFFFFFF);
-}
+### Processus séparés
+
+- `VoxPlaceServer` :
+- stocke le monde autoritaire dans une `unordered_map<int64_t, VoxelChunkData>`
+- valide les actions `place/break`
+- gère la frontière du monde
+- diffuse les snapshots et block updates via ENet
+
+- `VoxPlace` :
+- envoie des `ChunkRequest` au serveur
+- reçoit des `ChunkSnapshot` et `BlockUpdateBroadcast`
+- reconstruit des `Chunk2` locaux pour le rendu
+- reste clampé dans la **zone jouable** fournie par le serveur
+
+### Zone jouable vs zone générée
+
+Le serveur maintient deux bornes distinctes :
+
+```cpp
+struct WorldFrontier {
+    ChunkBounds playableBounds;
+    ChunkBounds generatedBounds;
+    int paddingChunks;
+};
 ```
 
-### Trigger de Génération : `setBlock`
-- Le déclencheur n'est **plus** le déplacement, mais la **modification du monde**.
-- Si un joueur pose un bloc en limite de chunk (ex: `x == 15`), le serveur vérifie la `unordered_map`. Si le chunk voisin n'existe pas, il est instancié **asynchroneusement** via le Perlin Noise.
-- **Gestion du Vide :** Les chunks non générés sont traités comme des **murs invisibles** (Solid Colliders) pour empêcher les joueurs de tomber dans le vide.
+- `playableBounds` : zone où les actions joueur sont **acceptées**
+- `generatedBounds` : zone générée visible, plus grande, qui sert de **padding visuel**
+- le client est bloqué physiquement sur `playableBounds`
+- le fog masque la transition avec `generatedBounds`
+- le fog actif reste un fog simple piloté par la **render distance** côté client
 
-> ⚠️ **État actuel :** Pas encore de lazy generation. Tous les 400 chunks sont pré-générés au démarrage de façon synchrone.
+### Bootstrap actuel
+
+Première milestone volontairement simple :
+
+- zone jouable initiale : `3x3` chunks
+- padding généré : `2` chunks par côté
+- zone générée initiale : `7x7` chunks
+- générateur actif au boot : `SkyblockGenerator`
+
+Le terrain procédural existe toujours via `TerrainGenerator` et `TerrainChunkGenerator`, mais le bootstrap réseau démarre d'abord sur une skyblock pour valider la pipeline serveur/client.
+
+### Multithreading de génération
+
+Le serveur utilise :
+
+- `1` thread principal autoritaire pour ENet, tick, validation et intégration du monde
+- un **pool dynamique de workers** pour générer les chunks en arrière-plan
+
+Formule actuelle :
+
+```cpp
+workerCount = clamp(hardware_concurrency() - 2, 2, 8)
+```
+
+- fallback à `4` si `hardware_concurrency() == 0`
+- pas de `16` threads fixes hardcodés
+- les workers génèrent des chunks isolés et ne touchent jamais l'état global directement
+
+### Expansion par activité spatiale
+
+Le monde ne grandit ni sur le déplacement seul, ni sur le spam d'un seul chunk.
+
+- chaque chunk jouable possède un booléen `hasPlayerActivity`
+- il passe à `true` à la première action valide `place/break`
+- il reste actif pour toute la session
+
+La règle actuelle d'expansion est :
+
+```cpp
+activeChunkCount >= perimeterChunkCount
+perimeterChunkCount = 4 * sideChunks - 4
+```
+
+Exemple :
+
+- zone jouable `3x3` → périmètre `8`
+- dès que `8` chunks jouables différents ont été utilisés → expansion à `5x5`
+
+Effet d'une expansion :
+
+- `playableBounds` gagne `+1` anneau
+- `generatedBounds` est recalculé comme `playableBounds + padding`
+- le serveur planifie en workers uniquement les nouveaux chunks nécessaires
+- le serveur broadcast la nouvelle `WorldFrontier`
+- `WorldFrontier` transporte aussi `activePlayableChunkCount / requiredActiveChunkCount` pour afficher la progression réelle dans l'UI client
+
+### Streaming réseau
+
+Messages déjà implémentés dans `WorldProtocol` :
+
+- `Hello`
+- `WorldFrontier`
+- `ChunkRequest`
+- `ChunkSnapshot`
+- `ChunkDrop`
+- `BlockActionRequest`
+- `BlockUpdateBroadcast`
+
+Choix retenus pour la milestone 1 :
+
+- snapshots chunk en **`uint32_t` brut**
+- actions joueur en **palette index 32 couleurs**
+- conversion `paletteIndex -> finalColor` côté serveur
+
+### Budgets actuels
+
+- serveur : `20 TPS`
+- intégration max : `4` chunks générés par tick
+- envoi réseau max : `5` chunks par joueur et par tick
+- client : `1` rebuild de chunk max par frame pour lisser les spikes
 
 ---
 
@@ -1002,16 +1094,18 @@ Demander au client de générer les chunks à partir du Seed :
 - [x] **Frustum Culling** — `Frustum.h`, test AABB vs 6 plans, compteur ImGui ✅
 - [x] **Fog** — Fog linéaire décommenté, sliders ImGui (fogStart/fogEnd) ✅
 - [x] **Ambient Occlusion** — Per-vertex AO, 4×2 bits packés, AO_CURVE interpolée ✅
+- [x] **Front-to-back Sorting** — Trier les chunks par distance à la caméra ✅
+- [x] **Génération serveur** — Serveur ENet autoritaire + bootstrap skyblock ✅
+- [x] **Séparation client/serveur** — `VoxPlace` + `VoxPlaceServer` ✅
+- [x] **Load/unload dynamique** — `ChunkRequest` / `ChunkDrop` autour de la caméra ✅
+- [x] **Dirty flag rebuild** — Budget client à 1 rebuild chunk / frame ✅
 - [x] ~~**Z-Prepass**~~ — ❌ Pas rentable actuellement. À réévaluer après AO + full res.
-- [ ] **Front-to-back Sorting** — Trier les chunks par distance à la caméra (réduit overdraw)
 - [ ] **Résolution dynamique** — Toggle PS1 640×360 ↔ Full HD 1920×1080 (F11)
 - [ ] **Indirect Rendering** — `glMultiDrawArraysIndirect` : 1 seul draw call pour tous les chunks
 - [ ] **Chunk Sections** — Diviser le chunk en sous-sections de 16³ (skip sections vides)
 - [ ] **LODs** — Level of Detail : fusionner les blocs éloignés (2×2 puis 4×4) pour simplifier la géométrie
-- [ ] **Génération serveur** — Lazy generation côté serveur
-- [ ] **Multithreading** — Thread pool sans mutex pour `meshGenerate()` et `fillChunk()`
-- [ ] **Dirty flag rebuild** — Max 1 chunk rebuild par frame
-- [ ] **Load/unload dynamique** — Chunks chargés par render distance autour de la caméra
+- [ ] **Terrain multijoueur complet** — Remplacer le bootstrap skyblock par `TerrainChunkGenerator`
+- [ ] **Multithreading mesh client** — Passer `meshGenerate()` hors du thread principal OpenGL
 - [ ] **Day/Night Cycle** — Interpolation lumière + skybox dynamique
 
 ---
@@ -1774,6 +1868,66 @@ Résultat : 1 bit dans le packing → fragment shader multiplie `color *= 0.7` s
 
 ---
 
+## 11h. Implémentation ENet actuelle (mars 2026)
+
+### Cibles CMake
+
+- `voxplace_core` : types partagés (`VoxelChunkData`, `WorldFrontier`, `WorldProtocol`)
+- `VoxPlace` : client OpenGL + ENet + cache de chunks de rendu
+- `VoxPlaceServer` : serveur headless ENet + workers de génération
+
+### Pipeline de connexion
+
+1. Le client se connecte au serveur ENet
+2. Il envoie `Hello`
+3. Le serveur répond avec `Hello` + `WorldFrontier`
+4. Le client calcule les chunks visibles dans `generatedBounds`
+5. Il envoie des `ChunkRequest`
+6. Le serveur répond avec des `ChunkSnapshot`
+7. Le client reconstruit les `Chunk2` locaux et les mesh avec un budget de `1` rebuild par frame
+
+### Validation gameplay
+
+- `place/break` accepté seulement si la cible est dans `playableBounds`
+- hors `playableBounds` : rejet immédiat côté serveur
+- la couleur finale vient d'une palette 32 couleurs hardcodée partagée
+
+### Expansion retenue
+
+Le serveur n'agrandit pas le monde en fonction de la proximité du bord, mais selon la **dispersion de l'activité joueur** :
+
+```cpp
+activeChunkCount >= perimeterChunkCount
+perimeterChunkCount = 4 * sideChunks - 4
+```
+
+- `activeChunkCount` = nombre de chunks jouables distincts déjà touchés par au moins une action valide
+- `sideChunks` = largeur actuelle de `playableBounds`
+- si la condition est vraie : `playableBounds += 1 anneau`
+- puis `generatedBounds = playableBounds + padding`
+
+### Pourquoi cette formule
+
+- évite les seuils arbitraires du style "100 actions"
+- empêche un joueur de faire grossir le monde en spammant le chunk central
+- force une expansion liée à l'occupation réelle de l'espace jouable
+- scale naturellement avec la taille du monde
+
+### Smoke tests validés
+
+- `VoxPlace` et `VoxPlaceServer` compilent tous les deux via CMake
+- le serveur démarre en headless, bootstrappe `49` chunks (`7x7`)
+- un mini client ENet headless reçoit bien la `WorldFrontier`
+- un mini client ENet headless a déclenché une expansion valide via `8` chunks actifs distincts
+- largeur constatée pendant le smoke test :
+- `playableBounds = 3`
+- `generatedBounds = 7`
+- après expansion :
+- `playableBounds = 5`
+- `generatedBounds = 9`
+
+---
+
 ## 5/03 Mise à jour esthétique BetterSpades (mars 2026)
 
 - Convention conservée dans VoxPlace : `north = +Z`, `south = -Z`.
@@ -1793,7 +1947,7 @@ Résultat : 1 bit dans le packing → fragment shader multiplie `color *= 0.7` s
 - Profil terrain ajusté vers un rendu plus "Minecraft-like" : relief moins agressif + plaines plus étendues via terracing doux.
 - `Render Dist (chunks)` ajouté dans ImGui : le `far plane` suit automatiquement la distance choisie.
 - Culling chunks aligné fog : un chunk est dessiné dès que son bord proche peut entrer dans la zone de fog (moins de "tranches" visibles).
-- Fog style Minecraft : début du fog piloté par `%` de la render distance, fin du fog alignée au `far plane`.
+- Fog style Minecraft : début du fog piloté par `%` de la render distance, fin du fog alignée à la **distance de rendu chunks** (et non plus au `far plane`).
 - `Limit to generated world` ajouté : empêche le joueur de sortir d'une zone de jeu circulaire centrée sur la map.
 - `World Border Pad (chunks)` ajouté : réserve une couronne de chunks hors zone jouable pour masquer les coupes en bord de monde.
 - TODO architecture serveur : déplacer la génération chunk côté serveur et, plus tard, supporter une génération guidée par les blocs posés pour concentrer les zones d'activité joueur.

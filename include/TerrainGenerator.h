@@ -2,45 +2,38 @@
 #define TERRAIN_GENERATOR_H
 
 #include <FastNoiseLite.h>
-#include <Chunk2.h>
+#include <TerrainColorGradients.h>
+#include <VoxelChunkData.h>
+
 #include <algorithm>
-#include <cstdlib>
 #include <cmath>
 #include <cstdint>
-
-// ============================================================================
-// TerrainGenerator — Génère un relief Minecraft-style avec fondu de couleurs
-//
-// Shape : plaines plates dominantes + collines localisées + terracing agressif
-//   1) Domain warp (déforme les coordonnées)
-//   2) Continent noise (macro relief réduit → plaines étendues)
-//   3) Hill noise (haute fréquence → collines localisées Minecraft)
-//   4) Ridged noise (montagnes rares)
-//   5) Detail noise (micro-relief)
-//   6) Terracing agressif en plaine (plateaux nets comme MC Beta)
-//
-// Couleurs : fondu naturel multi-couche
-//   - Herbe biome-aware (altitude + biome noise → vert-jaune / vert / gris-alpin)
-//   - Terre visible sur les pentes raides (slope >= 4)
-//   - dirt_color_table enrichie (brun chaud en surface)
-//   - Pierre claire en haute altitude
-//   - Onde triangulaire + hash déterministe par position (BetterSpades)
-// ============================================================================
 
 class TerrainGenerator
 {
 public:
-	int baseHeight = 25;
-	float continentAmp = 12.0f;    // Macro relief (plaines ↔ highlands)
-	float hillAmp = 8.0f;          // Collines localisées (±8 blocs)
-	float mountainAmp = 18.0f;     // Montagnes ridged
-	float detailAmp = 1.5f;        // Micro-relief visible
+	struct ColorProfile
+	{
+		uint32_t surfaceColor = 0;
+		int dirtDepth = 2;
+		bool rockySurface = false;
+		bool dirtSurface = false;
+	};
+
+	int baseHeight = 24;
+	int seaLevel = 18;
+	float continentAmp = 18.0f;
+	float hillAmp = 10.0f;
+	float mountainAmp = 24.0f;
+	float detailAmp = 1.8f;
+	float riverCarveDepth = 11.0f;
+	float ravineCarveDepth = 16.0f;
 
 	TerrainGenerator(int seed = 42)
 	{
 		continent.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
 		continent.SetSeed(seed);
-		continent.SetFrequency(0.004f);  // Était 0.0018 → 1 cycle = 250 blocs (visible dans la map)
+		continent.SetFrequency(0.0032f);
 		continent.SetFractalType(FastNoiseLite::FractalType_FBm);
 		continent.SetFractalOctaves(4);
 		continent.SetFractalLacunarity(2.0f);
@@ -48,7 +41,7 @@ public:
 
 		hills.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
 		hills.SetSeed(seed + 11);
-		hills.SetFrequency(0.008f);  // 1 cycle ≈ 125 blocs → collines MC
+		hills.SetFrequency(0.007f);
 		hills.SetFractalType(FastNoiseLite::FractalType_FBm);
 		hills.SetFractalOctaves(3);
 		hills.SetFractalLacunarity(2.0f);
@@ -56,7 +49,7 @@ public:
 
 		ridges.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
 		ridges.SetSeed(seed + 23);
-		ridges.SetFrequency(0.005f);  // Légèrement plus fréquent
+		ridges.SetFrequency(0.0042f);
 		ridges.SetFractalType(FastNoiseLite::FractalType_Ridged);
 		ridges.SetFractalOctaves(4);
 		ridges.SetFractalLacunarity(2.0f);
@@ -64,7 +57,7 @@ public:
 
 		detail.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
 		detail.SetSeed(seed + 1);
-		detail.SetFrequency(0.028f);
+		detail.SetFrequency(0.024f);
 		detail.SetFractalType(FastNoiseLite::FractalType_FBm);
 		detail.SetFractalOctaves(2);
 		detail.SetFractalLacunarity(2.0f);
@@ -82,23 +75,80 @@ public:
 		warp.SetDomainWarpType(FastNoiseLite::DomainWarpType_OpenSimplex2);
 		warp.SetFractalType(FastNoiseLite::FractalType_DomainWarpProgressive);
 		warp.SetFractalOctaves(2);
-		warp.SetFrequency(0.003f);
-		warp.SetDomainWarpAmp(25.0f);  // Plus de déformation → casse les grilles
+		warp.SetFrequency(0.0027f);
+		warp.SetDomainWarpAmp(34.0f);
+
+		river.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+		river.SetSeed(seed + 73);
+		river.SetFrequency(0.0024f);
+		river.SetFractalType(FastNoiseLite::FractalType_FBm);
+		river.SetFractalOctaves(2);
+		river.SetFractalLacunarity(2.0f);
+		river.SetFractalGain(0.55f);
+
+		ravine.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+		ravine.SetSeed(seed + 149);
+		ravine.SetFrequency(0.009f);
+		ravine.SetFractalType(FastNoiseLite::FractalType_FBm);
+		ravine.SetFractalOctaves(2);
+		ravine.SetFractalLacunarity(2.0f);
+		ravine.SetFractalGain(0.55f);
+
+		ravineArea.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+		ravineArea.SetSeed(seed + 181);
+		ravineArea.SetFrequency(0.0036f);
+		ravineArea.SetFractalType(FastNoiseLite::FractalType_FBm);
+		ravineArea.SetFractalOctaves(2);
+		ravineArea.SetFractalLacunarity(2.0f);
+		ravineArea.SetFractalGain(0.5f);
 	}
 
-	static float saturate(float v)
+	static float saturate(float value)
 	{
-		if (v < 0.0f)
+		if (value < 0.0f)
+		{
 			return 0.0f;
-		if (v > 1.0f)
+		}
+		if (value > 1.0f)
+		{
 			return 1.0f;
-		return v;
+		}
+		return value;
 	}
 
 	static float smoothstep01(float t)
 	{
 		t = saturate(t);
 		return t * t * (3.0f - 2.0f * t);
+	}
+
+	float computeRiverCarve(
+		float worldX,
+		float warpedX,
+		float warpedZ,
+		float continent01) const
+	{
+		float riverPhase = river.GetNoise(warpedX * 0.55f, warpedZ * 0.55f);
+		float riverWave = std::sin(worldX * 0.0105f + riverPhase * 3.5f);
+		float riverLine = 1.0f - smoothstep01(std::abs(riverWave) / 0.12f);
+		float lowlandMask = 1.0f - smoothstep01((continent01 - 0.58f) / 0.20f);
+		return riverLine * riverLine * lowlandMask * riverCarveDepth;
+	}
+
+	float computeRavineCarve(
+		float warpedX,
+		float warpedZ,
+		float mountainMask) const
+	{
+		float ravineNoise = ravine.GetNoise(warpedX, warpedZ);
+		float ravineLine = 1.0f - smoothstep01(std::abs(ravineNoise) / 0.04f);
+
+		float ravineAreaNoise = ravineArea.GetNoise(warpedX * 0.8f, warpedZ * 0.8f);
+		float ravineArea01 = 0.5f * (ravineAreaNoise + 1.0f);
+		float ravinePresence = smoothstep01((ravineArea01 - 0.62f) / 0.18f);
+
+		float strength = (0.35f + mountainMask * 0.85f) * ravineCarveDepth;
+		return ravineLine * ravineLine * ravinePresence * strength;
 	}
 
 	int getHeight(int worldX, int worldZ) const
@@ -112,69 +162,49 @@ public:
 
 		float continentNoise = continent.GetNoise(warpedX, warpedZ);
 		float continent01 = 0.5f * (continentNoise + 1.0f);
-
-		// mountainMask : seuil bas (0.45) pour que les montagnes apparaissent
-		// dans ~30% du terrain (au lieu de ~10% avec 0.60)
-		float mountainMask = smoothstep01((continent01 - 0.45f) / 0.35f);
+		float mountainMask = smoothstep01((continent01 - 0.36f) / 0.24f);
+		float highlandMask = smoothstep01((continent01 - 0.25f) / 0.25f);
 
 		float hillNoise = hills.GetNoise(warpedX, warpedZ);
 		float ridgeNoise = ridges.GetNoise(warpedX, warpedZ);
 		float detailNoise = detail.GetNoise(wx, wz);
 
-		// ── Base + continent ──
-		// Le continent donne le macro-relief : plaines basses ↔ highlands
 		float h = static_cast<float>(baseHeight);
-		h += (continent01 - 0.5f) * continentAmp;
+		h += (continent01 - 0.45f) * continentAmp;
+		h += hillNoise * hillAmp * (0.85f + highlandMask * 0.65f);
 
-		// ── Collines (±hillAmp) ──
-		// PAS de abs() : on veut des vallées ET des collines
-		// → variation réelle de ±8 blocs, c'est ça qui donne le look MC
-		h += hillNoise * hillAmp;
-
-		// ── Montagnes ridged ──
-		// Apparaissent où mountainMask > 0 (continent01 > 0.45)
-		// Ridged² donne des pics pointus
 		float ridge01 = 0.5f * (ridgeNoise + 1.0f);
-		float ridgeShape = ridge01 * ridge01;
+		float ridgeShape = ridge01 * ridge01 * ridge01;
 		h += ridgeShape * mountainAmp * mountainMask;
 
-		// ── Micro-détail ──
+		float highlandLift = smoothstep01((continent01 - 0.58f) / 0.20f);
+		h += highlandLift * 8.0f;
 		h += detailNoise * detailAmp;
+
+		h -= computeRiverCarve(wx, warpedX, warpedZ, continent01);
+		h -= computeRavineCarve(warpedX, warpedZ, mountainMask);
 
 		return std::clamp(static_cast<int>(h), 1, static_cast<int>(CHUNK_SIZE_Y) - 1);
 	}
 
-	// ════════════════════════════════════════════════════════════════════
-	// dirt_color_table — enrichie par rapport à BetterSpades
-	// Surface plus chaude (brun-ocre) → fond sombre
-	// ════════════════════════════════════════════════════════════════════
 	static constexpr int DIRT_COLORS[9] = {
-		0x6B5A34, // 0: Surface — brun-ocre chaud (était gris-vert 0x506050)
-		0x625240, // 1: Brun clair chaud
-		0x5A4838, // 2: Brun
-		0x7A4430, // 3: Brun-rouge
-		0x6A3C2A, // 4: Brun foncé
-		0x5A3424, // 5: Terre foncée
-		0x4A2C1C, // 6: Terre très foncée
-		0x3A2414, // 7: Presque noir
-		0x2A1C0C  // 8: Fond
+		0x506050,
+		0x605848,
+		0x705040,
+		0x804838,
+		0x704030,
+		0x603828,
+		0x503020,
+		0x402818,
+		0x302010
 	};
 
-	// ════════════════════════════════════════════════════════════════════
-	// Modulo positif — C++ : -1 % 8 = -1 (cassé pour la wave)
-	// mod8 : -1 → 7 (continu à travers les coordonnées négatives)
-	// ════════════════════════════════════════════════════════════════════
-	static int mod8(int v)
+	static int mod8(int value)
 	{
-		return ((v % 8) + 8) % 8;
+		return ((value % 8) + 8) % 8;
 	}
 
-	// ════════════════════════════════════════════════════════════════════
-	// RNG déterministe par position monde.
-	// BetterSpades utilise ms_rand()%8 (séquentiel), mais ici on garde
-	// un résultat stable quelle que soit l'ordre de génération des chunks.
-	// ════════════════════════════════════════════════════════════════════
-	static int posRand8(int x, int y, int z)
+	static uint32_t posHash(int x, int y, int z)
 	{
 		uint32_t ux = static_cast<uint32_t>(x);
 		uint32_t uy = static_cast<uint32_t>(y);
@@ -183,7 +213,22 @@ public:
 		h ^= h >> 13;
 		h *= 0x5bd1e995u;
 		h ^= h >> 15;
-		return static_cast<int>(h & 7u); // 0-7 comme ms_rand()%8
+		return h;
+	}
+
+	static int posRand8(int x, int y, int z)
+	{
+		return static_cast<int>(posHash(x, y, z) & 7u);
+	}
+
+	static int posRand9(int x, int y, int z)
+	{
+		return static_cast<int>(posHash(x, y, z) % 9u);
+	}
+
+	static int posRand5(int x, int y, int z)
+	{
+		return static_cast<int>(posHash(x, y, z) % 5u);
 	}
 
 	static int lerp(int a, int b, int amt)
@@ -191,154 +236,255 @@ public:
 		return a + (b - a) * amt / 8;
 	}
 
-	static int terrainRand(int x, int y, int z)
+	static int clampByte(int value)
 	{
-		// Grain léger (0..3) pour conserver du détail sans bruit agressif.
-		return posRand8(x, y, z) / 2;
+		if (value < 0)
+		{
+			return 0;
+		}
+		if (value > 255)
+		{
+			return 255;
+		}
+		return value;
 	}
 
-	// ════════════════════════════════════════════════════════════════════
-	// Micro-variation : RNG pur par position (pas d'onde triangulaire)
-	// Chaque bloc reçoit un shift pseudo-aléatoire sur chaque canal RGB
-	// → UNE couleur perçue globalement, mais chaque bloc est unique
-	// → Pas de motif visible (contrairement à mod8 qui faisait des lignes)
-	// ════════════════════════════════════════════════════════════════════
-
-	// UNE couleur de base herbe — vert naturel (ton moyen, pas trop vif)
-	static constexpr int GRASS_BASE = 0x4A7A2E;
-
-	// UNE couleur de base pierre — gris neutre
-	static constexpr int STONE_BASE = 0x5E5E64;
-
-	static uint32_t colorFromHex(int rgb)
+	static uint32_t colorFromHex(uint32_t rgb)
 	{
-		int r = (rgb >> 16) & 0xFF;
-		int g = (rgb >> 8) & 0xFF;
-		int b = rgb & 0xFF;
-		return Chunk2::makeColor(r, g, b);
+		int red = static_cast<int>((rgb >> 16) & 0xFFu);
+		int green = static_cast<int>((rgb >> 8) & 0xFFu);
+		int blue = static_cast<int>(rgb & 0xFFu);
+		return VoxelChunkData::makeColor(red, green, blue);
 	}
 
-	// ════════════════════════════════════════════════════════════════════
-	// Micro-variation RGB — hash RNG uniquement
-	//
-	// Prend une couleur de base et ajoute un shift aléatoire par canal.
-	// Utilise 3 hash avec des seeds différentes pour R, G, B
-	// → variation indépendante par canal, pas de motif visible.
-	// ════════════════════════════════════════════════════════════════════
-	static uint32_t microVary(int baseHex, int x, int y, int z)
+	static uint32_t applyMonochromeJitter(uint32_t color, int jitter)
 	{
-		int r = (baseHex >> 16) & 0xFF;
-		int g = (baseHex >> 8) & 0xFF;
-		int b = baseHex & 0xFF;
-
-		// 3 hash indépendants pour R, G, B (seeds différentes)
-		int rngR = posRand8(x, y, z);           // 0-7
-		int rngG = posRand8(x + 37, y, z + 59); // 0-7, seed décalée
-		int rngB = posRand8(x + 71, y + 13, z); // 0-7, seed décalée
-
-		r += rngR - 3;  // shift ±3-4 (centré)
-		g += rngG - 3;
-		b += rngB - 3;
-
-		return Chunk2::makeColor(r, g, b);
+		int red = VoxelChunkData::colorR(color) + jitter;
+		int green = VoxelChunkData::colorG(color) + jitter;
+		int blue = VoxelChunkData::colorB(color) + jitter;
+		return VoxelChunkData::makeColor(red, green, blue);
 	}
 
-	// ════════════════════════════════════════════════════════════════════
-	// map_dirt_color — gradient vertical (surface chaude → fond sombre)
-	// + micro-variations par bloc
-	// ════════════════════════════════════════════════════════════════════
+	static uint32_t blendColors(uint32_t leftColor, uint32_t rightColor, float rightFactor)
+	{
+		rightFactor = saturate(rightFactor);
+		float leftFactor = 1.0f - rightFactor;
+
+		int red = static_cast<int>(
+			static_cast<float>(VoxelChunkData::colorR(leftColor)) * leftFactor +
+			static_cast<float>(VoxelChunkData::colorR(rightColor)) * rightFactor);
+		int green = static_cast<int>(
+			static_cast<float>(VoxelChunkData::colorG(leftColor)) * leftFactor +
+			static_cast<float>(VoxelChunkData::colorG(rightColor)) * rightFactor);
+		int blue = static_cast<int>(
+			static_cast<float>(VoxelChunkData::colorB(leftColor)) * leftFactor +
+			static_cast<float>(VoxelChunkData::colorB(rightColor)) * rightFactor);
+		return VoxelChunkData::makeColor(red, green, blue);
+	}
+
+	static uint32_t blendColorsWeighted(
+		uint32_t leftColor,
+		int leftWeight,
+		uint32_t rightColor,
+		int rightWeight)
+	{
+		int totalWeight = leftWeight + rightWeight;
+		if (totalWeight <= 0)
+		{
+			return leftColor;
+		}
+
+		int red = (
+			VoxelChunkData::colorR(leftColor) * leftWeight +
+			VoxelChunkData::colorR(rightColor) * rightWeight) / totalWeight;
+		int green = (
+			VoxelChunkData::colorG(leftColor) * leftWeight +
+			VoxelChunkData::colorG(rightColor) * rightWeight) / totalWeight;
+		int blue = (
+			VoxelChunkData::colorB(leftColor) * leftWeight +
+			VoxelChunkData::colorB(rightColor) * rightWeight) / totalWeight;
+		return VoxelChunkData::makeColor(red, green, blue);
+	}
+
+	static uint32_t microVary(uint32_t baseHex, int x, int y, int z)
+	{
+		int red = static_cast<int>((baseHex >> 16) & 0xFFu);
+		int green = static_cast<int>((baseHex >> 8) & 0xFFu);
+		int blue = static_cast<int>(baseHex & 0xFFu);
+
+		int rngRed = posRand8(x, y, z);
+		int rngGreen = posRand8(x + 37, y, z + 59);
+		int rngBlue = posRand8(x + 71, y + 13, z);
+
+		red += rngRed - 3;
+		green += rngGreen - 3;
+		blue += rngBlue - 3;
+
+		return VoxelChunkData::makeColor(red, green, blue);
+	}
+
+	static uint32_t sampleGradientColor(const std::array<uint32_t, 64> &gradient, int index)
+	{
+		index = std::clamp(index, 0, 63);
+		return colorFromHex(gradient[index]);
+	}
+
+	static uint32_t sampleSurfaceGradient(int height, float biome01, int worldX, int worldZ)
+	{
+		int gradientIndex = static_cast<int>(CHUNK_SIZE_Y) - 1 - height;
+		gradientIndex = std::clamp(gradientIndex, 0, 63);
+
+		uint32_t grassSurface = sampleGradientColor(
+			TerrainColorGradients::GRASS_GRADIENT_64,
+			gradientIndex);
+		uint32_t hillSurface = sampleGradientColor(
+			TerrainColorGradients::HILL_GRADIENT_64,
+			gradientIndex);
+		uint32_t snowSurface = sampleGradientColor(
+			TerrainColorGradients::SNOW_GRADIENT_64,
+			gradientIndex);
+
+		float lushBlend = smoothstep01((biome01 - 0.38f) / 0.24f);
+		uint32_t baseSurface = blendColors(hillSurface, grassSurface, lushBlend);
+
+		float snowBlend = smoothstep01((static_cast<float>(height) - 44.0f) / 10.0f);
+		uint32_t surfaceColor = blendColors(baseSurface, snowSurface, snowBlend);
+
+		int monochromeJitter = posRand9(worldX + 211, height + 97, worldZ + 389) - 4;
+		return applyMonochromeJitter(surfaceColor, monochromeJitter);
+	}
+
 	static uint32_t dirtColor(int x, int y, int z)
 	{
-		int invY = CHUNK_SIZE_Y - 1 - y;
-		int slice = invY / 8;
-		int lerp_amt = invY % 8;
+		int verticalSlice = (static_cast<int>(CHUNK_SIZE_Y) - 1 - y) / 8;
+		int lerpAmount = (static_cast<int>(CHUNK_SIZE_Y) - 1 - y) % 8;
 
-		if (slice < 0) slice = 0;
-		if (slice >= 8) slice = 7;
+		if (verticalSlice < 0)
+		{
+			verticalSlice = 0;
+		}
+		if (verticalSlice >= 8)
+		{
+			verticalSlice = 7;
+		}
 
-		int base = DIRT_COLORS[slice];
-		int next = DIRT_COLORS[slice + 1];
+		int dirtBaseColor = DIRT_COLORS[verticalSlice];
+		int dirtNextColor = DIRT_COLORS[verticalSlice + 1];
 
-		int red = lerp(base & 0xFF0000, next & 0xFF0000, lerp_amt) >> 16;
-		int green = lerp(base & 0x00FF00, next & 0x00FF00, lerp_amt) >> 8;
-		int blue = lerp(base & 0x0000FF, next & 0x0000FF, lerp_amt);
+		int red = lerp(dirtBaseColor & 0xFF0000, dirtNextColor & 0xFF0000, lerpAmount) >> 16;
+		int green = lerp(dirtBaseColor & 0x00FF00, dirtNextColor & 0x00FF00, lerpAmount) >> 8;
+		int blue = lerp(dirtBaseColor & 0x0000FF, dirtNextColor & 0x0000FF, lerpAmount);
 
-		// Micro-variation RNG pur (pas d'onde triangulaire)
-		int rngR = posRand8(x, y, z);
-		int rngG = posRand8(x + 37, y, z + 59);
-		int rngB = posRand8(x + 71, y + 13, z);
-		red += rngR - 3;
-		green += rngG - 3;
-		blue += rngB - 3;
+		int rng = posRand8(x, y, z);
+		red += 4 * std::abs(mod8(x) - 4) + rng;
+		green += 4 * std::abs(mod8(z) - 4) + rng;
+		blue += 4 * std::abs(mod8((static_cast<int>(CHUNK_SIZE_Y) - 1 - y)) - 4) + rng;
 
-		return Chunk2::makeColor(red, green, blue);
+		red = clampByte(red);
+		green = clampByte(green);
+		blue = clampByte(blue);
+		return VoxelChunkData::makeColor(red, green, blue);
 	}
 
-	// ════════════════════════════════════════════════════════════════════
-	// Couleur herbe — UNE couleur de base + micro-variations
-	//
-	// Tous les blocs d'herbe ont la même couleur perçue (GRASS_BASE),
-	// mais chaque bloc individuel a un RGB légèrement différent.
-	// Le biome noise module très subtilement la teinte (±5 sur le vert).
-	// ════════════════════════════════════════════════════════════════════
-	static uint32_t grassColor(int x, int y, int z, float biome01)
+	uint32_t waterColor(int x, int y, int z) const
 	{
-		int r = (GRASS_BASE >> 16) & 0xFF;
-		int g = (GRASS_BASE >> 8) & 0xFF;
-		int b = GRASS_BASE & 0xFF;
-
-		// Micro-variation RNG pur (3 hash indépendants)
-		int rngR = posRand8(x, y, z);
-		int rngG = posRand8(x + 37, y, z + 59);
-		int rngB = posRand8(x + 71, y + 13, z);
-
-		r += rngR - 3;
-		g += rngG - 3;
-		b += rngB - 3;
-
-		// Biome : subtile modulation du vert (±5 max)
-		int lush = static_cast<int>((biome01 - 0.5f) * 10.0f);
-		g += lush;
-
-		return Chunk2::makeColor(r, g, b);
+		uint32_t shallowWater = VoxelChunkData::makeColor(54, 164, 164);
+		uint32_t deepWater = VoxelChunkData::makeColor(34, 116, 126);
+		int waterDepth = seaLevel - y;
+		float deepBlend = smoothstep01(static_cast<float>(waterDepth) / 8.0f);
+		uint32_t water = blendColors(shallowWater, deepWater, deepBlend);
+		int jitter = posRand5(x + 19, y + 53, z + 131) - 2;
+		return applyMonochromeJitter(water, jitter);
 	}
 
-	// ════════════════════════════════════════════════════════════════════
-	// Couleur terre/herbe transitionnelle — entre surface herbe et dirt
-	// Mélange la teinte herbe et la teinte terre pour un fondu naturel
-	// ════════════════════════════════════════════════════════════════════
-	static uint32_t transitionColor(int x, int y, int z, float biome01)
+	static uint32_t blendSurfaceToDirt(
+		uint32_t surfaceColor,
+		uint32_t dirtColorValue,
+		int depthFromSurface,
+		int slope)
 	{
-		uint32_t grass = grassColor(x, y, z, biome01);
-		uint32_t dirt = dirtColor(x, y, z);
+		int surfaceWeight = 4;
+		if (depthFromSurface == 1)
+		{
+			surfaceWeight = 3;
+		}
+		else if (depthFromSurface == 2)
+		{
+			surfaceWeight = 2;
+		}
+		else if (depthFromSurface == 3)
+		{
+			surfaceWeight = 1;
+		}
+		else if (depthFromSurface > 3)
+		{
+			surfaceWeight = 0;
+		}
 
-		// 50/50 entre herbe et terre
-		int r = (Chunk2::colorR(grass) + Chunk2::colorR(dirt)) / 2;
-		int g = (Chunk2::colorG(grass) + Chunk2::colorG(dirt)) / 2;
-		int b = (Chunk2::colorB(grass) + Chunk2::colorB(dirt)) / 2;
-		return Chunk2::makeColor(r, g, b);
+		if (slope >= 4)
+		{
+			surfaceWeight = static_cast<int>(std::round(static_cast<float>(surfaceWeight) * 0.35f));
+		}
+
+		surfaceWeight = std::clamp(surfaceWeight, 0, 4);
+		int dirtWeight = 4 - surfaceWeight;
+		return blendColorsWeighted(surfaceColor, surfaceWeight, dirtColorValue, dirtWeight);
 	}
 
-	// ════════════════════════════════════════════════════════════════════
-	// Couleur pierre — UNE couleur de base + micro-variations
-	// ════════════════════════════════════════════════════════════════════
 	static uint32_t stoneColor(int x, int y, int z)
 	{
-		return microVary(STONE_BASE, x, y, z);
+		return microVary(0x5E5E64u, x, y, z);
 	}
 
-	// ════════════════════════════════════════════════════════════════════
-	// Remplit un chunk avec le terrain — fondu couleur Minecraft-style
-	//
-	// Couches de haut en bas :
-	//   height     : herbe (ou terre si pente >= 4, ou pierre si pente >= 7)
-	//   height - 1 : herbe/terre transition (ou terre si pente élevée)
-	//   height - 2..depth : terre (dirtColor)
-	//   dessous   : pierre (stoneColor, claire si haute altitude)
-	//   y=0       : bedrock (pierre)
-	// ════════════════════════════════════════════════════════════════════
-	void fillChunk(Chunk2 &chunk) const
+	ColorProfile buildColorProfile(
+		int worldX,
+		int worldZ,
+		int height,
+		int slope,
+		float biome01) const
 	{
+		ColorProfile profile;
+		profile.surfaceColor = sampleSurfaceGradient(height, biome01, worldX, worldZ);
+
+		if (slope >= 8)
+		{
+			profile.rockySurface = true;
+		}
+		else if (slope >= 4)
+		{
+			profile.dirtSurface = true;
+		}
+
+		if (biome01 > 0.65f)
+		{
+			profile.dirtDepth = 4;
+		}
+		else if (biome01 > 0.45f)
+		{
+			profile.dirtDepth = 3;
+		}
+
+		if (profile.rockySurface)
+		{
+			profile.dirtDepth = 1;
+		}
+		else if (profile.dirtSurface)
+		{
+			profile.dirtDepth = 2;
+		}
+
+		if (height <= seaLevel + 1)
+		{
+			uint32_t shoreDirt = dirtColor(worldX, height, worldZ);
+			profile.surfaceColor = blendColors(profile.surfaceColor, shoreDirt, 0.45f);
+		}
+
+		return profile;
+	}
+
+	void fillChunk(VoxelChunkData &chunk) const
+	{
+		chunk.clearBlocks();
 		for (int x = 0; x < CHUNK_SIZE_X; x++)
 		{
 			for (int z = 0; z < CHUNK_SIZE_Z; z++)
@@ -350,86 +496,62 @@ public:
 					static_cast<float>(worldX),
 					static_cast<float>(worldZ)) + 1.0f);
 
-				// Calcul de la pente (gradient local)
 				int eastH = getHeight(worldX + 1, worldZ);
 				int westH = getHeight(worldX - 1, worldZ);
 				int northH = getHeight(worldX, worldZ + 1);
 				int southH = getHeight(worldX, worldZ - 1);
 				int slope = std::abs(eastH - westH) + std::abs(northH - southH);
 
-				// Classification surface :
-				// slope >= 7 ou altitude >= 52 → rocher pur
-				// slope >= 4 → terre visible (flancs raides)
-				// slope 4-6 avec 50% chance → mélange terre/herbe
-				bool rockySurface = false;
-				bool dirtSurface = false;
-				if (slope >= 7)
-					rockySurface = true;
-				else if (slope >= 4)
-					dirtSurface = true;
-				if (height >= 52)
-					rockySurface = true;
-
-				// Profondeur terre variable par biome
-				int dirtDepth = 3;
-				if (biome01 > 0.65f)
-					dirtDepth = 5;
-				else if (biome01 > 0.45f)
-					dirtDepth = 4;
-				if (rockySurface)
-					dirtDepth = 1;
-				else if (dirtSurface)
-					dirtDepth = 2;
-
-				// Bedrock (y=0)
+				ColorProfile profile = buildColorProfile(worldX, worldZ, height, slope, biome01);
 				chunk.blocks[x][0][z] = stoneColor(worldX, 0, worldZ);
 
 				for (int y = 1; y <= height && y < CHUNK_SIZE_Y; y++)
 				{
-					if (y == height)
+					if (profile.rockySurface)
 					{
-						// ── Couche de surface ──
-						if (rockySurface)
-						{
-							chunk.blocks[x][y][z] = stoneColor(worldX, y, worldZ);
-						}
-						else if (dirtSurface)
-						{
-							// Pentes moyennes : 50% terre / 50% transition herbe-terre
-							if (posRand8(worldX, y, worldZ) < 4)
-								chunk.blocks[x][y][z] = dirtColor(worldX, y, worldZ);
-							else
-								chunk.blocks[x][y][z] = transitionColor(worldX, y, worldZ, biome01);
-						}
-						else
-						{
-							chunk.blocks[x][y][z] = grassColor(worldX, y, worldZ, biome01);
-						}
-					}
-					else if (y == height - 1 && !rockySurface)
-					{
-						// ── Couche de transition (juste sous la surface) ──
-						// Herbe-terre ou terre pure selon pente
-						if (dirtSurface)
-							chunk.blocks[x][y][z] = dirtColor(worldX, y, worldZ);
-						else
-							chunk.blocks[x][y][z] = transitionColor(worldX, y, worldZ, biome01);
-					}
-					else if (y > height - dirtDepth)
-					{
-						// ── Couches de terre ──
-						chunk.blocks[x][y][z] = dirtColor(worldX, y, worldZ);
+						chunk.blocks[x][y][z] = stoneColor(worldX, y, worldZ);
 					}
 					else
 					{
-						// ── Pierre ──
-						chunk.blocks[x][y][z] = stoneColor(worldX, y, worldZ);
+						int depthFromSurface = height - y;
+						uint32_t dirtLayerColor = dirtColor(worldX, y, worldZ);
+						if (depthFromSurface <= 3)
+						{
+							chunk.blocks[x][y][z] = blendSurfaceToDirt(
+								profile.surfaceColor,
+								dirtLayerColor,
+								depthFromSurface,
+								slope);
+						}
+						else if (y > height - profile.dirtDepth)
+						{
+							chunk.blocks[x][y][z] = dirtLayerColor;
+						}
+						else
+						{
+							chunk.blocks[x][y][z] = stoneColor(worldX, y, worldZ);
+						}
+					}
+				}
+
+				if (height < seaLevel)
+				{
+					for (int y = height + 1; y <= seaLevel && y < CHUNK_SIZE_Y; y++)
+					{
+						chunk.blocks[x][y][z] = waterColor(worldX, y, worldZ);
 					}
 				}
 			}
 		}
-		chunk.needsMeshRebuild = true;
-		chunk.isEmpty = false;
+
+		if (chunk.revision == 0)
+		{
+			chunk.revision = 1;
+		}
+		else
+		{
+			chunk.revision++;
+		}
 	}
 
 private:
@@ -439,6 +561,9 @@ private:
 	FastNoiseLite detail;
 	FastNoiseLite biome;
 	FastNoiseLite warp;
+	FastNoiseLite river;
+	FastNoiseLite ravine;
+	FastNoiseLite ravineArea;
 };
 
-#endif // TERRAIN_GENERATOR_H
+#endif

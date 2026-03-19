@@ -7,68 +7,59 @@
 #include <GLFW/glfw3.h>
 #endif
 
-#include <Shader.h>
 #include <Camera.h>
 #include <Chunk2.h>
-#include <TerrainGenerator.h>
+#include <ChunkPalette.h>
+#include <Crosshair.h>
 #include <Frustum.h>
 #include <LowResRenderer.h>
-#include <profiler.h>
+#include <Shader.h>
+#include <WorldBounds.h>
+#include <WorldClient.h>
 #include <config.h>
-#include <glm/ext/matrix_float4x4.hpp>
+
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/fwd.hpp>
-#include <glm/trigonometric.hpp>
-#include <iostream>
-#include <vector>
-#include <thread>
-#include <unordered_map>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <iostream>
 #include <limits>
-#include <Crosshair.h>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-// ImGui
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
+namespace
+{
+	constexpr int SCREEN_WIDTH = 1920;
+	constexpr int SCREEN_HEIGHT = 1080;
+	constexpr float PLACE_REACH = 8.0f;
+	constexpr uint16_t SERVER_PORT = 28713;
+	constexpr const char *SERVER_HOST = "127.0.0.1";
+}
 
-const int SCREEN_WIDTH = 1920;
-const int SCREEN_HEIGHT = 1080;
-
-// Fog settings (modifiable via ImGui)
 float fogStart = 80.0f;
 float fogEnd = 200.0f;
-glm::vec3 FOG_COLOR = glm::vec3(0.6f, 0.7f, 0.9f); // Bleu ciel
+glm::vec3 FOG_COLOR = glm::vec3(0.6f, 0.7f, 0.9f);
 bool minecraftFogByRenderDistance = true;
-float minecraftFogStartPercent = 0.72f;
+float minecraftFogStartPercent = 0.25f;
 
 int renderDistanceChunks = 12;
-bool limitToGeneratedWorld = true;
-int worldBorderPaddingChunks = 2;
+bool limitToPlayableWorld = true;
 
-// Rendering toggles
 bool useAO = true;
 bool debugSunblockOnly = false;
-float placedBlockColor[3] = {0.62f, 0.62f, 0.62f};
+int selectedPaletteIndex = 32;
 Crosshair crosshair;
 
-constexpr int WORLD_CHUNK_MIN_X = -10;
-constexpr int WORLD_CHUNK_MAX_X_EXCLUSIVE = 10;
-constexpr int WORLD_CHUNK_MIN_Z = -10;
-constexpr int WORLD_CHUNK_MAX_Z_EXCLUSIVE = 10;
-
-// ============================================================================
-// GLOBALS
-// ============================================================================
-
 GLFWwindow *g_window = nullptr;
-Camera camera(glm::vec3(0.0f, 35.0f, 0.0f)); // get value (0,0) genesis chunk et check max value block on y
+Camera camera(glm::vec3(0.0f, 35.0f, 0.0f));
 float lastX = SCREEN_WIDTH / 2.0f;
 float lastY = SCREEN_HEIGHT / 2.0f;
 bool firstMouse = true;
@@ -76,7 +67,13 @@ float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 bool gPlaceBlockRequested = false;
 bool gBreakBlockRequested = false;
-constexpr float PLACE_REACH = 8.0f;
+
+WorldClient gWorldClient;
+WorldFrontier gWorldFrontier;
+bool gHasWorldFrontier = false;
+
+std::unordered_map<int64_t, Chunk2 *> chunkMap;
+std::unordered_set<int64_t> streamedChunkKeys;
 
 const char *cameraHeadingCardinal(const glm::vec3 &front)
 {
@@ -85,198 +82,150 @@ const char *cameraHeadingCardinal(const glm::vec3 &front)
 	if (ax >= az)
 	{
 		if (front.x < 0.0f)
+		{
 			return "West (-X)";
+		}
 		return "East (+X)";
 	}
 	if (front.z < 0.0f)
+	{
 		return "South (-Z)";
+	}
 	return "North (+Z)";
 }
 
-float worldMinX()
+float chunkBoundsMinX(const ChunkBounds &bounds)
 {
-	return static_cast<float>(WORLD_CHUNK_MIN_X * CHUNK_SIZE_X);
+	return static_cast<float>(bounds.minChunkX * CHUNK_SIZE_X);
 }
 
-float worldMaxX()
+float chunkBoundsMaxX(const ChunkBounds &bounds)
 {
-	return static_cast<float>(WORLD_CHUNK_MAX_X_EXCLUSIVE * CHUNK_SIZE_X);
+	return static_cast<float>(bounds.maxChunkXExclusive * CHUNK_SIZE_X);
 }
 
-float worldMinZ()
+float chunkBoundsMinZ(const ChunkBounds &bounds)
 {
-	return static_cast<float>(WORLD_CHUNK_MIN_Z * CHUNK_SIZE_Z);
+	return static_cast<float>(bounds.minChunkZ * CHUNK_SIZE_Z);
 }
 
-float worldMaxZ()
+float chunkBoundsMaxZ(const ChunkBounds &bounds)
 {
-	return static_cast<float>(WORLD_CHUNK_MAX_Z_EXCLUSIVE * CHUNK_SIZE_Z);
+	return static_cast<float>(bounds.maxChunkZExclusive * CHUNK_SIZE_Z);
 }
 
-float worldCenterX()
+bool usesClassicStreaming()
 {
-	return (worldMinX() + worldMaxX()) * 0.5f;
-}
-
-float worldCenterZ()
-{
-	return (worldMinZ() + worldMaxZ()) * 0.5f;
-}
-
-float worldRadius()
-{
-	float sizeX = worldMaxX() - worldMinX();
-	float sizeZ = worldMaxZ() - worldMinZ();
-	float minSize = sizeX;
-	if (sizeZ < minSize)
-		minSize = sizeZ;
-	float padding = static_cast<float>(worldBorderPaddingChunks * CHUNK_SIZE_X);
-	float radius = minSize * 0.5f - padding - 0.5f;
-	if (radius < 8.0f)
-		radius = 8.0f;
-	return radius;
-}
-
-float chunkDistanceToCamera2D(int chunkX, int chunkZ, const glm::vec3 &cameraPos)
-{
-	float minX = static_cast<float>(chunkX * CHUNK_SIZE_X);
-	float maxX = minX + static_cast<float>(CHUNK_SIZE_X);
-	float minZ = static_cast<float>(chunkZ * CHUNK_SIZE_Z);
-	float maxZ = minZ + static_cast<float>(CHUNK_SIZE_Z);
-
-	float dx = 0.0f;
-	if (cameraPos.x < minX)
-		dx = minX - cameraPos.x;
-	else if (cameraPos.x > maxX)
-		dx = cameraPos.x - maxX;
-
-	float dz = 0.0f;
-	if (cameraPos.z < minZ)
-		dz = minZ - cameraPos.z;
-	else if (cameraPos.z > maxZ)
-		dz = cameraPos.z - maxZ;
-
-	return std::sqrt(dx * dx + dz * dz);
-}
-
-bool chunkCanRenderInFogRange(int chunkX, int chunkZ, const glm::vec3 &cameraPos, float fogEndDistance)
-{
-	float nearDistance = chunkDistanceToCamera2D(chunkX, chunkZ, cameraPos);
-	float margin = static_cast<float>(CHUNK_SIZE_X);
-	float maxVisibleDistance = fogEndDistance + margin;
-	if (nearDistance > maxVisibleDistance)
-		return false;
-	return true;
-}
-
-void clampCameraToGeneratedWorld()
-{
-	if (!limitToGeneratedWorld)
-		return;
-
-	const float margin = 0.25f;
-	float maxRadius = worldRadius() - margin;
-	if (maxRadius < 1.0f)
-		return;
-
-	float dx = camera.Position.x - worldCenterX();
-	float dz = camera.Position.z - worldCenterZ();
-	float distCenter = std::sqrt(dx * dx + dz * dz);
-	if (distCenter <= maxRadius)
-		return;
-
-	if (distCenter < 1e-6f)
+	if (!gHasWorldFrontier)
 	{
-		camera.Position.x = worldCenterX() + maxRadius;
-		camera.Position.z = worldCenterZ();
+		return false;
+	}
+	if (gWorldFrontier.mode == WorldGenerationMode::ClassicStreaming)
+	{
+		return true;
+	}
+	return false;
+}
+
+bool canStreamChunk(int chunkX, int chunkZ)
+{
+	if (usesClassicStreaming())
+	{
+		return true;
+	}
+	return gWorldFrontier.generatedBounds.containsChunk(chunkX, chunkZ);
+}
+
+void clampCameraToPlayableWorld()
+{
+	if (!limitToPlayableWorld || !gHasWorldFrontier || usesClassicStreaming())
+	{
 		return;
 	}
 
-	float scale = maxRadius / distCenter;
-	camera.Position.x = worldCenterX() + dx * scale;
-	camera.Position.z = worldCenterZ() + dz * scale;
+	const ChunkBounds &bounds = gWorldFrontier.playableBounds;
+	const float margin = 0.25f;
+	float minX = chunkBoundsMinX(bounds) + margin;
+	float maxX = chunkBoundsMaxX(bounds) - margin;
+	float minZ = chunkBoundsMinZ(bounds) + margin;
+	float maxZ = chunkBoundsMaxZ(bounds) - margin;
+
+	if (minX > maxX || minZ > maxZ)
+	{
+		return;
+	}
+
+	if (camera.Position.x < minX)
+	{
+		camera.Position.x = minX;
+	}
+	else if (camera.Position.x > maxX)
+	{
+		camera.Position.x = maxX;
+	}
+
+	if (camera.Position.z < minZ)
+	{
+		camera.Position.z = minZ;
+	}
+	else if (camera.Position.z > maxZ)
+	{
+		camera.Position.z = maxZ;
+	}
 }
 
-void computeFrameFog(float farPlane, float &outFogStart, float &outFogEnd)
+void computeFrameFog(float fogReferenceDistance, float &outFogStart, float &outFogEnd)
 {
 	if (!minecraftFogByRenderDistance)
 	{
 		outFogStart = fogStart;
 		outFogEnd = fogEnd;
 		if (outFogEnd <= outFogStart + 0.1f)
+		{
 			outFogEnd = outFogStart + 0.1f;
+		}
 		return;
 	}
 
 	float startPercent = minecraftFogStartPercent;
-	if (startPercent < 0.40f)
-		startPercent = 0.40f;
-	if (startPercent > 0.98f)
-		startPercent = 0.98f;
+	if (startPercent < 0.05f)
+	{
+		startPercent = 0.05f;
+	}
+	if (startPercent > 0.50f)
+	{
+		startPercent = 0.50f;
+	}
 
-	outFogStart = farPlane * startPercent;
-	outFogEnd = farPlane;
-
+	outFogStart = fogReferenceDistance * startPercent;
+	outFogEnd = fogReferenceDistance;
 	if (outFogEnd <= outFogStart + 0.1f)
+	{
 		outFogEnd = outFogStart + 0.1f;
+	}
 }
 
-// Chunks : hashmap indexée par (cx, cz) pour accès O(1) aux voisins
-// ┌────────┐  ┌────────┐  ┌────────┐
-// │(-1,-1) │  │( 0,-1) │  │( 1,-1) │
-// ├────────┤  ├────────┤  ├────────┤
-// │(-1, 0) │  │( 0, 0) │  │( 1, 0) │
-// ├────────┤  ├────────┤  ├────────┤
-// │(-1, 1) │  │( 0, 1) │  │( 1, 1) │
-// └────────┘  └────────┘  └────────┘
-std::unordered_map<int64_t, Chunk2 *> chunkMap; // O(1)
-
-// Convertit (cx, cz) en clé unique 64 bits. En mémoire, cx occupe les 32 bits de poids fort
-// et cz les 32 bits de poids faible. Le décalage (<< 32) place cx en tête, tandis que
-// le masque (& 0xFFFFFFFF) isole cz pour éviter l'extension de signe lors du transtypage.
-
-// On utilise bit packing 64bit pour stocker deux entiers 32bit(cx, cz) dans un seul entier 64bit
-//  On convertit cx et cz en entier 64bit cx << 32 occupe les 32 bits de poids fort et cz & 0xFFFFFFFF occupe les 32 bits de poids faible la moitier basse le masque & 0xFFFFFFFF est pour éviter l'extension de signe lors du transtypage
-//  64 bits le cpu fait CMP pour vérifier la clé alors que std::pair fait 2 CMP
-inline int64_t chunkKey(int cx, int cz)
-{
-	return ((int64_t)cx << 32) | ((int64_t)cz & 0xFFFFFFFF);
-}
-
-// Récupère un chunk par position, nullptr si inexistant
-inline Chunk2 *getChunkAt(int cx, int cz)
+Chunk2 *getChunkAt(int cx, int cz)
 {
 	auto it = chunkMap.find(chunkKey(cx, cz));
-	if (it != chunkMap.end())
-		return it->second;
-	return nullptr;
+	if (it == chunkMap.end())
+	{
+		return nullptr;
+	}
+	return it->second;
 }
 
-inline int floorDiv(int value, int divisor)
-{
-	int q = value / divisor;
-	int r = value % divisor;
-	if (r < 0)
-		q--;
-	return q;
-}
-
-inline int floorMod(int value, int divisor)
-{
-	int r = value % divisor;
-	if (r < 0)
-		r += divisor;
-	return r;
-}
-
-inline void markChunkNeighborhoodDirty(int cx, int cz)
+void markChunkNeighborhoodDirty(int cx, int cz)
 {
 	for (int dz = -1; dz <= 1; dz++)
 	{
 		for (int dx = -1; dx <= 1; dx++)
 		{
-			if (Chunk2 *neighbor = getChunkAt(cx + dx, cz + dz))
-				neighbor->needsMeshRebuild = true;
+			Chunk2 *chunk = getChunkAt(cx + dx, cz + dz);
+			if (chunk != nullptr)
+			{
+				chunk->needsMeshRebuild = true;
+			}
 		}
 	}
 }
@@ -284,34 +233,61 @@ inline void markChunkNeighborhoodDirty(int cx, int cz)
 uint32_t getBlockWorld(int wx, int wy, int wz)
 {
 	if (wy < 0 || wy >= CHUNK_SIZE_Y)
+	{
 		return 0;
+	}
 
 	int cx = floorDiv(wx, CHUNK_SIZE_X);
 	int cz = floorDiv(wz, CHUNK_SIZE_Z);
 	int lx = floorMod(wx, CHUNK_SIZE_X);
 	int lz = floorMod(wz, CHUNK_SIZE_Z);
+
 	Chunk2 *chunk = getChunkAt(cx, cz);
-	if (chunk)
-		return chunk->getBlock(lx, wy, lz);
-	return 0;
+	if (chunk == nullptr)
+	{
+		return 0;
+	}
+	return chunk->getBlock(lx, wy, lz);
 }
 
-bool setBlockWorld(int wx, int wy, int wz, uint32_t color)
+void applyBlockUpdateLocal(int wx, int wy, int wz, uint32_t color)
 {
-	if (wy < 0 || wy >= CHUNK_SIZE_Y)
-		return false;
-
 	int cx = floorDiv(wx, CHUNK_SIZE_X);
 	int cz = floorDiv(wz, CHUNK_SIZE_Z);
 	int lx = floorMod(wx, CHUNK_SIZE_X);
 	int lz = floorMod(wz, CHUNK_SIZE_Z);
 
 	Chunk2 *chunk = getChunkAt(cx, cz);
-	if (!chunk || !chunk->setBlock(lx, wy, lz, color))
-		return false;
+	if (chunk == nullptr)
+	{
+		return;
+	}
 
+	if (!chunk->setBlock(lx, wy, lz, color))
+	{
+		return;
+	}
 	markChunkNeighborhoodDirty(cx, cz);
-	return true;
+}
+
+void upsertChunkSnapshot(const VoxelChunkData &snapshot)
+{
+	int64_t key = chunkKey(snapshot.chunkX, snapshot.chunkZ);
+	Chunk2 *chunk = nullptr;
+
+	auto it = chunkMap.find(key);
+	if (it == chunkMap.end())
+	{
+		chunk = new Chunk2(snapshot.chunkX, snapshot.chunkZ);
+		chunkMap[key] = chunk;
+	}
+	else
+	{
+		chunk = it->second;
+	}
+
+	chunk->copyFromData(snapshot);
+	markChunkNeighborhoodDirty(snapshot.chunkX, snapshot.chunkZ);
 }
 
 bool raycastPlaceTarget(const glm::vec3 &origin, const glm::vec3 &direction, float maxDist,
@@ -319,7 +295,9 @@ bool raycastPlaceTarget(const glm::vec3 &origin, const glm::vec3 &direction, flo
 {
 	const float inf = std::numeric_limits<float>::infinity();
 	if (glm::length(direction) < 1e-6f)
+	{
 		return false;
+	}
 
 	glm::vec3 dir = glm::normalize(direction);
 	int x = static_cast<int>(std::floor(origin.x));
@@ -331,53 +309,89 @@ bool raycastPlaceTarget(const glm::vec3 &origin, const glm::vec3 &direction, flo
 	int stepY = 0;
 	int stepZ = 0;
 	if (dir.x > 0.0f)
+	{
 		stepX = 1;
+	}
 	else if (dir.x < 0.0f)
+	{
 		stepX = -1;
+	}
 	if (dir.y > 0.0f)
+	{
 		stepY = 1;
+	}
 	else if (dir.y < 0.0f)
+	{
 		stepY = -1;
+	}
 	if (dir.z > 0.0f)
+	{
 		stepZ = 1;
+	}
 	else if (dir.z < 0.0f)
+	{
 		stepZ = -1;
+	}
 
 	float tDeltaX = inf;
 	float tDeltaY = inf;
 	float tDeltaZ = inf;
 	if (stepX != 0)
+	{
 		tDeltaX = std::abs(1.0f / dir.x);
+	}
 	if (stepY != 0)
+	{
 		tDeltaY = std::abs(1.0f / dir.y);
+	}
 	if (stepZ != 0)
+	{
 		tDeltaZ = std::abs(1.0f / dir.z);
+	}
 
 	float nextX = 0.0f;
 	float nextY = 0.0f;
 	float nextZ = 0.0f;
 	if (stepX > 0)
+	{
 		nextX = std::floor(origin.x) + 1.0f - origin.x;
+	}
 	else
+	{
 		nextX = origin.x - std::floor(origin.x);
+	}
 	if (stepY > 0)
+	{
 		nextY = std::floor(origin.y) + 1.0f - origin.y;
+	}
 	else
+	{
 		nextY = origin.y - std::floor(origin.y);
+	}
 	if (stepZ > 0)
+	{
 		nextZ = std::floor(origin.z) + 1.0f - origin.z;
+	}
 	else
+	{
 		nextZ = origin.z - std::floor(origin.z);
+	}
 
 	float tMaxX = inf;
 	float tMaxY = inf;
 	float tMaxZ = inf;
 	if (stepX != 0)
+	{
 		tMaxX = nextX * tDeltaX;
+	}
 	if (stepY != 0)
+	{
 		tMaxY = nextY * tDeltaY;
+	}
 	if (stepZ != 0)
+	{
 		tMaxZ = nextZ * tDeltaZ;
+	}
 
 	float traveled = 0.0f;
 	while (traveled <= maxDist)
@@ -427,38 +441,145 @@ bool raycastPlaceTarget(const glm::vec3 &origin, const glm::vec3 &direction, flo
 
 void tryPlaceDebugBlock()
 {
+	if (!gHasWorldFrontier)
+	{
+		return;
+	}
+
 	glm::ivec3 hit;
 	glm::ivec3 place;
 	if (!raycastPlaceTarget(camera.Position, camera.Front, PLACE_REACH, hit, place))
+	{
 		return;
-
+	}
 	if (place.y <= 0 || place.y >= CHUNK_SIZE_Y)
+	{
 		return;
+	}
+	if (!usesClassicStreaming() &&
+		!gWorldFrontier.playableBounds.containsWorldBlock(place.x, place.z))
+	{
+		return;
+	}
 	if (getBlockWorld(place.x, place.y, place.z) != 0)
+	{
 		return;
+	}
 
-	int r = std::clamp(static_cast<int>(placedBlockColor[0] * 255.0f), 0, 255);
-	int g = std::clamp(static_cast<int>(placedBlockColor[1] * 255.0f), 0, 255);
-	int b = std::clamp(static_cast<int>(placedBlockColor[2] * 255.0f), 0, 255);
-	uint32_t base = Chunk2::makeColor(r, g, b);
-	(void)setBlockWorld(place.x, place.y, place.z, base);
+	gWorldClient.sendPlaceBlock(place.x, place.y, place.z, static_cast<uint8_t>(selectedPaletteIndex - 1));
 }
 
 void tryBreakDebugBlock()
 {
+	if (!gHasWorldFrontier)
+	{
+		return;
+	}
+
 	glm::ivec3 hit;
 	glm::ivec3 place;
 	if (!raycastPlaceTarget(camera.Position, camera.Front, PLACE_REACH, hit, place))
+	{
 		return;
+	}
 	if (hit.y <= 0 || hit.y >= CHUNK_SIZE_Y)
+	{
 		return;
+	}
+	if (!usesClassicStreaming() &&
+		!gWorldFrontier.playableBounds.containsWorldBlock(hit.x, hit.z))
+	{
+		return;
+	}
 
-	(void)setBlockWorld(hit.x, hit.y, hit.z, 0u);
+	gWorldClient.sendBreakBlock(hit.x, hit.y, hit.z);
 }
 
-// ============================================================================
-// CALLBACKS
-// ============================================================================
+void handleWorldClientEvents()
+{
+	gWorldClient.service();
+
+	WorldClientEvent event;
+	while (gWorldClient.popEvent(event))
+	{
+		if (event.type == WorldClientEvent::Type::FrontierUpdated)
+		{
+			gWorldFrontier = event.frontier;
+			gHasWorldFrontier = true;
+			continue;
+		}
+		if (event.type == WorldClientEvent::Type::ChunkReceived)
+		{
+			upsertChunkSnapshot(event.chunk);
+			continue;
+		}
+		if (event.type == WorldClientEvent::Type::BlockUpdated)
+		{
+			applyBlockUpdateLocal(
+				event.blockUpdate.worldX,
+				event.blockUpdate.worldY,
+				event.blockUpdate.worldZ,
+				event.blockUpdate.finalColor);
+		}
+	}
+}
+
+void syncChunkStreaming()
+{
+	if (!gWorldClient.isConnected() || !gHasWorldFrontier)
+	{
+		return;
+	}
+
+	int cameraChunkX = floorDiv(static_cast<int>(std::floor(camera.Position.x)), CHUNK_SIZE_X);
+	int cameraChunkZ = floorDiv(static_cast<int>(std::floor(camera.Position.z)), CHUNK_SIZE_Z);
+
+	std::unordered_set<int64_t> desiredKeys;
+
+	for (int cz = cameraChunkZ - renderDistanceChunks; cz <= cameraChunkZ + renderDistanceChunks; cz++)
+	{
+		for (int cx = cameraChunkX - renderDistanceChunks; cx <= cameraChunkX + renderDistanceChunks; cx++)
+		{
+			if (!canStreamChunk(cx, cz))
+			{
+				continue;
+			}
+
+			int64_t key = chunkKey(cx, cz);
+			desiredKeys.insert(key);
+			if (streamedChunkKeys.find(key) == streamedChunkKeys.end())
+			{
+				gWorldClient.sendChunkRequest(cx, cz);
+				streamedChunkKeys.insert(key);
+			}
+		}
+	}
+
+	std::vector<int64_t> keysToDrop;
+	for (int64_t key : streamedChunkKeys)
+	{
+		if (desiredKeys.find(key) == desiredKeys.end())
+		{
+			keysToDrop.push_back(key);
+		}
+	}
+
+	for (int64_t key : keysToDrop)
+	{
+		int cx = static_cast<int>(key >> 32);
+		int cz = static_cast<int>(key & 0xFFFFFFFF);
+		gWorldClient.sendChunkDrop(cx, cz);
+		streamedChunkKeys.erase(key);
+		markChunkNeighborhoodDirty(cx, cz);
+
+		auto it = chunkMap.find(key);
+		if (it != chunkMap.end())
+		{
+			delete it->second;
+			chunkMap.erase(it);
+		}
+	}
+}
 
 void framebuffer_size_callback(GLFWwindow *window, int width, int height)
 {
@@ -467,13 +588,13 @@ void framebuffer_size_callback(GLFWwindow *window, int width, int height)
 
 void mouse_callback(GLFWwindow *window, double xposIn, double yposIn)
 {
-	// Modification pour le débogage : ignorer la souris si elle n'est pas capturée
 	if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL)
+	{
 		return;
+	}
 
 	float xpos = static_cast<float>(xposIn);
 	float ypos = static_cast<float>(yposIn);
-
 	if (firstMouse)
 	{
 		lastX = xpos;
@@ -483,10 +604,8 @@ void mouse_callback(GLFWwindow *window, double xposIn, double yposIn)
 
 	float xoffset = xpos - lastX;
 	float yoffset = lastY - ypos;
-
 	lastX = xpos;
 	lastY = ypos;
-
 	camera.ProcessMouseMovement(xoffset, yoffset);
 }
 
@@ -510,19 +629,30 @@ void scroll_callback(GLFWwindow *window, double xoffset, double yoffset)
 void processInput(GLFWwindow *window)
 {
 	if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+	{
 		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-	// glfwSetWindowShouldClose(window, true);
+	}
 
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+	{
 		camera.ProcessKeyboard(FORWARD, deltaTime);
+	}
 	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+	{
 		camera.ProcessKeyboard(BACKWARD, deltaTime);
+	}
 	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+	{
 		camera.ProcessKeyboard(LEFT, deltaTime);
+	}
 	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+	{
 		camera.ProcessKeyboard(RIGHT, deltaTime);
+	}
 	if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+	{
 		camera.ProcessKeyboard(UP, deltaTime);
+	}
 
 	static bool prevLeftDown = false;
 	static bool prevRightDown = false;
@@ -530,20 +660,19 @@ void processInput(GLFWwindow *window)
 	bool rightDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 	bool cursorCaptured = glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED;
 	if (leftDown && !prevLeftDown && cursorCaptured)
+	{
 		gBreakBlockRequested = true;
+	}
 	if (rightDown && !prevRightDown && cursorCaptured)
+	{
 		gPlaceBlockRequested = true;
+	}
 	prevLeftDown = leftDown;
 	prevRightDown = rightDown;
 }
 
-// ============================================================================
-// MAIN
-// ============================================================================
-
 int main()
 {
-	// Initialiser GLFW
 	std::cout << "INITIALISATION de GLFW" << std::endl;
 	if (!glfwInit())
 	{
@@ -555,8 +684,8 @@ int main()
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-	g_window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "VoxPlace", NULL, NULL);
-	if (!g_window)
+	g_window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "VoxPlace", nullptr, nullptr);
+	if (g_window == nullptr)
 	{
 		std::cerr << "Failed to create GLFW window" << std::endl;
 		glfwTerminate();
@@ -568,7 +697,6 @@ int main()
 	glfwSetCursorPosCallback(g_window, mouse_callback);
 	glfwSetMouseButtonCallback(g_window, mouse_button_callback);
 	glfwSetScrollCallback(g_window, scroll_callback);
-	// glfwSetInputMode(g_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); // Démarrer avec la souris libre
 
 #ifndef __EMSCRIPTEN__
 	if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
@@ -576,25 +704,16 @@ int main()
 		std::cerr << "Failed to initialize GLAD" << std::endl;
 		return -1;
 	}
-	std::cout << "GLAD initialized successfully" << std::endl;
 #endif
 
-	std::cout << "OpenGL Renderer: " << glGetString(GL_RENDERER) << std::endl;
-	std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
 	glEnable(GL_CULL_FACE);
-	glCullFace(GL_BACK);       // Jeter les faces arrière (dos à la caméra)
-
-
-	// Configuration OpenGL
+	glCullFace(GL_BACK);
 	glEnable(GL_DEPTH_TEST);
 	glClearColor(FOG_COLOR.r, FOG_COLOR.g, FOG_COLOR.b, 1.0f);
 
-	// Crosshair Minecraft
 	crosshair.init("assets/crosshair.png");
 	glfwSwapInterval(0);
-	// ============================================================================
-	// IMGUI INIT
-	// ============================================================================
+
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO &io = ImGui::GetIO();
@@ -603,53 +722,14 @@ int main()
 	ImGui_ImplGlfw_InitForOpenGL(g_window, true);
 	ImGui_ImplOpenGL3_Init("#version 460");
 
-	// Charger le shader
 	Shader chunkShader("src/shader/chunk2.vs", "src/shader/chunk2.fs");
-	std::vector<std::thread> threads;
-
-	for (auto &thread : threads)
-	{
-	}
-
-	// Initialiser le rendu basse résolution
 	LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
 
-	// Terrain generator (Simplex Noise, seed 42)
-	TerrainGenerator gen(42);
-
-	// 1. Créer tous les chunks et remplir le terrain  Besoins de créer un thread pour generation simuler "serveur" ou passer direct sur serveur.cpp
-	std::cout << "Generating chunks..." << std::endl;
-	for (int cx = WORLD_CHUNK_MIN_X; cx < WORLD_CHUNK_MAX_X_EXCLUSIVE; cx++)
+	if (!gWorldClient.connectToServer(SERVER_HOST, SERVER_PORT))
 	{
-		for (int cz = WORLD_CHUNK_MIN_Z; cz < WORLD_CHUNK_MAX_Z_EXCLUSIVE; cz++)
-		{
-			Chunk2 *chunk = new Chunk2(cx, cz);
-			gen.fillChunk(*chunk);
-			chunkMap[chunkKey(cx, cz)] = chunk; // cx cz -> key
-		}
+		std::cerr << "Failed to connect to server at " << SERVER_HOST << ":" << SERVER_PORT << std::endl;
 	}
 
-	// 2. Générer les meshes APRÈS avoir créé tous les chunks
-	//    (pour que les voisins existent au moment du face culling)
-	/*
-	for (auto &[key, chunk] : chunkMap)
-	{
-		int cx = chunk->chunkX;
-		int cz = chunk->chunkZ;
-		chunk->meshGenerate(
-			getChunkAt(cx, cz + 1), // north (+Z)
-			getChunkAt(cx, cz - 1), // south (-Z)
-			getChunkAt(cx + 1, cz), // east  (+X)
-			getChunkAt(cx - 1, cz)	// west  (-X)
-		);
-	}
-	std::cout << "Generated " << chunkMap.size() << " chunk(s)" << std::endl;
-
-	*/
-	// Afficher le profiler
-	// printChunkProfiler(chunkMap);
-
-	// Render loop
 	while (!glfwWindowShouldClose(g_window))
 	{
 		float currentFrame = static_cast<float>(glfwGetTime());
@@ -657,7 +737,10 @@ int main()
 		lastFrame = currentFrame;
 
 		processInput(g_window);
-		clampCameraToGeneratedWorld();
+		handleWorldClientEvents();
+		clampCameraToPlayableWorld();
+		syncChunkStreaming();
+
 		if (gBreakBlockRequested)
 		{
 			tryBreakDebugBlock();
@@ -669,81 +752,75 @@ int main()
 			gPlaceBlockRequested = false;
 		}
 
-		// Rendu basse résolution
 		LowResRenderer::beginFrame();
-		// Configurer le shader
 		chunkShader.use();
 
+		float fogReferenceDistance = static_cast<float>(renderDistanceChunks * CHUNK_SIZE_X);
+		if (fogReferenceDistance < static_cast<float>(CHUNK_SIZE_X))
+		{
+			fogReferenceDistance = static_cast<float>(CHUNK_SIZE_X);
+		}
 		float farPlane = static_cast<float>(renderDistanceChunks * CHUNK_SIZE_X + CHUNK_SIZE_X * 2);
 		if (farPlane < 64.0f)
+		{
 			farPlane = 64.0f;
+		}
 		float fogStartFrame = 0.0f;
 		float fogEndFrame = 0.0f;
-		computeFrameFog(farPlane, fogStartFrame, fogEndFrame);
+		computeFrameFog(fogReferenceDistance, fogStartFrame, fogEndFrame);
 
 		glm::mat4 projection = glm::perspective(
 			glm::radians(camera.Zoom),
-			(float)SCREEN_WIDTH / (float)SCREEN_HEIGHT,
-			0.1f, farPlane);
+			static_cast<float>(SCREEN_WIDTH) / static_cast<float>(SCREEN_HEIGHT),
+			0.1f,
+			farPlane);
 		glm::mat4 view = camera.GetViewMatrix();
 
 		chunkShader.setMat4("projection", projection);
 		chunkShader.setMat4("view", view);
-
-		// Fog uniforms
 		chunkShader.setFloat("fogStart", fogStartFrame);
 		chunkShader.setFloat("fogEnd", fogEndFrame);
 		chunkShader.setVec3("fogColor", FOG_COLOR);
 		chunkShader.setVec3("cameraPos", camera.Position);
-		int useAOInt = 0;
-		if (useAO)
-			useAOInt = 1;
-		chunkShader.setInt("useAO", useAOInt);
-		int debugSunblockInt = 0;
-		if (debugSunblockOnly)
-			debugSunblockInt = 1;
-		chunkShader.setInt("debugSunblockOnly", debugSunblockInt);
+		chunkShader.setInt("useAO", useAO ? 1 : 0);
+		chunkShader.setInt("debugSunblockOnly", debugSunblockOnly ? 1 : 0);
 
-		// Frustum culling — extraire les plans depuis VP
 		Frustum frustum;
 		frustum.extractFromVP(projection * view);
-		// frustum.frustumProfiler();
 
-		// Collecter les chunks visibles + trier front-to-back (Early-Z)
 		struct ChunkDraw
 		{
-			Chunk2 *chunk;
-			float distSq;
+			Chunk2 *chunk = nullptr;
+			float distSq = 0.0f;
 		};
+
 		std::vector<ChunkDraw> visibleList;
 		visibleList.reserve(chunkMap.size());
 
+		int rebuildBudget = 1;
 		for (auto &[key, chunk] : chunkMap)
 		{
-			if (!chunkCanRenderInFogRange(chunk->chunkX, chunk->chunkZ, camera.Position, fogEndFrame))
-				continue;
-
-			if (chunk->needsMeshRebuild)
+			if (chunk->needsMeshRebuild && rebuildBudget > 0)
 			{
 				int cx = chunk->chunkX;
 				int cz = chunk->chunkZ;
 				chunk->meshGenerate(
-					getChunkAt(cx, cz + 1),     // north
-					getChunkAt(cx, cz - 1),     // south
-					getChunkAt(cx + 1, cz),     // east
-					getChunkAt(cx - 1, cz),     // west
-					getChunkAt(cx + 1, cz + 1), // NE
-					getChunkAt(cx - 1, cz + 1), // NW
-					getChunkAt(cx + 1, cz - 1), // SE
-					getChunkAt(cx - 1, cz - 1)  // SW
-				);
+					getChunkAt(cx, cz + 1),
+					getChunkAt(cx, cz - 1),
+					getChunkAt(cx + 1, cz),
+					getChunkAt(cx - 1, cz),
+					getChunkAt(cx + 1, cz + 1),
+					getChunkAt(cx - 1, cz + 1),
+					getChunkAt(cx + 1, cz - 1),
+					getChunkAt(cx - 1, cz - 1));
+				rebuildBudget--;
 			}
 
-			// Skip si hors frustum
 			if (!frustum.isChunkVisible(chunk->chunkX, chunk->chunkZ))
+			{
 				continue;
+			}
 
-			// Centre du chunk en monde
 			float centerX = chunk->chunkX * CHUNK_SIZE_X + CHUNK_SIZE_X * 0.5f;
 			float centerZ = chunk->chunkZ * CHUNK_SIZE_Z + CHUNK_SIZE_Z * 0.5f;
 			float dx = centerX - camera.Position.x;
@@ -751,49 +828,79 @@ int main()
 			visibleList.push_back({chunk, dx * dx + dz * dz});
 		}
 
-		// Tri front-to-back : les chunks proches d'abord → meilleur Early-Z
 		std::sort(visibleList.begin(), visibleList.end(),
-			[](const ChunkDraw &a, const ChunkDraw &b) { return a.distSq < b.distSq; });
+				  [](const ChunkDraw &left, const ChunkDraw &right)
+				  { return left.distSq < right.distSq; });
 
-		int visibleChunks = (int)visibleList.size();
-		for (auto &cd : visibleList)
+		int visibleChunks = static_cast<int>(visibleList.size());
+		for (const ChunkDraw &draw : visibleList)
 		{
 			chunkShader.setVec3("chunkPos", glm::vec3(
-										cd.chunk->chunkX * CHUNK_SIZE_X,
-										0.0f,
-										cd.chunk->chunkZ * CHUNK_SIZE_Z));
-			cd.chunk->render();
+										 static_cast<float>(draw.chunk->chunkX * CHUNK_SIZE_X),
+										 0.0f,
+										 static_cast<float>(draw.chunk->chunkZ * CHUNK_SIZE_Z)));
+			draw.chunk->render();
 		}
-		// Afficher le résultat upscalé (taille actuelle de la fenêtre)
+
 		int currentFbW = 0;
 		int currentFbH = 0;
 		glfwGetFramebufferSize(g_window, &currentFbW, &currentFbH);
 		LowResRenderer::endFrame(currentFbW, currentFbH);
 
-		// ============================================================
-		// IMGUI (rendu après LowResRenderer pour être en full res)
-		// ============================================================
 		ImGui_ImplOpenGL3_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
 		ImGui::NewFrame();
 
-		// Compter le total de faces
 		uint64_t totalFaces = 0;
-		for (auto &[k, c] : chunkMap)
-			totalFaces += c->faceCount;
+		for (auto &[key, chunk] : chunkMap)
+		{
+			totalFaces += chunk->faceCount;
+		}
 
 		ImGui::Begin("VoxPlace");
-		ImGui::Text("FPS: %.0f (%.1f ms)", 1.0f / deltaTime, deltaTime * 1000.0f);
+		if (deltaTime > 0.0f)
+		{
+			ImGui::Text("FPS: %.0f (%.1f ms)", 1.0f / deltaTime, deltaTime * 1000.0f);
+		}
+		ImGui::Text("Server: %s:%d", SERVER_HOST, SERVER_PORT);
+		ImGui::Text("Network: %s", gWorldClient.isConnected() ? "Connected" : "Disconnected");
+		if (gHasWorldFrontier)
+		{
+			ImGui::Text("World mode: %s", worldGenerationModeName(gWorldFrontier.mode));
+		}
 		ImGui::Separator();
 		ImGui::Text("Chunks: %d / %zu visible", visibleChunks, chunkMap.size());
+		ImGui::Text("Streamed chunks: %zu", streamedChunkKeys.size());
 		ImGui::Text("Total faces: %llu", totalFaces);
 		ImGui::Text("Total vertices: %llu", totalFaces * 6);
 		ImGui::SliderInt("Render Dist (chunks)", &renderDistanceChunks, 2, 32);
 		ImGui::Text("Far Plane: %.1f", farPlane);
-		ImGui::Checkbox("Limit to generated world", &limitToGeneratedWorld);
-		ImGui::SliderInt("World Border Pad (chunks)", &worldBorderPaddingChunks, 0, 8);
-		ImGui::Text("World Center: (%.1f, %.1f)", worldCenterX(), worldCenterZ());
-		ImGui::Text("World Radius: %.1f", worldRadius());
+		if (gHasWorldFrontier)
+		{
+			if (usesClassicStreaming())
+			{
+				ImGui::Text("Classic streaming enabled");
+				ImGui::Text("Playable bounds clamp disabled in this mode");
+			}
+			else
+			{
+				ImGui::Checkbox("Limit to playable world", &limitToPlayableWorld);
+				ImGui::Text("Playable chunks: %d x %d",
+							gWorldFrontier.playableBounds.widthChunks(),
+							gWorldFrontier.playableBounds.depthChunks());
+				ImGui::Text("Generated chunks: %d x %d",
+							gWorldFrontier.generatedBounds.widthChunks(),
+							gWorldFrontier.generatedBounds.depthChunks());
+				ImGui::Text("Padding chunks: %d", gWorldFrontier.paddingChunks);
+				ImGui::Text("Expansion progress: %d / %d",
+							gWorldFrontier.activePlayableChunkCount,
+							gWorldFrontier.requiredActiveChunkCount);
+			}
+		}
+		else
+		{
+			ImGui::Checkbox("Limit to playable world", &limitToPlayableWorld);
+		}
 		ImGui::Separator();
 		ImGui::Text("Camera: (%.1f, %.1f, %.1f)", camera.Position.x, camera.Position.y, camera.Position.z);
 		ImGui::Text("Heading: %s", cameraHeadingCardinal(camera.Front));
@@ -803,8 +910,8 @@ int main()
 		ImGui::Checkbox("Minecraft Fog (Render Dist)", &minecraftFogByRenderDistance);
 		if (minecraftFogByRenderDistance)
 		{
-			ImGui::SliderFloat("Fog Start %", &minecraftFogStartPercent, 0.40f, 0.98f);
-			ImGui::Text("Fog End = Far Plane");
+			ImGui::SliderFloat("Fog Start %%", &minecraftFogStartPercent, 0.05f, 0.50f);
+			ImGui::Text("Fog End = Render Distance");
 		}
 		else
 		{
@@ -815,7 +922,14 @@ int main()
 		ImGui::Separator();
 		ImGui::Checkbox("Ambient Occlusion", &useAO);
 		ImGui::Checkbox("Sunblock debug", &debugSunblockOnly);
-		ImGui::ColorEdit3("Placed block color", placedBlockColor);
+		ImGui::SliderInt("Palette index", &selectedPaletteIndex, 1, static_cast<int>(PLAYER_COLOR_PALETTE_SIZE));
+		uint32_t selectedColor = playerPaletteColor(static_cast<uint8_t>(selectedPaletteIndex - 1));
+		ImVec4 previewColor(
+			static_cast<float>(VoxelChunkData::colorR(selectedColor)) / 255.0f,
+			static_cast<float>(VoxelChunkData::colorG(selectedColor)) / 255.0f,
+			static_cast<float>(VoxelChunkData::colorB(selectedColor)) / 255.0f,
+			1.0f);
+		ImGui::ColorButton("Palette preview", previewColor);
 		ImGui::Checkbox("Crosshair", &crosshair.visible);
 		ImGui::Text("Left click: break block");
 		ImGui::Text("Right click: place block");
@@ -830,18 +944,20 @@ int main()
 		glfwPollEvents();
 	}
 
-	// Cleanup
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
 
+	gWorldClient.disconnect();
 	for (auto &[key, chunk] : chunkMap)
 	{
 		delete chunk;
 	}
+	chunkMap.clear();
+	streamedChunkKeys.clear();
+
 	crosshair.cleanup();
 	LowResRenderer::cleanup();
 	glfwTerminate();
-
 	return 0;
 }
