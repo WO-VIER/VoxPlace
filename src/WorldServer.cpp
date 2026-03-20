@@ -23,8 +23,14 @@ namespace
 {
 	constexpr size_t WORLD_CHANNEL_RELIABLE = 0;
 	constexpr int SERVER_TICK_MS = 50;
-	constexpr size_t MAX_INTEGRATED_CHUNKS_PER_TICK = 4;
-	constexpr size_t MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 5;
+	constexpr size_t DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK = 4;
+	constexpr size_t DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 5;
+	constexpr size_t CLASSIC_MIN_INTEGRATED_CHUNKS_PER_TICK = 8;
+	constexpr size_t CLASSIC_MID_INTEGRATED_CHUNKS_PER_TICK = 16;
+	constexpr size_t CLASSIC_MAX_INTEGRATED_CHUNKS_PER_TICK = 32;
+	constexpr size_t CLASSIC_MIN_CHUNK_SENDS_PER_CLIENT_PER_TICK = 8;
+	constexpr size_t CLASSIC_MID_CHUNK_SENDS_PER_CLIENT_PER_TICK = 16;
+	constexpr size_t CLASSIC_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 24;
 	constexpr int INITIAL_PLAYABLE_RADIUS = 1;
 	constexpr int INITIAL_PADDING_CHUNKS = 0;
 
@@ -328,7 +334,7 @@ struct WorldServer::Impl
 
 	void tick()
 	{
-		integrateReadyChunks(MAX_INTEGRATED_CHUNKS_PER_TICK);
+		integrateReadyChunks(integratedChunksBudgetForTick());
 		for (auto &entry : clients)
 		{
 			sendQueuedChunks(entry.second);
@@ -369,6 +375,37 @@ struct WorldServer::Impl
 			}
 			integratedCount++;
 		}
+	}
+
+	size_t integratedChunksBudgetForTick()
+	{
+		if (!usesClassicStreaming())
+		{
+			return DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK;
+		}
+
+		size_t readyCount = 0;
+		{
+			std::lock_guard<std::mutex> readyLock(readyMutex);
+			readyCount = readyChunks.size();
+		}
+
+		size_t scheduledCount = 0;
+		{
+			std::lock_guard<std::mutex> taskLock(taskMutex);
+			scheduledCount = generationTasks.size();
+		}
+
+		size_t budget = CLASSIC_MIN_INTEGRATED_CHUNKS_PER_TICK;
+		if (readyCount > 16 || scheduledCount > 64)
+		{
+			budget = CLASSIC_MID_INTEGRATED_CHUNKS_PER_TICK;
+		}
+		if (readyCount > 64 || scheduledCount > 256)
+		{
+			budget = CLASSIC_MAX_INTEGRATED_CHUNKS_PER_TICK;
+		}
+		return budget;
 	}
 
 	void handleConnect(ENetPeer *peer)
@@ -647,8 +684,9 @@ struct WorldServer::Impl
 	void sendQueuedChunks(ClientSession &session)
 	{
 		size_t sentCount = 0;
+		size_t sendBudget = chunkSendBudgetForClient(session);
 
-		while (sentCount < MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK && !session.sendQueue.empty())
+		while (sentCount < sendBudget && !session.sendQueue.empty())
 		{
 			int64_t key = session.sendQueue.front();
 			session.sendQueue.pop_front();
@@ -669,6 +707,26 @@ struct WorldServer::Impl
 			session.loadedChunks.insert(key);
 			sentCount++;
 		}
+	}
+
+	size_t chunkSendBudgetForClient(const ClientSession &session)
+	{
+		if (!usesClassicStreaming())
+		{
+			return DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK;
+		}
+
+		size_t queueSize = session.sendQueue.size();
+		size_t budget = CLASSIC_MIN_CHUNK_SENDS_PER_CLIENT_PER_TICK;
+		if (queueSize > 64)
+		{
+			budget = CLASSIC_MID_CHUNK_SENDS_PER_CLIENT_PER_TICK;
+		}
+		if (queueSize > 256)
+		{
+			budget = CLASSIC_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK;
+		}
+		return budget;
 	}
 
 	void sendReliable(ENetPeer *peer, const std::vector<uint8_t> &payload)

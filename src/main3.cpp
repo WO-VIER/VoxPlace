@@ -8,6 +8,7 @@
 #endif
 
 #include <Camera.h>
+#include <ClientChunkMesher.h>
 #include <Chunk2.h>
 #include <ChunkPalette.h>
 #include <Crosshair.h>
@@ -48,10 +49,11 @@ float fogStart = 80.0f;
 float fogEnd = 200.0f;
 glm::vec3 FOG_COLOR = glm::vec3(0.6f, 0.7f, 0.9f);
 bool minecraftFogByRenderDistance = true;
-float minecraftFogStartPercent = 0.25f;
+float minecraftFogStartPercent = 0.75f;
 
 int renderDistanceChunks = 12;
 bool limitToPlayableWorld = true;
+int classicStreamingPaddingChunks = 4;
 
 bool useAO = true;
 bool debugSunblockOnly = false;
@@ -71,9 +73,11 @@ bool gBreakBlockRequested = false;
 WorldClient gWorldClient;
 WorldFrontier gWorldFrontier;
 bool gHasWorldFrontier = false;
+ClientChunkMesher gChunkMesher;
 
 std::unordered_map<int64_t, Chunk2 *> chunkMap;
 std::unordered_set<int64_t> streamedChunkKeys;
+std::unordered_map<int64_t, uint64_t> gPendingMeshRevisions;
 
 const char *cameraHeadingCardinal(const glm::vec3 &front)
 {
@@ -112,6 +116,25 @@ float chunkBoundsMinZ(const ChunkBounds &bounds)
 float chunkBoundsMaxZ(const ChunkBounds &bounds)
 {
 	return static_cast<float>(bounds.maxChunkZExclusive * CHUNK_SIZE_Z);
+}
+
+float computeRenderFarPlane()
+{
+	float farPlane = static_cast<float>(renderDistanceChunks * CHUNK_SIZE_X + CHUNK_SIZE_X * 2);
+	if (farPlane < 64.0f)
+	{
+		farPlane = 64.0f;
+	}
+	return farPlane;
+}
+
+float chunkCenterDistanceSqToCamera(int chunkX, int chunkZ)
+{
+	float centerX = chunkX * CHUNK_SIZE_X + CHUNK_SIZE_X * 0.5f;
+	float centerZ = chunkZ * CHUNK_SIZE_Z + CHUNK_SIZE_Z * 0.5f;
+	float dx = centerX - camera.Position.x;
+	float dz = centerZ - camera.Position.z;
+	return dx * dx + dz * dz;
 }
 
 bool usesClassicStreaming()
@@ -192,9 +215,9 @@ void computeFrameFog(float fogReferenceDistance, float &outFogStart, float &outF
 	{
 		startPercent = 0.05f;
 	}
-	if (startPercent > 0.50f)
+	if (startPercent > 0.98f)
 	{
-		startPercent = 0.50f;
+		startPercent = 0.98f;
 	}
 
 	outFogStart = fogReferenceDistance * startPercent;
@@ -213,6 +236,94 @@ Chunk2 *getChunkAt(int cx, int cz)
 		return nullptr;
 	}
 	return it->second;
+}
+
+void copyChunkSnapshot(const Chunk2 *chunk, ChunkMeshSnapshot &snapshot)
+{
+	if (chunk == nullptr)
+	{
+		snapshot.hasChunk = false;
+		return;
+	}
+
+	snapshot.hasChunk = true;
+	snapshot.chunk = static_cast<const VoxelChunkData &>(*chunk);
+}
+
+bool isMeshBuildPendingForCurrentRevision(Chunk2 *chunk)
+{
+	int64_t key = chunkKey(chunk->chunkX, chunk->chunkZ);
+	auto pendingIt = gPendingMeshRevisions.find(key);
+	if (pendingIt == gPendingMeshRevisions.end())
+	{
+		return false;
+	}
+	if (pendingIt->second != chunk->revision)
+	{
+		gPendingMeshRevisions.erase(pendingIt);
+		return false;
+	}
+	return true;
+}
+
+bool buildMeshJobForChunk(Chunk2 *chunk, ClientChunkMeshJob &outJob)
+{
+	if (chunk == nullptr)
+	{
+		return false;
+	}
+
+	int cx = chunk->chunkX;
+	int cz = chunk->chunkZ;
+	outJob.chunkX = cx;
+	outJob.chunkZ = cz;
+	outJob.revision = chunk->revision;
+	outJob.center = static_cast<const VoxelChunkData &>(*chunk);
+
+	copyChunkSnapshot(getChunkAt(cx, cz + 1), outJob.north);
+	copyChunkSnapshot(getChunkAt(cx, cz - 1), outJob.south);
+	copyChunkSnapshot(getChunkAt(cx + 1, cz), outJob.east);
+	copyChunkSnapshot(getChunkAt(cx - 1, cz), outJob.west);
+	copyChunkSnapshot(getChunkAt(cx + 1, cz + 1), outJob.ne);
+	copyChunkSnapshot(getChunkAt(cx - 1, cz + 1), outJob.nw);
+	copyChunkSnapshot(getChunkAt(cx + 1, cz - 1), outJob.se);
+	copyChunkSnapshot(getChunkAt(cx - 1, cz - 1), outJob.sw);
+	return true;
+}
+
+void drainCompletedMeshBuilds()
+{
+	std::vector<ClientChunkMeshResult> completedResults;
+	gChunkMesher.drainCompleted(completedResults);
+
+	for (ClientChunkMeshResult &result : completedResults)
+	{
+		int64_t key = chunkKey(result.chunkX, result.chunkZ);
+		auto pendingIt = gPendingMeshRevisions.find(key);
+		if (pendingIt != gPendingMeshRevisions.end() &&
+			pendingIt->second == result.revision)
+		{
+			gPendingMeshRevisions.erase(pendingIt);
+		}
+
+		auto chunkIt = chunkMap.find(key);
+		if (chunkIt == chunkMap.end())
+		{
+			continue;
+		}
+
+		Chunk2 *chunk = chunkIt->second;
+		if (chunk == nullptr)
+		{
+			continue;
+		}
+		if (chunk->revision != result.revision)
+		{
+			continue;
+		}
+
+		chunk->uploadBuiltMesh(result.packedFaces);
+	}
 }
 
 void markChunkNeighborhoodDirty(int cx, int cz)
@@ -531,15 +642,47 @@ void syncChunkStreaming()
 		return;
 	}
 
+	float farPlane = computeRenderFarPlane();
+	glm::mat4 projection = glm::perspective(
+		glm::radians(camera.Zoom),
+		static_cast<float>(SCREEN_WIDTH) / static_cast<float>(SCREEN_HEIGHT),
+		0.1f,
+		farPlane);
+	glm::mat4 view = camera.GetViewMatrix();
+	Frustum streamFrustum;
+	streamFrustum.extractFromVP(projection * view);
+
+	int streamDistanceChunks = renderDistanceChunks;
+	if (usesClassicStreaming())
+	{
+		streamDistanceChunks += classicStreamingPaddingChunks;
+	}
+
 	int cameraChunkX = floorDiv(static_cast<int>(std::floor(camera.Position.x)), CHUNK_SIZE_X);
 	int cameraChunkZ = floorDiv(static_cast<int>(std::floor(camera.Position.z)), CHUNK_SIZE_Z);
+	int radiusSq = streamDistanceChunks * streamDistanceChunks;
 
 	std::unordered_set<int64_t> desiredKeys;
-
-	for (int cz = cameraChunkZ - renderDistanceChunks; cz <= cameraChunkZ + renderDistanceChunks; cz++)
+	struct ChunkRequestCandidate
 	{
-		for (int cx = cameraChunkX - renderDistanceChunks; cx <= cameraChunkX + renderDistanceChunks; cx++)
+		int chunkX = 0;
+		int chunkZ = 0;
+		float distSq = 0.0f;
+		bool inFrustum = false;
+	};
+	std::vector<ChunkRequestCandidate> requestCandidates;
+
+	for (int dz = -streamDistanceChunks; dz <= streamDistanceChunks; dz++)
+	{
+		for (int dx = -streamDistanceChunks; dx <= streamDistanceChunks; dx++)
 		{
+			if (dx * dx + dz * dz > radiusSq)
+			{
+				continue;
+			}
+
+			int cx = cameraChunkX + dx;
+			int cz = cameraChunkZ + dz;
 			if (!canStreamChunk(cx, cz))
 			{
 				continue;
@@ -549,10 +692,30 @@ void syncChunkStreaming()
 			desiredKeys.insert(key);
 			if (streamedChunkKeys.find(key) == streamedChunkKeys.end())
 			{
-				gWorldClient.sendChunkRequest(cx, cz);
-				streamedChunkKeys.insert(key);
+				ChunkRequestCandidate candidate;
+				candidate.chunkX = cx;
+				candidate.chunkZ = cz;
+				candidate.distSq = chunkCenterDistanceSqToCamera(cx, cz);
+				candidate.inFrustum = streamFrustum.isChunkVisible(cx, cz);
+				requestCandidates.push_back(candidate);
 			}
 		}
+	}
+
+	std::sort(requestCandidates.begin(), requestCandidates.end(),
+			  [](const ChunkRequestCandidate &left, const ChunkRequestCandidate &right)
+			  {
+				  if (left.inFrustum != right.inFrustum)
+				  {
+					  return left.inFrustum > right.inFrustum;
+				  }
+				  return left.distSq < right.distSq;
+			  });
+
+	for (const ChunkRequestCandidate &candidate : requestCandidates)
+	{
+		gWorldClient.sendChunkRequest(candidate.chunkX, candidate.chunkZ);
+		streamedChunkKeys.insert(chunkKey(candidate.chunkX, candidate.chunkZ));
 	}
 
 	std::vector<int64_t> keysToDrop;
@@ -570,6 +733,7 @@ void syncChunkStreaming()
 		int cz = static_cast<int>(key & 0xFFFFFFFF);
 		gWorldClient.sendChunkDrop(cx, cz);
 		streamedChunkKeys.erase(key);
+		gPendingMeshRevisions.erase(key);
 		markChunkNeighborhoodDirty(cx, cz);
 
 		auto it = chunkMap.find(key);
@@ -724,6 +888,8 @@ int main()
 
 	Shader chunkShader("src/shader/chunk2.vs", "src/shader/chunk2.fs");
 	LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
+	gChunkMesher.start();
+	std::cout << "Client mesh workers: " << gChunkMesher.workerCount() << std::endl;
 
 	if (!gWorldClient.connectToServer(SERVER_HOST, SERVER_PORT))
 	{
@@ -738,6 +904,7 @@ int main()
 
 		processInput(g_window);
 		handleWorldClientEvents();
+		drainCompletedMeshBuilds();
 		clampCameraToPlayableWorld();
 		syncChunkStreaming();
 
@@ -760,11 +927,8 @@ int main()
 		{
 			fogReferenceDistance = static_cast<float>(CHUNK_SIZE_X);
 		}
-		float farPlane = static_cast<float>(renderDistanceChunks * CHUNK_SIZE_X + CHUNK_SIZE_X * 2);
-		if (farPlane < 64.0f)
-		{
-			farPlane = 64.0f;
-		}
+		float farPlane = computeRenderFarPlane();
+		fogReferenceDistance = farPlane;
 		float fogStartFrame = 0.0f;
 		float fogEndFrame = 0.0f;
 		computeFrameFog(fogReferenceDistance, fogStartFrame, fogEndFrame);
@@ -793,39 +957,89 @@ int main()
 			Chunk2 *chunk = nullptr;
 			float distSq = 0.0f;
 		};
+		struct ChunkRebuildCandidate
+		{
+			Chunk2 *chunk = nullptr;
+			float distSq = 0.0f;
+			bool inFrustum = false;
+		};
 
 		std::vector<ChunkDraw> visibleList;
 		visibleList.reserve(chunkMap.size());
+		std::vector<ChunkRebuildCandidate> rebuildCandidates;
+		rebuildCandidates.reserve(chunkMap.size());
 
-		int rebuildBudget = 1;
 		for (auto &[key, chunk] : chunkMap)
 		{
-			if (chunk->needsMeshRebuild && rebuildBudget > 0)
+			float distSq = chunkCenterDistanceSqToCamera(chunk->chunkX, chunk->chunkZ);
+			bool inFrustum = frustum.isChunkVisible(chunk->chunkX, chunk->chunkZ);
+
+			if (chunk->needsMeshRebuild)
 			{
-				int cx = chunk->chunkX;
-				int cz = chunk->chunkZ;
-				chunk->meshGenerate(
-					getChunkAt(cx, cz + 1),
-					getChunkAt(cx, cz - 1),
-					getChunkAt(cx + 1, cz),
-					getChunkAt(cx - 1, cz),
-					getChunkAt(cx + 1, cz + 1),
-					getChunkAt(cx - 1, cz + 1),
-					getChunkAt(cx + 1, cz - 1),
-					getChunkAt(cx - 1, cz - 1));
-				rebuildBudget--;
+				ChunkRebuildCandidate rebuildCandidate;
+				rebuildCandidate.chunk = chunk;
+				rebuildCandidate.distSq = distSq;
+				rebuildCandidate.inFrustum = inFrustum;
+				rebuildCandidates.push_back(rebuildCandidate);
 			}
 
-			if (!frustum.isChunkVisible(chunk->chunkX, chunk->chunkZ))
+			if (!inFrustum)
 			{
 				continue;
 			}
 
-			float centerX = chunk->chunkX * CHUNK_SIZE_X + CHUNK_SIZE_X * 0.5f;
-			float centerZ = chunk->chunkZ * CHUNK_SIZE_Z + CHUNK_SIZE_Z * 0.5f;
-			float dx = centerX - camera.Position.x;
-			float dz = centerZ - camera.Position.z;
-			visibleList.push_back({chunk, dx * dx + dz * dz});
+			visibleList.push_back({chunk, distSq});
+		}
+
+		std::sort(rebuildCandidates.begin(), rebuildCandidates.end(),
+				  [](const ChunkRebuildCandidate &left, const ChunkRebuildCandidate &right)
+				  {
+					  if (left.inFrustum != right.inFrustum)
+					  {
+						  return left.inFrustum > right.inFrustum;
+					  }
+					  return left.distSq < right.distSq;
+				  });
+
+		size_t meshWorkerCount = gChunkMesher.workerCount();
+		if (meshWorkerCount < 1)
+		{
+			meshWorkerCount = 1;
+		}
+
+		size_t maxPendingMeshJobs = meshWorkerCount * 2;
+		if (maxPendingMeshJobs < 2)
+		{
+			maxPendingMeshJobs = 2;
+		}
+
+		size_t scheduleBudget = 0;
+		if (gPendingMeshRevisions.size() < maxPendingMeshJobs)
+		{
+			scheduleBudget = maxPendingMeshJobs - gPendingMeshRevisions.size();
+		}
+
+		for (const ChunkRebuildCandidate &candidate : rebuildCandidates)
+		{
+			if (scheduleBudget == 0)
+			{
+				break;
+			}
+			if (isMeshBuildPendingForCurrentRevision(candidate.chunk))
+			{
+				continue;
+			}
+
+			ClientChunkMeshJob job;
+			if (!buildMeshJobForChunk(candidate.chunk, job))
+			{
+				continue;
+			}
+
+			int64_t key = chunkKey(candidate.chunk->chunkX, candidate.chunk->chunkZ);
+			gPendingMeshRevisions[key] = candidate.chunk->revision;
+			gChunkMesher.enqueue(std::move(job));
+			scheduleBudget--;
 		}
 
 		std::sort(visibleList.begin(), visibleList.end(),
@@ -871,6 +1085,11 @@ int main()
 		ImGui::Separator();
 		ImGui::Text("Chunks: %d / %zu visible", visibleChunks, chunkMap.size());
 		ImGui::Text("Streamed chunks: %zu", streamedChunkKeys.size());
+		ImGui::Text("Mesh workers: %zu", gChunkMesher.workerCount());
+		ImGui::Text("Mesh jobs: %zu tracked / %zu queued / %zu ready",
+					gPendingMeshRevisions.size(),
+					gChunkMesher.pendingJobCount(),
+					gChunkMesher.completedJobCount());
 		ImGui::Text("Total faces: %llu", totalFaces);
 		ImGui::Text("Total vertices: %llu", totalFaces * 6);
 		ImGui::SliderInt("Render Dist (chunks)", &renderDistanceChunks, 2, 32);
@@ -881,6 +1100,7 @@ int main()
 			{
 				ImGui::Text("Classic streaming enabled");
 				ImGui::Text("Playable bounds clamp disabled in this mode");
+				ImGui::SliderInt("Classic Stream Pad", &classicStreamingPaddingChunks, 0, 8);
 			}
 			else
 			{
@@ -910,13 +1130,18 @@ int main()
 		ImGui::Checkbox("Minecraft Fog (Render Dist)", &minecraftFogByRenderDistance);
 		if (minecraftFogByRenderDistance)
 		{
-			ImGui::SliderFloat("Fog Start %%", &minecraftFogStartPercent, 0.05f, 0.50f);
-			ImGui::Text("Fog End = Render Distance");
+			ImGui::SliderFloat("Fog Start %%", &minecraftFogStartPercent, 0.55f, 0.98f);
+			ImGui::Text("Fog End = Far Plane");
 		}
 		else
 		{
-			ImGui::SliderFloat("Fog Start", &fogStart, 0.0f, 500.0f);
-			ImGui::SliderFloat("Fog End", &fogEnd, 0.0f, 500.0f);
+			float fogSliderMax = farPlane;
+			if (fogSliderMax < 500.0f)
+			{
+				fogSliderMax = 500.0f;
+			}
+			ImGui::SliderFloat("Fog Start", &fogStart, 0.0f, fogSliderMax);
+			ImGui::SliderFloat("Fog End", &fogEnd, 0.0f, fogSliderMax);
 		}
 		ImGui::Text("Fog active: %.1f -> %.1f", fogStartFrame, fogEndFrame);
 		ImGui::Separator();
@@ -949,6 +1174,8 @@ int main()
 	ImGui::DestroyContext();
 
 	gWorldClient.disconnect();
+	gChunkMesher.stop();
+	gPendingMeshRevisions.clear();
 	for (auto &[key, chunk] : chunkMap)
 	{
 		delete chunk;
