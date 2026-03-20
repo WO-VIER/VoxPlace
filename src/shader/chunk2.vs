@@ -12,9 +12,21 @@ layout(std430, binding = 0) readonly buffer ChunkData {
     uint faces[];
 };
 
+struct DrawInfo {
+    uint faceOffset;
+    int chunkX;
+    int chunkZ;
+    int padding;
+};
+
+layout(std430, binding = 1) readonly buffer ChunkDrawData {
+    DrawInfo draws[];
+};
+
 uniform mat4 view;
 uniform mat4 projection;
 uniform vec3 chunkPos;
+uniform int useIndirectDraw;
 
 // Sorties vers le fragment shader
 out flat vec3 vColor;
@@ -55,6 +67,13 @@ void main()
 {
     int faceID = gl_VertexID / 6;
     int vertID = gl_VertexID % 6;
+    vec3 chunkOrigin = chunkPos;
+
+    if (useIndirectDraw == 1) {
+        DrawInfo drawInfo = draws[gl_DrawID];
+        faceID += int(drawInfo.faceOffset);
+        chunkOrigin = vec3(float(drawInfo.chunkX * 16), 0.0, float(drawInfo.chunkZ * 16));
+    }
 
     // Lecture des 2 words du SSBO
     uint word0 = faces[faceID * 2];
@@ -81,7 +100,7 @@ void main()
     int cornerIdx = QUAD_INDICES[vertID];
     vec3 offset = FACE_OFFSETS[faceDir * 4 + cornerIdx];
     vec3 localPos = vec3(float(x), float(y), float(z)) + offset;
-    vec3 worldPos = chunkPos + localPos;
+    vec3 worldPos = chunkOrigin + localPos;
 
     // AO pour ce vertex
     int aoValues[4] = int[4](ao0, ao1, ao2, ao3);
@@ -93,6 +112,6 @@ void main()
     vFaceDir = faceDir;
     vSunblock = float(sunQ) / 127.0;  // Parité BetterSpades (7-bit)
     vFragPos = worldPos;
-    vWorldBlockPos = chunkPos + vec3(float(x), float(y), float(z));
+    vWorldBlockPos = chunkOrigin + vec3(float(x), float(y), float(z));
     vAO = ao;
 }

@@ -10,6 +10,7 @@
 #include <Camera.h>
 #include <ClientChunkMesher.h>
 #include <Chunk2.h>
+#include <ChunkIndirectRenderer.h>
 #include <ChunkPalette.h>
 #include <Crosshair.h>
 #include <Frustum.h>
@@ -23,6 +24,7 @@
 #include <glm/fwd.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -57,8 +59,10 @@ int classicStreamingPaddingChunks = 4;
 
 bool useAO = true;
 bool debugSunblockOnly = false;
+bool useIndirectRendering = false;
 int selectedPaletteIndex = 32;
 Crosshair crosshair;
+float chunkRenderCpuMs = 0.0f;
 
 GLFWwindow *g_window = nullptr;
 Camera camera(glm::vec3(0.0f, 35.0f, 0.0f));
@@ -74,6 +78,7 @@ WorldClient gWorldClient;
 WorldFrontier gWorldFrontier;
 bool gHasWorldFrontier = false;
 ClientChunkMesher gChunkMesher;
+ChunkIndirectRenderer gChunkIndirectRenderer;
 
 std::unordered_map<int64_t, Chunk2 *> chunkMap;
 std::unordered_set<int64_t> streamedChunkKeys;
@@ -889,6 +894,7 @@ int main()
 	Shader chunkShader("src/shader/chunk2.vs", "src/shader/chunk2.fs");
 	LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
 	gChunkMesher.start();
+	gChunkIndirectRenderer.init();
 	std::cout << "Client mesh workers: " << gChunkMesher.workerCount() << std::endl;
 
 	if (!gWorldClient.connectToServer(SERVER_HOST, SERVER_PORT))
@@ -948,6 +954,7 @@ int main()
 		chunkShader.setVec3("cameraPos", camera.Position);
 		chunkShader.setInt("useAO", useAO ? 1 : 0);
 		chunkShader.setInt("debugSunblockOnly", debugSunblockOnly ? 1 : 0);
+		chunkShader.setInt("useIndirectDraw", 0);
 
 		Frustum frustum;
 		frustum.extractFromVP(projection * view);
@@ -1047,14 +1054,36 @@ int main()
 				  { return left.distSq < right.distSq; });
 
 		int visibleChunks = static_cast<int>(visibleList.size());
-		for (const ChunkDraw &draw : visibleList)
+		auto chunkRenderCpuStart = std::chrono::steady_clock::now();
+		if (useIndirectRendering)
 		{
-			chunkShader.setVec3("chunkPos", glm::vec3(
-										 static_cast<float>(draw.chunk->chunkX * CHUNK_SIZE_X),
-										 0.0f,
-										 static_cast<float>(draw.chunk->chunkZ * CHUNK_SIZE_Z)));
-			draw.chunk->render();
+			std::vector<Chunk2 *> visibleChunksForIndirect;
+			visibleChunksForIndirect.reserve(visibleList.size());
+			for (const ChunkDraw &draw : visibleList)
+			{
+				visibleChunksForIndirect.push_back(draw.chunk);
+			}
+
+			gChunkIndirectRenderer.uploadVisibleChunks(visibleChunksForIndirect);
+			chunkShader.setInt("useIndirectDraw", 1);
+			gChunkIndirectRenderer.draw();
+			chunkShader.setInt("useIndirectDraw", 0);
 		}
+		else
+		{
+			for (const ChunkDraw &draw : visibleList)
+			{
+				chunkShader.setVec3("chunkPos", glm::vec3(
+											 static_cast<float>(draw.chunk->chunkX * CHUNK_SIZE_X),
+											 0.0f,
+											 static_cast<float>(draw.chunk->chunkZ * CHUNK_SIZE_Z)));
+				draw.chunk->render();
+			}
+		}
+		auto chunkRenderCpuEnd = std::chrono::steady_clock::now();
+		chunkRenderCpuMs = std::chrono::duration<float, std::milli>(
+			chunkRenderCpuEnd - chunkRenderCpuStart)
+							   .count();
 
 		int currentFbW = 0;
 		int currentFbH = 0;
@@ -1085,6 +1114,24 @@ int main()
 		ImGui::Separator();
 		ImGui::Text("Chunks: %d / %zu visible", visibleChunks, chunkMap.size());
 		ImGui::Text("Streamed chunks: %zu", streamedChunkKeys.size());
+		ImGui::Text("Chunk render CPU: %.3f ms", chunkRenderCpuMs);
+		if (useIndirectRendering)
+		{
+			int cpuDrawCalls = 0;
+			if (gChunkIndirectRenderer.drawCount > 0)
+			{
+				cpuDrawCalls = 1;
+			}
+			ImGui::Text("Draw mode: Indirect");
+			ImGui::Text("CPU draw calls: %d", cpuDrawCalls);
+			ImGui::Text("Indirect commands: %zu", gChunkIndirectRenderer.drawCount);
+			ImGui::Text("Indirect faces: %zu", gChunkIndirectRenderer.faceCount);
+		}
+		else
+		{
+			ImGui::Text("Draw mode: Direct");
+			ImGui::Text("CPU draw calls: %d", visibleChunks);
+		}
 		ImGui::Text("Mesh workers: %zu", gChunkMesher.workerCount());
 		ImGui::Text("Mesh jobs: %zu tracked / %zu queued / %zu ready",
 					gPendingMeshRevisions.size(),
@@ -1147,6 +1194,7 @@ int main()
 		ImGui::Separator();
 		ImGui::Checkbox("Ambient Occlusion", &useAO);
 		ImGui::Checkbox("Sunblock debug", &debugSunblockOnly);
+		ImGui::Checkbox("Indirect Rendering", &useIndirectRendering);
 		ImGui::SliderInt("Palette index", &selectedPaletteIndex, 1, static_cast<int>(PLAYER_COLOR_PALETTE_SIZE));
 		uint32_t selectedColor = playerPaletteColor(static_cast<uint8_t>(selectedPaletteIndex - 1));
 		ImVec4 previewColor(
@@ -1175,6 +1223,7 @@ int main()
 
 	gWorldClient.disconnect();
 	gChunkMesher.stop();
+	gChunkIndirectRenderer.cleanup();
 	gPendingMeshRevisions.clear();
 	for (auto &[key, chunk] : chunkMap)
 	{

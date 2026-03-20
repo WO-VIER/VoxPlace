@@ -29,6 +29,7 @@ public:
 	uint32_t faceCount = 0;
 	bool needsMeshRebuild = true;
 	bool isEmpty = true;
+	std::vector<uint32_t> packedFacesCpu;
 
 	Chunk2(int cx = 0, int cz = 0) : VoxelChunkData(cx, cz)
 	{
@@ -190,6 +191,11 @@ public:
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo);
 		glBindVertexArray(vao);
 		glDrawArrays(GL_TRIANGLES, 0, faceCount * 6);
+	}
+
+	const std::vector<uint32_t> &packedFaces() const
+	{
+		return packedFacesCpu;
 	}
 
 	void cleanup()
@@ -436,10 +442,13 @@ private:
 
 		if (faces.empty())
 		{
+			packedFacesCpu.clear();
 			faceCount = 0;
 			needsMeshRebuild = false;
 			return;
 		}
+
+		packedFacesCpu = faces;
 
 		glGenBuffers(1, &ssbo);
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
