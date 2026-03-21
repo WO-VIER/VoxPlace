@@ -328,6 +328,7 @@ void drainCompletedMeshBuilds()
 		}
 
 		chunk->uploadBuiltMesh(result.packedFaces);
+		gChunkIndirectRenderer.upsertChunk(*chunk);
 	}
 }
 
@@ -739,6 +740,7 @@ void syncChunkStreaming()
 		gWorldClient.sendChunkDrop(cx, cz);
 		streamedChunkKeys.erase(key);
 		gPendingMeshRevisions.erase(key);
+		gChunkIndirectRenderer.removeChunk(key);
 		markChunkNeighborhoodDirty(cx, cz);
 
 		auto it = chunkMap.find(key);
@@ -1064,7 +1066,7 @@ int main()
 				visibleChunksForIndirect.push_back(draw.chunk);
 			}
 
-			gChunkIndirectRenderer.uploadVisibleChunks(visibleChunksForIndirect);
+			gChunkIndirectRenderer.buildVisibleDrawData(visibleChunksForIndirect);
 			chunkShader.setInt("useIndirectDraw", 1);
 			gChunkIndirectRenderer.draw();
 			chunkShader.setInt("useIndirectDraw", 0);
@@ -1126,6 +1128,12 @@ int main()
 			ImGui::Text("CPU draw calls: %d", cpuDrawCalls);
 			ImGui::Text("Indirect commands: %zu", gChunkIndirectRenderer.drawCount);
 			ImGui::Text("Indirect faces: %zu", gChunkIndirectRenderer.faceCount);
+			ImGui::Text("Indirect draw data: %s (%llu rebuilds)",
+						gChunkIndirectRenderer.lastBuildReused ? "reused" : "rebuilt",
+						static_cast<unsigned long long>(gChunkIndirectRenderer.drawDataBuildCount));
+			ImGui::Text("Arena usage: %.2f / %.2f MB",
+						static_cast<float>(gChunkIndirectRenderer.arenaReservedWords * sizeof(uint32_t)) / (1024.0f * 1024.0f),
+						static_cast<float>(gChunkIndirectRenderer.arenaWordCapacity * sizeof(uint32_t)) / (1024.0f * 1024.0f));
 		}
 		else
 		{
