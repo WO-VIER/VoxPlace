@@ -34,28 +34,90 @@ namespace
 	constexpr int INITIAL_PLAYABLE_RADIUS = 1;
 	constexpr int INITIAL_PADDING_CHUNKS = 0;
 
-	size_t computeWorkerCount()
+	bool envFlagEnabled(const char *name)
 	{
-		unsigned int reported = std::thread::hardware_concurrency();
-		if (reported == 0)
+		const char *value = std::getenv(name);
+		if (value == nullptr)
 		{
+			return false;
+		}
+		if (value[0] == '\0')
+		{
+			return false;
+		}
+		if (value[0] == '0' && value[1] == '\0')
+		{
+			return false;
+		}
+		return true;
+	}
+
+	bool tryReadEnvInt(const char *name, int &value)
+	{
+		const char *rawValue = std::getenv(name);
+		if (rawValue == nullptr)
+		{
+			return false;
+		}
+		if (rawValue[0] == '\0')
+		{
+			return false;
+		}
+
+		char *end = nullptr;
+		long parsed = std::strtol(rawValue, &end, 10);
+		if (end == rawValue)
+		{
+			return false;
+		}
+		if (end == nullptr || *end != '\0')
+		{
+			return false;
+		}
+
+		value = static_cast<int>(parsed);
+		return true;
+	}
+
+		size_t computeWorkerCount()
+		{
+			int overrideWorkers = 0;
+			if (tryReadEnvInt("VOXPLACE_SERVER_WORKERS", overrideWorkers))
+		{
+			if (overrideWorkers > 0)
+			{
+				return static_cast<size_t>(overrideWorkers);
+			}
+		}
+
+			unsigned int reported = std::thread::hardware_concurrency();
+			if (reported == 0)
+			{
+				return 2;
+			}
+
+			// Heuristique mesurée pour le serveur génération:
+			// en classic-gen local avec gros churn, 8 workers sur-produisent surtout
+			// des readyChunks sans améliorer clairement le résultat visible client.
+			// 2 workers tiennent déjà bien le flux sur le desktop principal, et
+			// correspondent mieux à un budget partagé client+serveur.
+			//
+			// On garde donc:
+			// - petite machine (<= 8 threads logiques): 1 worker
+			// - machine desktop courante (<= 16 threads logiques): 2 workers
+			// - machine plus grosse: 4 workers par défaut
+			//
+			// Les overrides env restent possibles pour les benchs ou un serveur dédié.
+			if (reported <= 8)
+			{
+				return 1;
+			}
+			if (reported <= 16)
+			{
+				return 2;
+			}
 			return 4;
 		}
-		if (reported <= 4)
-		{
-			return 2;
-		}
-		size_t count = static_cast<size_t>(reported - 2);
-		if (count < 2)
-		{
-			count = 2;
-		}
-		if (count > 8)
-		{
-			count = 8;
-		}
-		return count;
-	}
 
 	ChunkBounds makeSquareBounds(int radiusChunks)
 	{
@@ -107,6 +169,15 @@ struct WorldServer::Impl
 	std::deque<VoxelChunkData> readyChunks;
 	std::vector<std::thread> workers;
 	size_t workerCount = 0;
+	bool profileWorkers = false;
+	std::chrono::steady_clock::time_point profileWindowStart;
+	size_t profileGeneratedChunks = 0;
+	size_t profileIntegratedChunks = 0;
+	size_t profileTickCount = 0;
+	size_t profileAccumGenerationTasks = 0;
+	size_t profileAccumReadyChunks = 0;
+	size_t profileMaxGenerationTasks = 0;
+	size_t profileMaxReadyChunks = 0;
 
 	Impl(uint16_t listenPort,
 		 std::unique_ptr<IChunkGenerator> worldGenerator,
@@ -120,6 +191,7 @@ struct WorldServer::Impl
 		frontier.generatedBounds = frontier.playableBounds.expanded(frontier.paddingChunks);
 		frontier.mode = generationMode;
 		updateExpansionProgress();
+		profileWorkers = envFlagEnabled("VOXPLACE_PROFILE_WORKERS");
 	}
 
 	~Impl()
@@ -150,11 +222,16 @@ struct WorldServer::Impl
 		{
 			workers.emplace_back(&Impl::workerLoop, this);
 		}
+		profileWindowStart = std::chrono::steady_clock::now();
 
 		std::cout << "WorldServer listening on port " << port
 				  << " with " << workerCount << " generation worker(s)"
 				  << " in " << worldGenerationModeName(generationMode)
 				  << " mode" << std::endl;
+		if (profileWorkers)
+		{
+			std::cout << "Server worker profiling enabled" << std::endl;
+		}
 
 		bootstrapInitialWorld();
 		return true;
@@ -300,6 +377,7 @@ struct WorldServer::Impl
 
 			std::lock_guard<std::mutex> readyLock(readyMutex);
 			readyChunks.push_back(std::move(chunk));
+			profileGeneratedChunks++;
 		}
 	}
 
@@ -340,6 +418,7 @@ struct WorldServer::Impl
 			sendQueuedChunks(entry.second);
 		}
 		enet_host_flush(host);
+		logWorkerProfileWindowIfNeeded();
 	}
 
 	void integrateReadyChunks(size_t maxCount)
@@ -375,6 +454,78 @@ struct WorldServer::Impl
 			}
 			integratedCount++;
 		}
+		profileIntegratedChunks += integratedCount;
+	}
+
+	void logWorkerProfileWindowIfNeeded()
+	{
+		if (!profileWorkers)
+		{
+			return;
+		}
+
+		size_t generationTaskCount = 0;
+		{
+			std::lock_guard<std::mutex> taskLock(taskMutex);
+			generationTaskCount = generationTasks.size();
+		}
+
+		size_t readyChunkCount = 0;
+		{
+			std::lock_guard<std::mutex> readyLock(readyMutex);
+			readyChunkCount = readyChunks.size();
+		}
+
+		profileTickCount++;
+		profileAccumGenerationTasks += generationTaskCount;
+		profileAccumReadyChunks += readyChunkCount;
+		if (generationTaskCount > profileMaxGenerationTasks)
+		{
+			profileMaxGenerationTasks = generationTaskCount;
+		}
+		if (readyChunkCount > profileMaxReadyChunks)
+		{
+			profileMaxReadyChunks = readyChunkCount;
+		}
+
+		auto now = std::chrono::steady_clock::now();
+		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+			now - profileWindowStart);
+		if (elapsed.count() < 2000)
+		{
+			return;
+		}
+
+		double avgTasks = 0.0;
+		double avgReady = 0.0;
+		if (profileTickCount > 0)
+		{
+			avgTasks = static_cast<double>(profileAccumGenerationTasks) / static_cast<double>(profileTickCount);
+			avgReady = static_cast<double>(profileAccumReadyChunks) / static_cast<double>(profileTickCount);
+		}
+
+		std::cout << "[server-profile] workers=" << workerCount
+				  << " mode=" << worldGenerationModeName(generationMode)
+				  << " clients=" << clients.size()
+				  << " world_chunks=" << worldChunks.size()
+				  << " generated_window=" << profileGeneratedChunks
+				  << " integrated_window=" << profileIntegratedChunks
+				  << " tasks_now=" << generationTaskCount
+				  << " tasks_avg=" << avgTasks
+				  << " tasks_max=" << profileMaxGenerationTasks
+				  << " ready_now=" << readyChunkCount
+				  << " ready_avg=" << avgReady
+				  << " ready_max=" << profileMaxReadyChunks
+				  << std::endl;
+
+		profileWindowStart = now;
+		profileGeneratedChunks = 0;
+		profileIntegratedChunks = 0;
+		profileTickCount = 0;
+		profileAccumGenerationTasks = 0;
+		profileAccumReadyChunks = 0;
+		profileMaxGenerationTasks = generationTaskCount;
+		profileMaxReadyChunks = readyChunkCount;
 	}
 
 	size_t integratedChunksBudgetForTick()

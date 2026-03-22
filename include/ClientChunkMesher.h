@@ -12,27 +12,17 @@
 #include <utility>
 #include <vector>
 
-struct ChunkMeshSnapshot
-{
-	bool hasChunk = false;
-	VoxelChunkData chunk;
-};
-
 struct ClientChunkMeshJob
 {
 	int chunkX = 0;
 	int chunkZ = 0;
 	uint64_t revision = 0;
 	VoxelChunkData center;
-	ChunkMeshSnapshot north;
-	ChunkMeshSnapshot south;
-	ChunkMeshSnapshot east;
-	ChunkMeshSnapshot west;
-	ChunkMeshSnapshot ne;
-	ChunkMeshSnapshot nw;
-	ChunkMeshSnapshot se;
-	ChunkMeshSnapshot sw;
+	Chunk2::MeshNeighborhood neighbors;
 };
+
+static_assert(sizeof(ClientChunkMeshJob) <= 131072,
+			  "ClientChunkMeshJob must stay below 128 KiB");
 
 struct ClientChunkMeshResult
 {
@@ -149,38 +139,31 @@ public:
 	}
 
 private:
-	static size_t computeWorkerCount()
-	{
-		unsigned int reported = std::thread::hardware_concurrency();
-		if (reported == 0)
+		static size_t computeWorkerCount()
 		{
-			return 1;
-		}
-		if (reported <= 4)
-		{
-			return 1;
-		}
+			unsigned int reported = std::thread::hardware_concurrency();
+			if (reported == 0)
+			{
+				return 1;
+			}
 
-		size_t workerCount = static_cast<size_t>(reported - 3);
-		if (workerCount < 1)
-		{
-			workerCount = 1;
+			// Heuristique mesurée pour le meshing client:
+			// sur une machine locale client+serveur, ajouter plus de workers mesh
+			// n'a pas amélioré le throughput utile. Au contraire, 1 worker est
+			// souvent meilleur ou équivalent à 2/4, avec moins de pression cache.
+			//
+			// On reste donc très conservateur par défaut:
+			// - petites et moyennes machines (jusqu'à 16 threads logiques): 1 worker
+			// - machines plus grosses: 2 workers max par défaut
+			//
+			// Si un bench ultérieur montre qu'une machine dédiée client peut monter
+			// plus haut, on garde la possibilité d'override via l'env côté main3.cpp.
+			if (reported <= 16)
+			{
+				return 1;
+			}
+			return 2;
 		}
-		if (workerCount > 4)
-		{
-			workerCount = 4;
-		}
-		return workerCount;
-	}
-
-	static const VoxelChunkData *snapshotPtr(const ChunkMeshSnapshot &snapshot)
-	{
-		if (!snapshot.hasChunk)
-		{
-			return nullptr;
-		}
-		return &snapshot.chunk;
-	}
 
 	void workerLoop()
 	{
@@ -201,21 +184,11 @@ private:
 				pendingJobs.pop_front();
 			}
 
-			Chunk2::MeshNeighborhood neighbors;
-			neighbors.north = snapshotPtr(job.north);
-			neighbors.south = snapshotPtr(job.south);
-			neighbors.east = snapshotPtr(job.east);
-			neighbors.west = snapshotPtr(job.west);
-			neighbors.ne = snapshotPtr(job.ne);
-			neighbors.nw = snapshotPtr(job.nw);
-			neighbors.se = snapshotPtr(job.se);
-			neighbors.sw = snapshotPtr(job.sw);
-
-			ClientChunkMeshResult result;
-			result.chunkX = job.chunkX;
-			result.chunkZ = job.chunkZ;
-			result.revision = job.revision;
-			result.packedFaces = Chunk2::buildPackedFaces(job.center, neighbors);
+				ClientChunkMeshResult result;
+				result.chunkX = job.chunkX;
+				result.chunkZ = job.chunkZ;
+				result.revision = job.revision;
+				result.packedFaces = Chunk2::buildPackedFaces(job.center, job.neighbors);
 
 			{
 				std::lock_guard<std::mutex> completedLock(completedMutex);

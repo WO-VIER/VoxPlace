@@ -1954,6 +1954,204 @@ perimeterChunkCount = 4 * sideChunks - 4
 
 ---
 
+## 22/03 Workers client/serveur, SMT et oversubscription (mars 2026)
+
+> **Rectificatif clair :** certaines notes plus haut parlent d'un "pool dynamique" ou d'un futur multithreading plus agressif. L'état réel actuel de VoxPlace est plus simple : le client et le serveur choisissent leur nombre de workers au **démarrage** en fonction de la machine, puis gardent ce nombre **fixe** pendant l'exécution.
+
+### État réel de VoxPlace aujourd'hui
+
+- **Client meshing** : `ClientChunkMesher::computeWorkerCount()` regarde `std::thread::hardware_concurrency()`, puis applique une borne conservatrice : `reported - 3`, clampé entre `1` et `4`. Le pool est créé une seule fois quand `gChunkMesher.start()` est appelé, puis il ne se redimensionne pas à chaud.
+- **Serveur génération** : `WorldServer::computeWorkerCount()` fait la même idée côté serveur : `reported - 2`, clampé entre `2` et `8`. Les workers sont créés dans `WorldServer::start()`, puis ils restent fixes jusqu'à l'arrêt du serveur.
+- Donc dans VoxPlace, **"dynamic" veut dire "adapté à la machine au lancement"**, pas "auto-scaling runtime selon la charge".
+- Ce choix est volontairement conservateur : VoxPlace ne suppose pas qu'il peut monopoliser tous les threads logiques de la machine.
+
+### Pourquoi il ne faut pas prendre tous les threads
+
+- Si le **client** et le **serveur** tournent sur la **même machine**, chacun voit seulement `hardware_concurrency()` et pourrait croire qu'il peut utiliser "presque tout". Si les deux le font en même temps, on crée de l'**oversubscription**.
+- Le **main thread client** ne fait pas que dessiner "un peu" : il garde l'input, la boucle de rendu, le tri/culling, le drain des meshes terminés et l'upload OpenGL. Il faut lui laisser de la marge.
+- Le **main thread serveur** garde ENet, le tick autoritaire, l'intégration des chunks prêts, les validations gameplay et l'orchestration globale. Lui aussi doit rester réactif.
+- Le **meshing voxel** et la **génération de chunks** ne sont pas des charges purement ALU/FPU. Elles scannent de gros tableaux 3D, lisent les voisins, écrivent beaucoup en mémoire et mettent une forte pression sur les **caches** et la **bande passante mémoire**.
+- Ajouter plus de workers que nécessaire peut donc empirer les performances : plus de compétition pour le cache partagé, plus d'évictions, plus de pression mémoire, plus de latence visible côté client et plus d'instabilité dans les frametimes.
+- Le **SMT** n'offre pas "2 vrais cœurs" par cœur physique. Deux threads matériels partagent une partie des unités d'exécution, du cache et de la bande passante interne. Selon la charge, utiliser les deux threads SMT peut aider, être neutre, ou dégrader la perf.
+
+> **À retenir :** "plus de threads" n'est pas une optimisation en soi. Sur un moteur voxel, le bon objectif est de saturer utilement le CPU **sans** faire exploser les coûts mémoire/cache ni voler du temps aux threads principaux.
+
+### Ce que montre ourCraft
+
+- **Côté client**, ourCraft utilise un plafond manuel `workerThreadsForBaking`, puis le réduit à chaud quand la charge de rebake baisse. L'idée intéressante n'est pas le chiffre lui-même, mais le fait de **laisser la charge réelle décider** si plusieurs workers sont utiles ou non.
+- **Côté serveur**, ourCraft redimensionne réellement son pool de workers à chaud selon une moyenne de charge. C'est plus dynamique que VoxPlace.
+- En revanche, l'implémentation d'ourCraft repose beaucoup sur du **spin-wait / busy-wait**. Ce n'est pas la partie à copier. L'idée utile à reprendre est : **adapter le nombre de workers à la charge**, pas "prendre tous les threads" ni reproduire un pool brutal.
+
+### Règle pratique perf-first
+
+- Ne pas raisonner "j'ai `N` threads logiques, donc je dois tous les utiliser".
+- Raisonner plutôt : **combien de workers sont nécessaires pour saturer utilement la charge actuelle** sans casser le rendu client, la latence serveur, l'OS et les autres tâches.
+- Si client et serveur tournent ensemble sur la même machine, il faut penser en **budget global partagé**, pas en "budget client" et "budget serveur" complètement indépendants.
+
+En pratique, une stratégie saine est de :
+- choisir un **plafond initial auto** au démarrage selon la machine
+- laisser de la marge au main thread, au réseau, au rendu et à l'OS
+- puis, plus tard, ajouter un **auto-scaling runtime** piloté par la backlog, le frametime et la latence réelle
+
+### Sources
+
+- Intel VTune Profiler — Threading Efficiency View : https://www.intel.com/content/www/us/en/docs/vtune-profiler/user-guide/2025-4/threading-efficiency-view.html
+- Intel Fortran Compiler Guide — Control Thread Allocation : https://www.intel.com/content/www/us/en/docs/fortran-compiler/developer-guide-reference/2023-0/control-thread-allocation.html
+- Intel — Resolving Multicore Non-Scaling : https://www.intel.com/content/dam/develop/external/us/en/documents/resolving-multicore-non-scaling-181827.pdf
+- AMD EPYC 9005 BIOS & Workload Tuning Guide : https://docs.amd.com/v/u/en-US/58467_amd-epyc-9005-tg-bios-and-workload
+
+---
+
+## 22/03 Bench workers à `Render Distance = 32` (Classic Gen)
+
+> **Setup bench réel :** `VoxPlaceServer --classic-gen` + `VoxPlace` avec `VOXPLACE_RENDER_DISTANCE=32`, sur la machine principale (`Ryzen 7 5700X3D`, `RTX 3070 Ti`, `32 Go RAM`).
+
+### Charge observée
+
+- chunks streamés stabilisés : `4053`
+- chunks visibles stabilisés : `845`
+- donc ce bench est **nettement plus représentatif** qu'un run léger à petite render distance
+
+### Couples de workers testés sur la même machine
+
+- `client/server = 4/8`
+- `client/server = 2/4`
+- `client/server = 1/2`
+
+### Résultat principal
+
+- Le **nombre de workers** n'est pas le bottleneck principal dans ce scénario.
+- Côté **serveur**, `8` workers génèrent plus vite que ce que l'intégration consomme vraiment. On observe surtout une **surproduction** dans `readyChunks`.
+- Côté **client**, une fois la scène chargée, `4` workers mesh n'apportent pas de gain par rapport à `2`, et `1` worker reste encore compétitif.
+
+### Résultats utiles
+
+- **Serveur 8 workers** :
+  - gros backlog `readyChunks`
+  - plus de pression CPU
+  - pas de gain utile clair sur le débit visible côté client
+- **Serveur 4 workers** :
+  - même résultat final visible dans ce scénario
+  - moins de surproduction
+  - meilleur équilibre pratique
+- **Serveur 2 workers** :
+  - backlog beaucoup plus faible
+  - ça tient encore jusqu'à `4053` chunks, mais on commence à voir que la marge diminue
+
+- **Client 4 workers** :
+  - environ `296-298 FPS` stabilisés
+- **Client 2 workers** :
+  - environ `301-303 FPS` stabilisés
+- **Client 1 worker** :
+  - environ `306-308 FPS` stabilisés
+
+> **Lecture perf :** sur cette machine, à `Render Distance = 32`, le couple `4/8` est trop agressif. Il consomme plus de CPU sans améliorer clairement le résultat final.
+
+### Conclusion pratique pour le desktop principal
+
+- base solide pour **même machine** :
+  - `client=1`, `server=2`
+- variante plus prudente si on veut garder de la marge sur les pics :
+  - `client=2`, `server=4`
+- en l'état, je ne garderais pas `client=4`, `server=8`
+
+### Représentativité du bench
+
+- **Oui**, ce bench est représentatif pour :
+  - la **montée en charge initiale**
+  - le coût d'un très grand volume de chunks chargés en même temps
+  - le régime stabilisé avec beaucoup de chunks visibles
+- **Non**, il n'est **pas encore pleinement représentatif** d'un scénario où le joueur **vole en continu** et renouvelle sans arrêt la frontière de chunks.
+
+Pourquoi ?
+
+- ici, après la phase de remplissage initiale, le backlog finit par tomber à `0`
+- en vol rapide, on garde au contraire une pression permanente sur :
+  - `generationTasks`
+  - `readyChunks`
+  - le streaming réseau
+  - le meshing des nouveaux chunks entrants
+
+> **Conséquence importante :** ce bench dit très bien "qui sur-alloue des threads pour rien sur un gros chargement", mais il ne remplace pas encore un **bench de traversée continue**. Le prochain test utile est un run scripté où la caméra avance en permanence pour maintenir une backlog réelle côté génération + meshing.
+
+---
+
+## 22/03 Bench fly-through continu (`Render Distance = 32`, `--classic-gen`)
+
+> **Setup bench mouvement :** même machine principale (`Ryzen 7 5700X3D`, `RTX 3070 Ti`, `32 Go RAM`), mais cette fois avec une **caméra auto-pilotée** qui avance en continu pour renouveler la frontière de chunks au lieu d'attendre la stabilisation complète.
+
+### Pourquoi ce bench est meilleur
+
+- Le bench précédent disait surtout si on **sur-allouait** des workers pendant la montée en charge initiale.
+- Ce bench mesure un cas plus proche du gameplay "je vole et je renouvelle la frontière en continu".
+- On observe maintenant un vrai **churn** :
+  - nouveaux `ChunkRequest`
+  - `ChunkDrop`
+  - `ChunkSnapshot` reçus
+  - backlog de génération qui ne tombe pas immédiatement
+
+### Couple testé en fly-through
+
+- `client/server = 2/4`
+- `client/server = 1/2`
+- `Render Distance = 32`
+- `Classic Gen`
+- vitesse de vol bench : `80`
+
+### Résultat principal
+
+- Le fly-through confirme que le bench statique seul n'était **pas suffisant**.
+- Une fois le monde en mouvement continu, on voit mieux si le système tient un **débit soutenu** de génération + streaming + meshing.
+- Le couple `1/2` reste **au moins aussi bon**, et souvent **meilleur**, que `2/4` sur ce scénario.
+
+### Résultats observés
+
+- **`client/server = 2/4`**
+  - FPS souvent autour de `357-399`
+  - `tracked` mesh reste collé à `4`
+  - `ready` mesh autour de `2`
+  - churn permanent : ~`390-400` requests/drops par fenêtre de log, ~`350-390` receives
+  - la scène reste en pression continue
+
+- **`client/server = 1/2`**
+  - FPS souvent autour de `374-422`
+  - `tracked` mesh collé à `2`
+  - `ready` mesh autour de `1`
+  - churn permanent du même ordre de grandeur
+  - le client tient mieux malgré moins de workers
+
+### Lecture perf
+
+- Même en déplacement continu, le problème principal ne semble **toujours pas** être "pas assez de workers".
+- Réduire les workers ne casse pas le bench. Au contraire, le réglage plus léger garde souvent un meilleur frametime moyen.
+- Donc, sur cette machine et ce scénario :
+  - `client=1`, `server=2` reste une **base très crédible**
+  - `client=2`, `server=4` reste une variante prudente, mais pas clairement meilleure
+
+### Piste suivante plus structurelle
+
+Les sections précédentes du document donnent une piste plus intéressante que le simple tuning des workers :
+
+- **`#### 2. Chunk Sections (subdiviser en 16³)`**
+  - aujourd'hui, beaucoup de travail CPU continue d'être fait sur de grandes zones pleines d'air
+  - si on découpe un chunk en sous-sections `16³`, on peut **skip** très tôt les sections vides
+  - cela réduit directement :
+  - le coût de génération
+  - le coût de meshing
+  - le coût de transfert/réception si on exploite ces sections côté réseau plus tard
+
+- **`## 7. Architecture Serveur & Réseau`**
+  - les budgets d'intégration et d'envoi sont encore très simples
+  - le vrai sujet en fly-through semble être **livrer les bons chunks au bon moment**, pas juste générer plus vite
+  - donc la prochaine vraie optimisation rentable ressemble plus à :
+  - meilleure **priorisation** des chunks proches / devant la caméra
+  - réduction du travail inutile
+  - et éventuellement sections de chunks pour ne pas traiter tout le volume comme un bloc monolithique
+
+> **Conclusion actuelle :** le tuning des workers a été utile pour éliminer les mauvais réglages. Mais la suite la plus prometteuse n'est probablement pas "encore mieux choisir le nombre de threads". La vraie piste semble être : **réduire le travail par chunk et mieux prioriser le pipeline serveur → réseau → client**.
+
+---
+
 ## 12. Liens Utiles
 
 | Ressource | Lien |

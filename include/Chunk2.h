@@ -12,16 +12,18 @@
 class Chunk2 : public VoxelChunkData
 {
 public:
+	static constexpr int SUNBLOCK_TRACE_DEPTH = 9;
+
 	struct MeshNeighborhood
 	{
-		const VoxelChunkData *north = nullptr;
-		const VoxelChunkData *south = nullptr;
-		const VoxelChunkData *east = nullptr;
-		const VoxelChunkData *west = nullptr;
-		const VoxelChunkData *ne = nullptr;
-		const VoxelChunkData *nw = nullptr;
-		const VoxelChunkData *se = nullptr;
-		const VoxelChunkData *sw = nullptr;
+		uint32_t north[CHUNK_SIZE_X][CHUNK_SIZE_Y] = {};
+		uint32_t south[CHUNK_SIZE_X][CHUNK_SIZE_Y][SUNBLOCK_TRACE_DEPTH] = {};
+		uint32_t east[CHUNK_SIZE_Y][CHUNK_SIZE_Z] = {};
+		uint32_t west[CHUNK_SIZE_Y][CHUNK_SIZE_Z] = {};
+		uint32_t ne[CHUNK_SIZE_Y] = {};
+		uint32_t nw[CHUNK_SIZE_Y] = {};
+		uint32_t se[CHUNK_SIZE_Y] = {};
+		uint32_t sw[CHUNK_SIZE_Y] = {};
 	};
 
 	GLuint ssbo = 0;
@@ -175,10 +177,33 @@ public:
 					  Chunk2 *ne = nullptr, Chunk2 *nw = nullptr,
 					  Chunk2 *se = nullptr, Chunk2 *sw = nullptr)
 	{
-		MeshNeighborhood neighbors = makeNeighborhood(
+		MeshNeighborhood neighbors;
+		captureMeshNeighborhood(
+			neighbors,
 			north, south, east, west, ne, nw, se, sw);
 		std::vector<uint32_t> packedFaces = buildPackedFaces(*this, neighbors);
 		uploadMesh(packedFaces);
+	}
+
+	static void captureMeshNeighborhood(MeshNeighborhood &neighborhood,
+										const VoxelChunkData *north,
+										const VoxelChunkData *south,
+										const VoxelChunkData *east,
+										const VoxelChunkData *west,
+										const VoxelChunkData *ne,
+										const VoxelChunkData *nw,
+										const VoxelChunkData *se,
+										const VoxelChunkData *sw)
+	{
+		neighborhood = MeshNeighborhood();
+		captureNorthEdge(neighborhood, north);
+		captureSouthBand(neighborhood, south);
+		captureEastEdge(neighborhood, east);
+		captureWestEdge(neighborhood, west);
+		captureNorthEastCorner(neighborhood, ne);
+		captureNorthWestCorner(neighborhood, nw);
+		captureSouthEastCorner(neighborhood, se);
+		captureSouthWestCorner(neighborhood, sw);
 	}
 
 	void render() const
@@ -261,25 +286,132 @@ public:
 	}
 
 private:
-	static MeshNeighborhood makeNeighborhood(const Chunk2 *north,
-											 const Chunk2 *south,
-											 const Chunk2 *east,
-											 const Chunk2 *west,
-											 const Chunk2 *ne,
-											 const Chunk2 *nw,
-											 const Chunk2 *se,
-											 const Chunk2 *sw)
+	static void captureNorthEdge(MeshNeighborhood &neighborhood,
+								 const VoxelChunkData *north)
 	{
-		MeshNeighborhood neighborhood;
-		neighborhood.north = north;
-		neighborhood.south = south;
-		neighborhood.east = east;
-		neighborhood.west = west;
-		neighborhood.ne = ne;
-		neighborhood.nw = nw;
-		neighborhood.se = se;
-		neighborhood.sw = sw;
-		return neighborhood;
+		if (north == nullptr)
+		{
+			return;
+		}
+
+		for (int x = 0; x < CHUNK_SIZE_X; x++)
+		{
+			for (int y = 0; y < CHUNK_SIZE_Y; y++)
+			{
+				neighborhood.north[x][y] = north->blocks[x][y][0];
+			}
+		}
+	}
+
+	static void captureSouthBand(MeshNeighborhood &neighborhood,
+								 const VoxelChunkData *south)
+	{
+		if (south == nullptr)
+		{
+			return;
+		}
+
+		for (int x = 0; x < CHUNK_SIZE_X; x++)
+		{
+			for (int y = 0; y < CHUNK_SIZE_Y; y++)
+			{
+				for (int depth = 0; depth < SUNBLOCK_TRACE_DEPTH; depth++)
+				{
+					int sourceZ = CHUNK_SIZE_Z - 1 - depth;
+					neighborhood.south[x][y][depth] = south->blocks[x][y][sourceZ];
+				}
+			}
+		}
+	}
+
+	static void captureEastEdge(MeshNeighborhood &neighborhood,
+								const VoxelChunkData *east)
+	{
+		if (east == nullptr)
+		{
+			return;
+		}
+
+		for (int y = 0; y < CHUNK_SIZE_Y; y++)
+		{
+			for (int z = 0; z < CHUNK_SIZE_Z; z++)
+			{
+				neighborhood.east[y][z] = east->blocks[0][y][z];
+			}
+		}
+	}
+
+	static void captureWestEdge(MeshNeighborhood &neighborhood,
+								const VoxelChunkData *west)
+	{
+		if (west == nullptr)
+		{
+			return;
+		}
+
+		for (int y = 0; y < CHUNK_SIZE_Y; y++)
+		{
+			for (int z = 0; z < CHUNK_SIZE_Z; z++)
+			{
+				neighborhood.west[y][z] = west->blocks[CHUNK_SIZE_X - 1][y][z];
+			}
+		}
+	}
+
+	static void captureNorthEastCorner(MeshNeighborhood &neighborhood,
+									   const VoxelChunkData *ne)
+	{
+		if (ne == nullptr)
+		{
+			return;
+		}
+
+		for (int y = 0; y < CHUNK_SIZE_Y; y++)
+		{
+			neighborhood.ne[y] = ne->blocks[0][y][0];
+		}
+	}
+
+	static void captureNorthWestCorner(MeshNeighborhood &neighborhood,
+									   const VoxelChunkData *nw)
+	{
+		if (nw == nullptr)
+		{
+			return;
+		}
+
+		for (int y = 0; y < CHUNK_SIZE_Y; y++)
+		{
+			neighborhood.nw[y] = nw->blocks[CHUNK_SIZE_X - 1][y][0];
+		}
+	}
+
+	static void captureSouthEastCorner(MeshNeighborhood &neighborhood,
+									   const VoxelChunkData *se)
+	{
+		if (se == nullptr)
+		{
+			return;
+		}
+
+		for (int y = 0; y < CHUNK_SIZE_Y; y++)
+		{
+			neighborhood.se[y] = se->blocks[0][y][CHUNK_SIZE_Z - 1];
+		}
+	}
+
+	static void captureSouthWestCorner(MeshNeighborhood &neighborhood,
+									   const VoxelChunkData *sw)
+	{
+		if (sw == nullptr)
+		{
+			return;
+		}
+
+		for (int y = 0; y < CHUNK_SIZE_Y; y++)
+		{
+			neighborhood.sw[y] = sw->blocks[CHUNK_SIZE_X - 1][y][CHUNK_SIZE_Z - 1];
+		}
 	}
 
 	static int computeVertexAO(const VoxelChunkData &chunk,
@@ -322,7 +454,7 @@ private:
 								   int by,
 								   int bz)
 	{
-		int dec = 18;
+		int dec = SUNBLOCK_TRACE_DEPTH * 2;
 		int value = 127;
 		int cy = by;
 		int cz = bz;
@@ -366,68 +498,69 @@ private:
 
 		if (x >= CHUNK_SIZE_X && z >= CHUNK_SIZE_Z)
 		{
-			if (neighbors.ne == nullptr)
+			if (x == CHUNK_SIZE_X && z == CHUNK_SIZE_Z)
 			{
-				return 0;
+				return neighbors.ne[y];
 			}
-			return neighbors.ne->blocks[x - CHUNK_SIZE_X][y][z - CHUNK_SIZE_Z];
+			return 0;
 		}
 		if (x >= CHUNK_SIZE_X && z < 0)
 		{
-			if (neighbors.se == nullptr)
+			if (x == CHUNK_SIZE_X && z == -1)
 			{
-				return 0;
+				return neighbors.se[y];
 			}
-			return neighbors.se->blocks[x - CHUNK_SIZE_X][y][CHUNK_SIZE_Z + z];
+			return 0;
 		}
 		if (x < 0 && z >= CHUNK_SIZE_Z)
 		{
-			if (neighbors.nw == nullptr)
+			if (x == -1 && z == CHUNK_SIZE_Z)
 			{
-				return 0;
+				return neighbors.nw[y];
 			}
-			return neighbors.nw->blocks[CHUNK_SIZE_X + x][y][z - CHUNK_SIZE_Z];
+			return 0;
 		}
 		if (x < 0 && z < 0)
 		{
-			if (neighbors.sw == nullptr)
+			if (x == -1 && z == -1)
 			{
-				return 0;
+				return neighbors.sw[y];
 			}
-			return neighbors.sw->blocks[CHUNK_SIZE_X + x][y][CHUNK_SIZE_Z + z];
+			return 0;
 		}
 
 		if (x >= CHUNK_SIZE_X)
 		{
-			if (neighbors.east == nullptr)
+			if (x == CHUNK_SIZE_X)
 			{
-				return 0;
+				return neighbors.east[y][z];
 			}
-			return neighbors.east->blocks[x - CHUNK_SIZE_X][y][z];
+			return 0;
 		}
 		if (x < 0)
 		{
-			if (neighbors.west == nullptr)
+			if (x == -1)
 			{
-				return 0;
+				return neighbors.west[y][z];
 			}
-			return neighbors.west->blocks[CHUNK_SIZE_X + x][y][z];
+			return 0;
 		}
 		if (z >= CHUNK_SIZE_Z)
 		{
-			if (neighbors.north == nullptr)
+			if (z == CHUNK_SIZE_Z)
 			{
-				return 0;
+				return neighbors.north[x][y];
 			}
-			return neighbors.north->blocks[x][y][z - CHUNK_SIZE_Z];
+			return 0;
 		}
 		if (z < 0)
 		{
-			if (neighbors.south == nullptr)
+			int southDepth = -z - 1;
+			if (southDepth < SUNBLOCK_TRACE_DEPTH)
 			{
-				return 0;
+				return neighbors.south[x][y][southDepth];
 			}
-			return neighbors.south->blocks[x][y][CHUNK_SIZE_Z + z];
+			return 0;
 		}
 
 		return chunk.blocks[x][y][z];

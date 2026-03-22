@@ -63,6 +63,78 @@ namespace
 		}
 		return "Unknown";
 	}
+
+	bool envFlagEnabled(const char *name)
+	{
+		const char *value = std::getenv(name);
+		if (value == nullptr)
+		{
+			return false;
+		}
+		if (value[0] == '\0')
+		{
+			return false;
+		}
+		if (value[0] == '0' && value[1] == '\0')
+		{
+			return false;
+		}
+		return true;
+	}
+
+	bool tryReadEnvInt(const char *name, int &value)
+	{
+		const char *rawValue = std::getenv(name);
+		if (rawValue == nullptr)
+		{
+			return false;
+		}
+		if (rawValue[0] == '\0')
+		{
+			return false;
+		}
+
+		char *end = nullptr;
+		long parsed = std::strtol(rawValue, &end, 10);
+		if (end == rawValue)
+		{
+			return false;
+		}
+		if (end == nullptr || *end != '\0')
+		{
+			return false;
+		}
+
+		value = static_cast<int>(parsed);
+		return true;
+	}
+
+	bool tryReadEnvFloat(const char *name, float &value)
+	{
+		const char *rawValue = std::getenv(name);
+		if (rawValue == nullptr)
+		{
+			return false;
+		}
+		if (rawValue[0] == '\0')
+		{
+			return false;
+		}
+
+		char *end = nullptr;
+		float parsed = std::strtof(rawValue, &end);
+		if (end == rawValue)
+		{
+			return false;
+		}
+		if (end == nullptr || *end != '\0')
+		{
+			return false;
+		}
+
+		value = parsed;
+		return true;
+	}
 }
 
 float fogStart = 80.0f;
@@ -102,6 +174,9 @@ ChunkIndirectRenderer gChunkIndirectRenderer;
 std::unordered_map<int64_t, Chunk2 *> chunkMap;
 std::unordered_set<int64_t> streamedChunkKeys;
 std::unordered_map<int64_t, uint64_t> gPendingMeshRevisions;
+size_t gProfileChunkRequestsWindow = 0;
+size_t gProfileChunkDropsWindow = 0;
+size_t gProfileChunkReceivesWindow = 0;
 
 bool usesIndirectRendering()
 {
@@ -286,18 +361,6 @@ Chunk2 *getChunkAt(int cx, int cz)
 	return it->second;
 }
 
-void copyChunkSnapshot(const Chunk2 *chunk, ChunkMeshSnapshot &snapshot)
-{
-	if (chunk == nullptr)
-	{
-		snapshot.hasChunk = false;
-		return;
-	}
-
-	snapshot.hasChunk = true;
-	snapshot.chunk = static_cast<const VoxelChunkData &>(*chunk);
-}
-
 bool isMeshBuildPendingForCurrentRevision(Chunk2 *chunk)
 {
 	int64_t key = chunkKey(chunk->chunkX, chunk->chunkZ);
@@ -327,15 +390,16 @@ bool buildMeshJobForChunk(Chunk2 *chunk, ClientChunkMeshJob &outJob)
 	outJob.chunkZ = cz;
 	outJob.revision = chunk->revision;
 	outJob.center = static_cast<const VoxelChunkData &>(*chunk);
-
-	copyChunkSnapshot(getChunkAt(cx, cz + 1), outJob.north);
-	copyChunkSnapshot(getChunkAt(cx, cz - 1), outJob.south);
-	copyChunkSnapshot(getChunkAt(cx + 1, cz), outJob.east);
-	copyChunkSnapshot(getChunkAt(cx - 1, cz), outJob.west);
-	copyChunkSnapshot(getChunkAt(cx + 1, cz + 1), outJob.ne);
-	copyChunkSnapshot(getChunkAt(cx - 1, cz + 1), outJob.nw);
-	copyChunkSnapshot(getChunkAt(cx + 1, cz - 1), outJob.se);
-	copyChunkSnapshot(getChunkAt(cx - 1, cz - 1), outJob.sw);
+	Chunk2::captureMeshNeighborhood(
+		outJob.neighbors,
+		getChunkAt(cx, cz + 1),
+		getChunkAt(cx, cz - 1),
+		getChunkAt(cx + 1, cz),
+		getChunkAt(cx - 1, cz),
+		getChunkAt(cx + 1, cz + 1),
+		getChunkAt(cx - 1, cz + 1),
+		getChunkAt(cx + 1, cz - 1),
+		getChunkAt(cx - 1, cz - 1));
 	return true;
 }
 
@@ -671,6 +735,7 @@ void handleWorldClientEvents()
 		if (event.type == WorldClientEvent::Type::ChunkReceived)
 		{
 			upsertChunkSnapshot(event.chunk);
+			gProfileChunkReceivesWindow++;
 			continue;
 		}
 		if (event.type == WorldClientEvent::Type::BlockUpdated)
@@ -765,6 +830,7 @@ void syncChunkStreaming()
 	{
 		gWorldClient.sendChunkRequest(candidate.chunkX, candidate.chunkZ);
 		streamedChunkKeys.insert(chunkKey(candidate.chunkX, candidate.chunkZ));
+		gProfileChunkRequestsWindow++;
 	}
 
 	std::vector<int64_t> keysToDrop;
@@ -782,6 +848,7 @@ void syncChunkStreaming()
 		int cz = static_cast<int>(key & 0xFFFFFFFF);
 		gWorldClient.sendChunkDrop(cx, cz);
 		streamedChunkKeys.erase(key);
+		gProfileChunkDropsWindow++;
 		gPendingMeshRevisions.erase(key);
 		gChunkIndirectRenderer.removeChunk(key);
 		markChunkNeighborhoodDirty(cx, cz);
@@ -887,6 +954,52 @@ void processInput(GLFWwindow *window)
 
 int main()
 {
+	bool profileWorkersEnabled = envFlagEnabled("VOXPLACE_PROFILE_WORKERS");
+	int envRenderDistance = 0;
+	if (tryReadEnvInt("VOXPLACE_RENDER_DISTANCE", envRenderDistance))
+	{
+		envRenderDistance = std::clamp(envRenderDistance, 2, 32);
+		renderDistanceChunks = envRenderDistance;
+	}
+
+	int envClassicPadding = 0;
+	if (tryReadEnvInt("VOXPLACE_CLASSIC_STREAM_PAD", envClassicPadding))
+	{
+		envClassicPadding = std::clamp(envClassicPadding, 0, 8);
+		classicStreamingPaddingChunks = envClassicPadding;
+	}
+
+	size_t requestedMeshWorkers = 0;
+	int envMeshWorkers = 0;
+	if (tryReadEnvInt("VOXPLACE_MESH_WORKERS", envMeshWorkers))
+	{
+		if (envMeshWorkers > 0)
+		{
+			requestedMeshWorkers = static_cast<size_t>(envMeshWorkers);
+		}
+	}
+
+	bool benchFlyEnabled = envFlagEnabled("VOXPLACE_BENCH_FLY");
+	float benchFlySpeed = 220.0f;
+	float envBenchFlySpeed = 0.0f;
+	if (tryReadEnvFloat("VOXPLACE_BENCH_FLY_SPEED", envBenchFlySpeed))
+	{
+		if (envBenchFlySpeed > 0.0f)
+		{
+			benchFlySpeed = envBenchFlySpeed;
+		}
+	}
+
+	float benchDurationSeconds = 0.0f;
+	float envBenchDuration = 0.0f;
+	if (tryReadEnvFloat("VOXPLACE_BENCH_SECONDS", envBenchDuration))
+	{
+		if (envBenchDuration > 0.0f)
+		{
+			benchDurationSeconds = envBenchDuration;
+		}
+	}
+
 	std::cout << "INITIALISATION de GLFW" << std::endl;
 	if (!glfwInit())
 	{
@@ -938,14 +1051,57 @@ int main()
 
 	Shader chunkShader("src/shader/chunk2.vs", "src/shader/chunk2.fs");
 	LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
-	gChunkMesher.start();
+	gChunkMesher.start(requestedMeshWorkers);
 	gChunkIndirectRenderer.init();
 	std::cout << "Client mesh workers: " << gChunkMesher.workerCount() << std::endl;
+	if (requestedMeshWorkers > 0)
+	{
+		std::cout << "Client mesh workers override: " << requestedMeshWorkers << std::endl;
+	}
+	if (profileWorkersEnabled)
+	{
+		std::cout << "Client worker profiling enabled" << std::endl;
+	}
+	if (benchFlyEnabled)
+	{
+		camera.Yaw = 0.0f;
+		camera.Pitch = 0.0f;
+		camera.ProcessMouseMovement(0.0f, 0.0f);
+		camera.MovementSpeed = benchFlySpeed;
+		std::cout << "Client bench fly enabled at speed " << benchFlySpeed << std::endl;
+		if (benchDurationSeconds > 0.0f)
+		{
+			std::cout << "Client bench duration: " << benchDurationSeconds << " s" << std::endl;
+		}
+	}
 
 	if (!gWorldClient.connectToServer(SERVER_HOST, SERVER_PORT))
 	{
 		std::cerr << "Failed to connect to server at " << SERVER_HOST << ":" << SERVER_PORT << std::endl;
 	}
+
+	auto profileWindowStart = std::chrono::steady_clock::now();
+	double profileAccumFrameMs = 0.0;
+	double profileMaxFrameMs = 0.0;
+	double profileAccumRenderMs = 0.0;
+	size_t profileSampleCount = 0;
+	size_t profileAccumTracked = 0;
+	size_t profileMaxTracked = 0;
+	size_t profileAccumQueued = 0;
+	size_t profileMaxQueued = 0;
+	size_t profileAccumReady = 0;
+	size_t profileMaxReady = 0;
+	size_t profileAccumVisible = 0;
+	size_t profileMaxVisible = 0;
+	size_t profileAccumStreamed = 0;
+	size_t profileMaxStreamed = 0;
+	size_t profileAccumRequests = 0;
+	size_t profileMaxRequests = 0;
+	size_t profileAccumDrops = 0;
+	size_t profileMaxDrops = 0;
+	size_t profileAccumReceives = 0;
+	size_t profileMaxReceives = 0;
+	auto benchStartTime = std::chrono::steady_clock::now();
 
 	while (!glfwWindowShouldClose(g_window))
 	{
@@ -954,6 +1110,10 @@ int main()
 		lastFrame = currentFrame;
 
 		processInput(g_window);
+		if (benchFlyEnabled)
+		{
+			camera.ProcessKeyboard(FORWARD, deltaTime);
+		}
 		handleWorldClientEvents();
 		drainCompletedMeshBuilds();
 		clampCameraToPlayableWorld();
@@ -1280,6 +1440,153 @@ int main()
 
 		ImGui::Render();
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+		if (profileWorkersEnabled)
+		{
+			double frameMs = static_cast<double>(deltaTime) * 1000.0;
+			size_t trackedJobs = gPendingMeshRevisions.size();
+			size_t queuedJobs = gChunkMesher.pendingJobCount();
+			size_t readyJobs = gChunkMesher.completedJobCount();
+			size_t visibleChunkCount = static_cast<size_t>(visibleChunks);
+			size_t streamedChunkCount = streamedChunkKeys.size();
+			size_t requestedChunks = gProfileChunkRequestsWindow;
+			size_t droppedChunks = gProfileChunkDropsWindow;
+			size_t receivedChunks = gProfileChunkReceivesWindow;
+
+			profileAccumFrameMs += frameMs;
+			profileAccumRenderMs += static_cast<double>(chunkRenderCpuMs);
+			profileSampleCount++;
+			profileAccumTracked += trackedJobs;
+			profileAccumQueued += queuedJobs;
+			profileAccumReady += readyJobs;
+			profileAccumVisible += visibleChunkCount;
+			profileAccumStreamed += streamedChunkCount;
+			profileAccumRequests += requestedChunks;
+			profileAccumDrops += droppedChunks;
+			profileAccumReceives += receivedChunks;
+			if (frameMs > profileMaxFrameMs)
+			{
+				profileMaxFrameMs = frameMs;
+			}
+			if (trackedJobs > profileMaxTracked)
+			{
+				profileMaxTracked = trackedJobs;
+			}
+			if (queuedJobs > profileMaxQueued)
+			{
+				profileMaxQueued = queuedJobs;
+			}
+			if (readyJobs > profileMaxReady)
+			{
+				profileMaxReady = readyJobs;
+			}
+			if (visibleChunkCount > profileMaxVisible)
+			{
+				profileMaxVisible = visibleChunkCount;
+			}
+			if (streamedChunkCount > profileMaxStreamed)
+			{
+				profileMaxStreamed = streamedChunkCount;
+			}
+			if (requestedChunks > profileMaxRequests)
+			{
+				profileMaxRequests = requestedChunks;
+			}
+			if (droppedChunks > profileMaxDrops)
+			{
+				profileMaxDrops = droppedChunks;
+			}
+			if (receivedChunks > profileMaxReceives)
+			{
+				profileMaxReceives = receivedChunks;
+			}
+
+			auto profileNow = std::chrono::steady_clock::now();
+			auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+				profileNow - profileWindowStart);
+			if (elapsed.count() >= 2000 && profileSampleCount > 0)
+			{
+				double avgFrameMs = profileAccumFrameMs / static_cast<double>(profileSampleCount);
+				double avgFps = 0.0;
+				if (avgFrameMs > 0.0)
+				{
+					avgFps = 1000.0 / avgFrameMs;
+				}
+				double avgRenderMs = profileAccumRenderMs / static_cast<double>(profileSampleCount);
+				double avgTracked = static_cast<double>(profileAccumTracked) / static_cast<double>(profileSampleCount);
+				double avgQueued = static_cast<double>(profileAccumQueued) / static_cast<double>(profileSampleCount);
+				double avgReady = static_cast<double>(profileAccumReady) / static_cast<double>(profileSampleCount);
+				double avgVisible = static_cast<double>(profileAccumVisible) / static_cast<double>(profileSampleCount);
+				double avgStreamed = static_cast<double>(profileAccumStreamed) / static_cast<double>(profileSampleCount);
+				double avgRequests = static_cast<double>(profileAccumRequests) / static_cast<double>(profileSampleCount);
+				double avgDrops = static_cast<double>(profileAccumDrops) / static_cast<double>(profileSampleCount);
+				double avgReceives = static_cast<double>(profileAccumReceives) / static_cast<double>(profileSampleCount);
+				int cameraChunkX = floorDiv(static_cast<int>(std::floor(camera.Position.x)), CHUNK_SIZE_X);
+				int cameraChunkZ = floorDiv(static_cast<int>(std::floor(camera.Position.z)), CHUNK_SIZE_Z);
+
+				std::cout << "[client-profile] workers=" << gChunkMesher.workerCount()
+						  << " renderDist=" << renderDistanceChunks
+						  << " camera_chunk=(" << cameraChunkX << "," << cameraChunkZ << ")"
+						  << " fps_avg=" << avgFps
+						  << " frame_ms_avg=" << avgFrameMs
+						  << " frame_ms_max=" << profileMaxFrameMs
+						  << " render_cpu_ms_avg=" << avgRenderMs
+						  << " tracked_avg=" << avgTracked
+						  << " tracked_max=" << profileMaxTracked
+						  << " queued_avg=" << avgQueued
+						  << " queued_max=" << profileMaxQueued
+						  << " ready_avg=" << avgReady
+						  << " ready_max=" << profileMaxReady
+						  << " visible_avg=" << avgVisible
+						  << " visible_max=" << profileMaxVisible
+						  << " streamed_avg=" << avgStreamed
+						  << " streamed_max=" << profileMaxStreamed
+						  << " requests_avg=" << avgRequests
+						  << " requests_max=" << profileMaxRequests
+						  << " drops_avg=" << avgDrops
+						  << " drops_max=" << profileMaxDrops
+						  << " receives_avg=" << avgReceives
+						  << " receives_max=" << profileMaxReceives
+						  << std::endl;
+
+				profileWindowStart = profileNow;
+				profileAccumFrameMs = 0.0;
+				profileMaxFrameMs = 0.0;
+				profileAccumRenderMs = 0.0;
+				profileSampleCount = 0;
+				profileAccumTracked = 0;
+				profileMaxTracked = 0;
+				profileAccumQueued = 0;
+				profileMaxQueued = 0;
+				profileAccumReady = 0;
+				profileMaxReady = 0;
+				profileAccumVisible = 0;
+				profileMaxVisible = 0;
+				profileAccumStreamed = 0;
+				profileMaxStreamed = 0;
+				profileAccumRequests = 0;
+				profileMaxRequests = 0;
+				profileAccumDrops = 0;
+				profileMaxDrops = 0;
+				profileAccumReceives = 0;
+				profileMaxReceives = 0;
+				gProfileChunkRequestsWindow = 0;
+				gProfileChunkDropsWindow = 0;
+				gProfileChunkReceivesWindow = 0;
+			}
+		}
+
+		if (benchFlyEnabled && benchDurationSeconds > 0.0f)
+		{
+			auto benchNow = std::chrono::steady_clock::now();
+			auto benchElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+				benchNow - benchStartTime);
+			double benchElapsedSeconds = static_cast<double>(benchElapsed.count()) / 1000.0;
+			if (benchElapsedSeconds >= static_cast<double>(benchDurationSeconds))
+			{
+				glfwSetWindowShouldClose(g_window, GLFW_TRUE);
+			}
+		}
 
 		glfwSwapBuffers(g_window);
 		glfwPollEvents();
