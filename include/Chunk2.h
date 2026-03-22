@@ -42,6 +42,7 @@ public:
 		chunkX = data.chunkX;
 		chunkZ = data.chunkZ;
 		revision = data.revision;
+		nonEmptySectionMask = data.nonEmptySectionMask;
 		std::memcpy(blocks, data.blocks, sizeof(blocks));
 		isEmpty = data.isCompletelyEmpty();
 		needsMeshRebuild = true;
@@ -95,39 +96,49 @@ public:
 
 		for (int x = 0; x < CHUNK_SIZE_X; x++)
 		{
-			for (int y = 0; y < CHUNK_SIZE_Y; y++)
+			for (int sectionIndex = 0; sectionIndex < CHUNK_SECTION_COUNT; sectionIndex++)
 			{
-				for (int z = 0; z < CHUNK_SIZE_Z; z++)
+				if (chunk.isSectionEmpty(sectionIndex))
 				{
-					uint32_t block = chunk.blocks[x][y][z];
-					if (block == 0)
-					{
-						continue;
-					}
+					continue;
+				}
 
-					if (chunk.getBlock(x, y + 1, z) == 0)
+				int yBegin = VoxelChunkData::sectionYBegin(sectionIndex);
+				int yEndExclusive = VoxelChunkData::sectionYEndExclusive(sectionIndex);
+				for (int y = yBegin; y < yEndExclusive; y++)
+				{
+					for (int z = 0; z < CHUNK_SIZE_Z; z++)
 					{
-						packFace(x, y, z, 0, block);
-					}
-					if (y > 0 && chunk.getBlock(x, y - 1, z) == 0)
-					{
-						packFace(x, y, z, 1, block);
-					}
-					if (getBlockOrNeighbor(chunk, neighbors, x, y, z + 1) == 0)
-					{
-						packFace(x, y, z, 2, block);
-					}
-					if (getBlockOrNeighbor(chunk, neighbors, x, y, z - 1) == 0)
-					{
-						packFace(x, y, z, 3, block);
-					}
-					if (getBlockOrNeighbor(chunk, neighbors, x + 1, y, z) == 0)
-					{
-						packFace(x, y, z, 4, block);
-					}
-					if (getBlockOrNeighbor(chunk, neighbors, x - 1, y, z) == 0)
-					{
-						packFace(x, y, z, 5, block);
+						uint32_t block = chunk.blocks[x][y][z];
+						if (block == 0)
+						{
+							continue;
+						}
+
+						if (chunk.getBlock(x, y + 1, z) == 0)
+						{
+							packFace(x, y, z, 0, block);
+						}
+						if (y > 0 && chunk.getBlock(x, y - 1, z) == 0)
+						{
+							packFace(x, y, z, 1, block);
+						}
+						if (getBlockOrNeighbor(chunk, neighbors, x, y, z + 1) == 0)
+						{
+							packFace(x, y, z, 2, block);
+						}
+						if (getBlockOrNeighbor(chunk, neighbors, x, y, z - 1) == 0)
+						{
+							packFace(x, y, z, 3, block);
+						}
+						if (getBlockOrNeighbor(chunk, neighbors, x + 1, y, z) == 0)
+						{
+							packFace(x, y, z, 4, block);
+						}
+						if (getBlockOrNeighbor(chunk, neighbors, x - 1, y, z) == 0)
+						{
+							packFace(x, y, z, 5, block);
+						}
 					}
 				}
 			}

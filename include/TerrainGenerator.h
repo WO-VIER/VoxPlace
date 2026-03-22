@@ -552,6 +552,7 @@ public:
 		{
 			chunk.revision++;
 		}
+		chunk.rebuildSectionMask();
 	}
 
 private:

@@ -29,6 +29,7 @@ struct ClientChunkMeshResult
 	int chunkX = 0;
 	int chunkZ = 0;
 	uint64_t revision = 0;
+	uint8_t nonEmptySectionCount = 0;
 	std::vector<uint32_t> packedFaces;
 };
 
@@ -184,11 +185,12 @@ private:
 				pendingJobs.pop_front();
 			}
 
-				ClientChunkMeshResult result;
-				result.chunkX = job.chunkX;
-				result.chunkZ = job.chunkZ;
-				result.revision = job.revision;
-				result.packedFaces = Chunk2::buildPackedFaces(job.center, job.neighbors);
+					ClientChunkMeshResult result;
+					result.chunkX = job.chunkX;
+					result.chunkZ = job.chunkZ;
+					result.revision = job.revision;
+					result.nonEmptySectionCount = static_cast<uint8_t>(job.center.nonEmptySectionCount());
+					result.packedFaces = Chunk2::buildPackedFaces(job.center, job.neighbors);
 
 			{
 				std::lock_guard<std::mutex> completedLock(completedMutex);

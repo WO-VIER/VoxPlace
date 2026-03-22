@@ -2,6 +2,7 @@
 #define VOXEL_CHUNK_DATA_H
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstring>
 
@@ -9,10 +10,20 @@ constexpr uint8_t CHUNK_SIZE_X = 16;
 constexpr uint8_t CHUNK_SIZE_Y = 64;
 constexpr uint8_t CHUNK_SIZE_Z = 16;
 constexpr uint8_t BEDROCK_LAYER = 0;
+constexpr uint8_t CHUNK_SECTION_HEIGHT = 16;
+constexpr uint8_t CHUNK_SECTION_COUNT = CHUNK_SIZE_Y / CHUNK_SECTION_HEIGHT;
+
+static_assert(CHUNK_SIZE_Y % CHUNK_SECTION_HEIGHT == 0,
+			  "CHUNK_SIZE_Y must stay divisible by CHUNK_SECTION_HEIGHT");
 
 constexpr size_t CHUNK_BLOCK_COUNT =
 	static_cast<size_t>(CHUNK_SIZE_X) *
 	static_cast<size_t>(CHUNK_SIZE_Y) *
+	static_cast<size_t>(CHUNK_SIZE_Z);
+
+constexpr size_t CHUNK_SECTION_BLOCK_COUNT =
+	static_cast<size_t>(CHUNK_SIZE_X) *
+	static_cast<size_t>(CHUNK_SECTION_HEIGHT) *
 	static_cast<size_t>(CHUNK_SIZE_Z);
 
 struct ChunkCoord
@@ -62,6 +73,7 @@ struct VoxelChunkData
 	int chunkX = 0;
 	int chunkZ = 0;
 	uint64_t revision = 0;
+	uint8_t nonEmptySectionMask = 0;
 	uint32_t blocks[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
 
 	VoxelChunkData(int cx = 0, int cz = 0) : chunkX(cx), chunkZ(cz)
@@ -72,6 +84,7 @@ struct VoxelChunkData
 	void clearBlocks()
 	{
 		std::memset(blocks, 0, sizeof(blocks));
+		nonEmptySectionMask = 0;
 	}
 
 	ChunkCoord coord() const
@@ -86,6 +99,45 @@ struct VoxelChunkData
 	{
 		chunkX = cx;
 		chunkZ = cz;
+	}
+
+	static int sectionIndexFromY(int y)
+	{
+		return y / CHUNK_SECTION_HEIGHT;
+	}
+
+	static int sectionYBegin(int sectionIndex)
+	{
+		return sectionIndex * CHUNK_SECTION_HEIGHT;
+	}
+
+	static int sectionYEndExclusive(int sectionIndex)
+	{
+		return sectionYBegin(sectionIndex) + CHUNK_SECTION_HEIGHT;
+	}
+
+	uint8_t sectionMask() const
+	{
+		return nonEmptySectionMask;
+	}
+
+	bool isSectionEmpty(int sectionIndex) const
+	{
+		if (sectionIndex < 0 || sectionIndex >= CHUNK_SECTION_COUNT)
+		{
+			return true;
+		}
+		uint8_t bit = static_cast<uint8_t>(1u << sectionIndex);
+		if ((nonEmptySectionMask & bit) == 0)
+		{
+			return true;
+		}
+		return false;
+	}
+
+	size_t nonEmptySectionCount() const
+	{
+		return static_cast<size_t>(std::popcount(static_cast<unsigned int>(nonEmptySectionMask)));
 	}
 
 	uint32_t getBlock(int x, int y, int z) const
@@ -128,26 +180,40 @@ struct VoxelChunkData
 			return false;
 		}
 		blocks[x][y][z] = color;
+		int sectionIndex = sectionIndexFromY(y);
+		uint8_t sectionBit = static_cast<uint8_t>(1u << sectionIndex);
+		if (color != 0)
+		{
+			nonEmptySectionMask |= sectionBit;
+		}
+		else if (!sectionHasAnyBlocks(sectionIndex))
+		{
+			nonEmptySectionMask &= static_cast<uint8_t>(~sectionBit);
+		}
 		revision++;
 		return true;
 	}
 
 	bool isCompletelyEmpty() const
 	{
-		for (int x = 0; x < CHUNK_SIZE_X; x++)
+		if (nonEmptySectionMask == 0)
 		{
-			for (int y = 0; y < CHUNK_SIZE_Y; y++)
+			return true;
+		}
+		return false;
+	}
+
+	void rebuildSectionMask()
+	{
+		uint8_t mask = 0;
+		for (int sectionIndex = 0; sectionIndex < CHUNK_SECTION_COUNT; sectionIndex++)
+		{
+			if (sectionHasAnyBlocks(sectionIndex))
 			{
-				for (int z = 0; z < CHUNK_SIZE_Z; z++)
-				{
-					if (blocks[x][y][z] != 0)
-					{
-						return false;
-					}
-				}
+				mask |= static_cast<uint8_t>(1u << sectionIndex);
 			}
 		}
-		return true;
+		nonEmptySectionMask = mask;
 	}
 
 	static int colorR(uint32_t color)
@@ -173,6 +239,33 @@ struct VoxelChunkData
 		return static_cast<uint32_t>(red)
 			| (static_cast<uint32_t>(green) << 8)
 			| (static_cast<uint32_t>(blue) << 16);
+	}
+
+private:
+	bool sectionHasAnyBlocks(int sectionIndex) const
+	{
+		if (sectionIndex < 0 || sectionIndex >= CHUNK_SECTION_COUNT)
+		{
+			return false;
+		}
+
+		int yBegin = sectionYBegin(sectionIndex);
+		int yEndExclusive = sectionYEndExclusive(sectionIndex);
+		for (int x = 0; x < CHUNK_SIZE_X; x++)
+		{
+			for (int y = yBegin; y < yEndExclusive; y++)
+			{
+				for (int z = 0; z < CHUNK_SIZE_Z; z++)
+				{
+					if (blocks[x][y][z] != 0)
+					{
+						return true;
+					}
+				}
+			}
+		}
+
+		return false;
 	}
 };
 

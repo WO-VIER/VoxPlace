@@ -18,8 +18,9 @@ enum class PacketType : uint8_t
 	ChunkDrop = 5,
 	BlockActionRequest = 6,
 	BlockUpdateBroadcast = 7,
-	ChunkSnapshotRle = 8
-	};
+	ChunkSnapshotRle = 8,
+	ChunkSnapshotSections = 9
+};
 
 enum class BlockActionType : uint8_t
 {

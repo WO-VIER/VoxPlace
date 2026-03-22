@@ -177,10 +177,11 @@ struct WorldServer::Impl
 	size_t profileAccumGenerationTasks = 0;
 	size_t profileAccumReadyChunks = 0;
 	size_t profileMaxGenerationTasks = 0;
-	size_t profileMaxReadyChunks = 0;
-	size_t profileSnapshotCount = 0;
-	size_t profileSnapshotPayloadBytes = 0;
-	size_t profileSnapshotRawBytes = 0;
+		size_t profileMaxReadyChunks = 0;
+		size_t profileSnapshotCount = 0;
+		size_t profileSnapshotPayloadBytes = 0;
+		size_t profileSnapshotRawBytes = 0;
+		size_t profileSnapshotSectionCount = 0;
 
 	Impl(uint16_t listenPort,
 		 std::unique_ptr<IChunkGenerator> worldGenerator,
@@ -520,21 +521,23 @@ struct WorldServer::Impl
 					  << " ready_avg=" << avgReady
 					  << " ready_max=" << profileMaxReadyChunks;
 
-			if (profileSnapshotCount > 0)
-			{
-				double avgSnapshotBytes = static_cast<double>(profileSnapshotPayloadBytes) / static_cast<double>(profileSnapshotCount);
-				double avgRawBytes = static_cast<double>(profileSnapshotRawBytes) / static_cast<double>(profileSnapshotCount);
-				double ratio = 1.0;
-				if (profileSnapshotRawBytes > 0)
+				if (profileSnapshotCount > 0)
 				{
+					double avgSnapshotBytes = static_cast<double>(profileSnapshotPayloadBytes) / static_cast<double>(profileSnapshotCount);
+					double avgRawBytes = static_cast<double>(profileSnapshotRawBytes) / static_cast<double>(profileSnapshotCount);
+					double avgSections = static_cast<double>(profileSnapshotSectionCount) / static_cast<double>(profileSnapshotCount);
+					double ratio = 1.0;
+					if (profileSnapshotRawBytes > 0)
+					{
 					ratio = static_cast<double>(profileSnapshotPayloadBytes) /
 							static_cast<double>(profileSnapshotRawBytes);
 				}
-				std::cout << " snapshot_count=" << profileSnapshotCount
-						  << " snapshot_avg_bytes=" << avgSnapshotBytes
-						  << " snapshot_avg_raw_bytes=" << avgRawBytes
-						  << " snapshot_ratio=" << ratio;
-			}
+					std::cout << " snapshot_count=" << profileSnapshotCount
+							  << " snapshot_avg_bytes=" << avgSnapshotBytes
+							  << " snapshot_avg_raw_bytes=" << avgRawBytes
+							  << " snapshot_avg_sections=" << avgSections
+							  << " snapshot_ratio=" << ratio;
+				}
 
 			std::cout
 					  << std::endl;
@@ -546,11 +549,12 @@ struct WorldServer::Impl
 		profileAccumGenerationTasks = 0;
 			profileAccumReadyChunks = 0;
 			profileMaxGenerationTasks = generationTaskCount;
-			profileMaxReadyChunks = readyChunkCount;
-			profileSnapshotCount = 0;
-			profileSnapshotPayloadBytes = 0;
-			profileSnapshotRawBytes = 0;
-		}
+				profileMaxReadyChunks = readyChunkCount;
+				profileSnapshotCount = 0;
+				profileSnapshotPayloadBytes = 0;
+				profileSnapshotRawBytes = 0;
+				profileSnapshotSectionCount = 0;
+			}
 
 	size_t integratedChunksBudgetForTick()
 	{
@@ -878,13 +882,14 @@ struct WorldServer::Impl
 				continue;
 			}
 
-			std::vector<uint8_t> payload = encodeChunkSnapshot(worldIt->second);
-			sendReliable(session.peer, payload);
-			profileSnapshotCount++;
-			profileSnapshotPayloadBytes += payload.size();
-			profileSnapshotRawBytes +=
-				sizeof(PacketType) +
-				sizeof(worldIt->second.chunkX) +
+				std::vector<uint8_t> payload = encodeChunkSnapshot(worldIt->second);
+				sendReliable(session.peer, payload);
+				profileSnapshotCount++;
+				profileSnapshotPayloadBytes += payload.size();
+				profileSnapshotSectionCount += worldIt->second.nonEmptySectionCount();
+				profileSnapshotRawBytes +=
+					sizeof(PacketType) +
+					sizeof(worldIt->second.chunkX) +
 				sizeof(worldIt->second.chunkZ) +
 				sizeof(worldIt->second.revision) +
 				sizeof(worldIt->second.blocks);

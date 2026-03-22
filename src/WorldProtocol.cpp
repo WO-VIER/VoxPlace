@@ -11,6 +11,9 @@ namespace
 		uint32_t value = 0;
 	};
 
+	constexpr uint8_t VALID_CHUNK_SECTION_MASK =
+		static_cast<uint8_t>((1u << CHUNK_SECTION_COUNT) - 1u);
+
 	template <typename T>
 	void appendValue(std::vector<uint8_t> &buffer, const T &value)
 	{
@@ -52,6 +55,51 @@ namespace
 		{
 			return false;
 		}
+		return true;
+	}
+
+	void appendChunkSectionData(std::vector<uint8_t> &buffer,
+								const VoxelChunkData &chunk,
+								int sectionIndex)
+	{
+		int yBegin = VoxelChunkData::sectionYBegin(sectionIndex);
+		size_t xSliceBytes =
+			static_cast<size_t>(CHUNK_SECTION_HEIGHT) *
+			static_cast<size_t>(CHUNK_SIZE_Z) *
+			sizeof(uint32_t);
+
+		for (int x = 0; x < CHUNK_SIZE_X; x++)
+		{
+			size_t start = buffer.size();
+			buffer.resize(start + xSliceBytes);
+			std::memcpy(buffer.data() + start,
+						&chunk.blocks[x][yBegin][0],
+						xSliceBytes);
+		}
+	}
+
+	bool readChunkSectionData(const uint8_t *data,
+							  size_t size,
+							  size_t &offset,
+							  VoxelChunkData &chunk,
+							  int sectionIndex)
+	{
+		int yBegin = VoxelChunkData::sectionYBegin(sectionIndex);
+		size_t xSliceBytes =
+			static_cast<size_t>(CHUNK_SECTION_HEIGHT) *
+			static_cast<size_t>(CHUNK_SIZE_Z) *
+			sizeof(uint32_t);
+
+		for (int x = 0; x < CHUNK_SIZE_X; x++)
+		{
+			if (offset + xSliceBytes > size)
+			{
+				return false;
+			}
+			std::memcpy(&chunk.blocks[x][yBegin][0], data + offset, xSliceBytes);
+			offset += xSliceBytes;
+		}
+
 		return true;
 	}
 }
@@ -118,59 +166,27 @@ bool decodeChunkDrop(const uint8_t *data, size_t size, ChunkDropMessage &message
 
 std::vector<uint8_t> encodeChunkSnapshot(const VoxelChunkData &chunk)
 {
-	std::vector<uint8_t> rawBuffer;
-	rawBuffer.reserve(1 + sizeof(int32_t) * 2 + sizeof(uint64_t) + sizeof(chunk.blocks));
-	appendValue(rawBuffer, PacketType::ChunkSnapshot);
-	appendValue(rawBuffer, chunk.chunkX);
-	appendValue(rawBuffer, chunk.chunkZ);
-	appendValue(rawBuffer, chunk.revision);
-	size_t rawStart = rawBuffer.size();
-	rawBuffer.resize(rawStart + sizeof(chunk.blocks));
-	std::memcpy(rawBuffer.data() + rawStart, chunk.blocks, sizeof(chunk.blocks));
+	std::vector<uint8_t> buffer;
+	size_t sectionBytes = chunk.nonEmptySectionCount() *
+		CHUNK_SECTION_BLOCK_COUNT *
+		sizeof(uint32_t);
+	buffer.reserve(1 + sizeof(int32_t) * 2 + sizeof(uint64_t) + sizeof(uint8_t) + sectionBytes);
+	appendValue(buffer, PacketType::ChunkSnapshotSections);
+	appendValue(buffer, chunk.chunkX);
+	appendValue(buffer, chunk.chunkZ);
+	appendValue(buffer, chunk.revision);
+	appendValue(buffer, chunk.sectionMask());
 
-	const uint32_t *values = &chunk.blocks[0][0][0];
-	std::vector<ChunkSnapshotRleRun> runs;
-	runs.reserve(CHUNK_BLOCK_COUNT);
-
-	size_t index = 0;
-	while (index < CHUNK_BLOCK_COUNT)
+	for (int sectionIndex = 0; sectionIndex < CHUNK_SECTION_COUNT; sectionIndex++)
 	{
-		uint32_t value = values[index];
-		uint16_t runCount = 1;
-		while (index + static_cast<size_t>(runCount) < CHUNK_BLOCK_COUNT &&
-			   values[index + static_cast<size_t>(runCount)] == value &&
-			   runCount < std::numeric_limits<uint16_t>::max())
+		if (chunk.isSectionEmpty(sectionIndex))
 		{
-			runCount++;
+			continue;
 		}
-
-		ChunkSnapshotRleRun run;
-		run.count = runCount;
-		run.value = value;
-		runs.push_back(run);
-		index += static_cast<size_t>(runCount);
+		appendChunkSectionData(buffer, chunk, sectionIndex);
 	}
 
-	std::vector<uint8_t> compressedBuffer;
-	compressedBuffer.reserve(
-		1 + sizeof(int32_t) * 2 + sizeof(uint64_t) + sizeof(uint32_t) +
-		runs.size() * sizeof(ChunkSnapshotRleRun));
-	appendValue(compressedBuffer, PacketType::ChunkSnapshotRle);
-	appendValue(compressedBuffer, chunk.chunkX);
-	appendValue(compressedBuffer, chunk.chunkZ);
-	appendValue(compressedBuffer, chunk.revision);
-	uint32_t runCount = static_cast<uint32_t>(runs.size());
-	appendValue(compressedBuffer, runCount);
-	for (const ChunkSnapshotRleRun &run : runs)
-	{
-		appendValue(compressedBuffer, run);
-	}
-
-	if (compressedBuffer.size() < rawBuffer.size())
-	{
-		return compressedBuffer;
-	}
-	return rawBuffer;
+	return buffer;
 }
 
 bool decodeChunkSnapshot(const uint8_t *data, size_t size, DecodedChunkSnapshot &message)
@@ -200,6 +216,7 @@ bool decodeChunkSnapshot(const uint8_t *data, size_t size, DecodedChunkSnapshot 
 			return false;
 		}
 		std::memcpy(message.chunk.blocks, data + offset, sizeof(message.chunk.blocks));
+		message.chunk.rebuildSectionMask();
 		return true;
 	}
 
@@ -243,7 +260,60 @@ bool decodeChunkSnapshot(const uint8_t *data, size_t size, DecodedChunkSnapshot 
 				written++;
 			}
 		}
-		if (written != CHUNK_BLOCK_COUNT)
+			if (written != CHUNK_BLOCK_COUNT)
+			{
+				return false;
+			}
+			message.chunk.rebuildSectionMask();
+			return true;
+		}
+
+	if (packetType == PacketType::ChunkSnapshotSections)
+	{
+		message.chunk.clearBlocks();
+		if (!readValue(data, size, offset, message.chunk.chunkX))
+		{
+			return false;
+		}
+		if (!readValue(data, size, offset, message.chunk.chunkZ))
+		{
+			return false;
+		}
+		if (!readValue(data, size, offset, message.chunk.revision))
+		{
+			return false;
+		}
+
+		uint8_t sectionMask = 0;
+		if (!readValue(data, size, offset, sectionMask))
+		{
+			return false;
+		}
+		if ((sectionMask & static_cast<uint8_t>(~VALID_CHUNK_SECTION_MASK)) != 0)
+		{
+			return false;
+		}
+
+		for (int sectionIndex = 0; sectionIndex < CHUNK_SECTION_COUNT; sectionIndex++)
+		{
+			uint8_t sectionBit = static_cast<uint8_t>(1u << sectionIndex);
+			if ((sectionMask & sectionBit) == 0)
+			{
+				continue;
+			}
+			if (!readChunkSectionData(data, size, offset, message.chunk, sectionIndex))
+			{
+				return false;
+			}
+		}
+
+		if (offset != size)
+		{
+			return false;
+		}
+
+		message.chunk.rebuildSectionMask();
+		if (message.chunk.sectionMask() != sectionMask)
 		{
 			return false;
 		}
@@ -303,6 +373,8 @@ const char *packetTypeName(PacketType type)
 		return "BlockUpdateBroadcast";
 	case PacketType::ChunkSnapshotRle:
 		return "ChunkSnapshotRle";
+	case PacketType::ChunkSnapshotSections:
+		return "ChunkSnapshotSections";
 	}
 	return "Unknown";
 }

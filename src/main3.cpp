@@ -177,6 +177,8 @@ std::unordered_map<int64_t, uint64_t> gPendingMeshRevisions;
 size_t gProfileChunkRequestsWindow = 0;
 size_t gProfileChunkDropsWindow = 0;
 size_t gProfileChunkReceivesWindow = 0;
+size_t gProfileMeshedChunkCountWindow = 0;
+size_t gProfileMeshedSectionCountWindow = 0;
 size_t gClassicMaxInflightChunkRequests = 192;
 size_t gClassicMaxChunkRequestsPerFrame = 16;
 
@@ -451,6 +453,8 @@ void drainCompletedMeshBuilds()
 
 		chunk->uploadBuiltMesh(result.packedFaces);
 		gChunkIndirectRenderer.upsertChunk(*chunk);
+		gProfileMeshedChunkCountWindow++;
+		gProfileMeshedSectionCountWindow += result.nonEmptySectionCount;
 	}
 }
 
@@ -1510,11 +1514,13 @@ int main()
 			size_t trackedJobs = gPendingMeshRevisions.size();
 			size_t queuedJobs = gChunkMesher.pendingJobCount();
 			size_t readyJobs = gChunkMesher.completedJobCount();
-			size_t visibleChunkCount = static_cast<size_t>(visibleChunks);
-			size_t streamedChunkCount = streamedChunkKeys.size();
-			size_t requestedChunks = gProfileChunkRequestsWindow;
-			size_t droppedChunks = gProfileChunkDropsWindow;
-			size_t receivedChunks = gProfileChunkReceivesWindow;
+				size_t visibleChunkCount = static_cast<size_t>(visibleChunks);
+				size_t streamedChunkCount = streamedChunkKeys.size();
+				size_t requestedChunks = gProfileChunkRequestsWindow;
+				size_t droppedChunks = gProfileChunkDropsWindow;
+				size_t receivedChunks = gProfileChunkReceivesWindow;
+				size_t meshedChunks = gProfileMeshedChunkCountWindow;
+				size_t meshedSectionCount = gProfileMeshedSectionCountWindow;
 
 			profileAccumFrameMs += frameMs;
 			profileAccumRenderMs += static_cast<double>(chunkRenderCpuMs);
@@ -1583,9 +1589,14 @@ int main()
 				double avgStreamed = static_cast<double>(profileAccumStreamed) / static_cast<double>(profileSampleCount);
 				double avgRequests = static_cast<double>(profileAccumRequests) / static_cast<double>(profileSampleCount);
 				double avgDrops = static_cast<double>(profileAccumDrops) / static_cast<double>(profileSampleCount);
-				double avgReceives = static_cast<double>(profileAccumReceives) / static_cast<double>(profileSampleCount);
-				int cameraChunkX = floorDiv(static_cast<int>(std::floor(camera.Position.x)), CHUNK_SIZE_X);
-				int cameraChunkZ = floorDiv(static_cast<int>(std::floor(camera.Position.z)), CHUNK_SIZE_Z);
+					double avgReceives = static_cast<double>(profileAccumReceives) / static_cast<double>(profileSampleCount);
+					double avgMeshedSections = 0.0;
+					if (meshedChunks > 0)
+					{
+						avgMeshedSections = static_cast<double>(meshedSectionCount) / static_cast<double>(meshedChunks);
+					}
+					int cameraChunkX = floorDiv(static_cast<int>(std::floor(camera.Position.x)), CHUNK_SIZE_X);
+					int cameraChunkZ = floorDiv(static_cast<int>(std::floor(camera.Position.z)), CHUNK_SIZE_Z);
 
 				std::cout << "[client-profile] workers=" << gChunkMesher.workerCount()
 						  << " renderDist=" << renderDistanceChunks
@@ -1605,12 +1616,14 @@ int main()
 						  << " streamed_avg=" << avgStreamed
 						  << " streamed_max=" << profileMaxStreamed
 						  << " requests_avg=" << avgRequests
-						  << " requests_max=" << profileMaxRequests
-						  << " drops_avg=" << avgDrops
-						  << " drops_max=" << profileMaxDrops
-						  << " receives_avg=" << avgReceives
-						  << " receives_max=" << profileMaxReceives
-						  << std::endl;
+							  << " requests_max=" << profileMaxRequests
+							  << " drops_avg=" << avgDrops
+							  << " drops_max=" << profileMaxDrops
+							  << " receives_avg=" << avgReceives
+							  << " receives_max=" << profileMaxReceives
+							  << " meshed_chunks=" << meshedChunks
+							  << " meshed_sections_avg=" << avgMeshedSections
+							  << std::endl;
 
 				profileWindowStart = profileNow;
 				profileAccumFrameMs = 0.0;
@@ -1633,11 +1646,13 @@ int main()
 				profileMaxDrops = 0;
 				profileAccumReceives = 0;
 				profileMaxReceives = 0;
-				gProfileChunkRequestsWindow = 0;
-				gProfileChunkDropsWindow = 0;
-				gProfileChunkReceivesWindow = 0;
+					gProfileChunkRequestsWindow = 0;
+					gProfileChunkDropsWindow = 0;
+					gProfileChunkReceivesWindow = 0;
+					gProfileMeshedChunkCountWindow = 0;
+					gProfileMeshedSectionCountWindow = 0;
+				}
 			}
-		}
 
 		if (benchFlyEnabled && benchDurationSeconds > 0.0f)
 		{

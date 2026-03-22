@@ -19,10 +19,10 @@ public:
 		const float topRadius = 5.5f;
 		const float dirtRadius = 6.5f;
 
-		for (int x = 0; x < CHUNK_SIZE_X; x++)
-		{
-			for (int z = 0; z < CHUNK_SIZE_Z; z++)
+			for (int x = 0; x < CHUNK_SIZE_X; x++)
 			{
+				for (int z = 0; z < CHUNK_SIZE_Z; z++)
+				{
 				int worldX = chunk.chunkX * CHUNK_SIZE_X + x;
 				int worldZ = chunk.chunkZ * CHUNK_SIZE_Z + z;
 				float dx = static_cast<float>(worldX);
@@ -47,10 +47,12 @@ public:
 				{
 					chunk.blocks[x][islandTopY - 1][z] = dirtColor;
 					chunk.blocks[x][islandTopY - 2][z] = stoneColor;
+					}
 				}
 			}
+
+			chunk.rebuildSectionMask();
 		}
-	}
-};
+	};
 
 #endif

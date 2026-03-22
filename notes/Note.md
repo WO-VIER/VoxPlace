@@ -2267,6 +2267,307 @@ Lecture :
 
 ---
 
+## 22/03 Chunk Sections `16³` v1 — design retenu
+
+> **But concret :** réduire le travail inutile sur les chunks très vides sans refactorer tout le stockage interne du moteur.
+
+### Ce qu'on garde
+
+- Le chunk reste stocké en mémoire comme un bloc monolithique `16 x 64 x 16` dans `VoxelChunkData::blocks`.
+- Le rendu GPU, le format final des vertices packés et le pipeline OpenGL restent inchangés.
+- Le client continue à recevoir au final un `VoxelChunkData` complet après décodage, donc on ne casse pas les chemins existants côté gameplay/rendu.
+
+### Ce qu'on ajoute
+
+- On introduit **4 sections logiques verticales** de `16 x 16 x 16`.
+- Chaque chunk porte maintenant un `uint8_t nonEmptySectionMask`.
+- Ce mask dit simplement quelles sections contiennent au moins un voxel non vide.
+- `setBlockRaw(...)`, `clearBlocks()` et les générateurs reconstruisent ou maintiennent ce mask pour qu'il reste cohérent avec `blocks`.
+
+### Ce que ça change réellement
+
+- **Meshing CPU** :
+  - `buildPackedFaces(...)` boucle maintenant par section.
+  - Si une section est vide d'après le mask, on saute totalement sa tranche `y`.
+  - On garde le même ordre global de parcours, donc le `packedFaces` reste identique.
+
+- **Réseau** :
+  - le nouveau paquet principal est `ChunkSnapshotSections`
+  - il envoie :
+  - `PacketType`
+  - `chunkX`
+  - `chunkZ`
+  - `revision`
+  - `sectionMask`
+  - puis uniquement les sections non vides, dans l'ordre `0 -> 3`
+  - les anciens formats `ChunkSnapshot` et `ChunkSnapshotRle` restent acceptés en decode
+
+### Ce que ce n'est pas
+
+- Ce n'est **pas** du RLE.
+- Le RLE compresse des répétitions de valeurs dans un flux linéaire.
+- Les `Chunk Sections` font autre chose :
+  - elles exploitent le fait que de grandes zones verticales sont **entièrement vides**
+  - et elles évitent de les envoyer ou de les parcourir du tout
+
+> **Résumé mental :** le RLE compresse "dans le flux", les sections compressent "dans l'espace".
+
+### Validation locale avant bench
+
+- round-trip protocole `ChunkSnapshotSections` : **OK**
+- cohérence du `nonEmptySectionMask` : **OK**
+- comparaison meshing ancien chemin vs nouveau chemin : **OK**
+- smoke test réel client + serveur : **OK**
+
+> **Décision retenue :** ce v1 garde le stockage monolithique, mais ajoute déjà un vrai gain structurel CPU + réseau. La marche suivante potentielle reste `Zstd`, mais **après** avoir réduit la donnée à la source.
+
+---
+
+## 22/03 Bench Chunk Sections — static `Render Distance = 32`
+
+> **Setup bench réel :**
+> `VoxPlaceServer --classic-gen`
+> `VOXPLACE_PROFILE_WORKERS=1`
+> `VOXPLACE_SERVER_WORKERS=2`
+> `VOXPLACE_RENDER_DISTANCE=32`
+> `VOXPLACE_MESH_WORKERS=1`
+> `VoxPlace`
+
+### Côté serveur
+
+- fenêtres utiles observées : `7`
+- `snapshot_avg_bytes` moyen : `42135.7`
+- `snapshot_avg_raw_bytes` : `65553`
+- `snapshot_ratio` moyen : `0.643`
+- `snapshot_avg_sections` moyen : `2.571`
+
+Plages observées :
+
+- `snapshot_avg_bytes` : `38596.6` -> `45560.4`
+- `snapshot_ratio` : `0.589` -> `0.695`
+- `snapshot_avg_sections` : `2.355` -> `2.780`
+
+Lecture :
+
+- un chunk streamé n'envoie en moyenne qu'environ **2.57 sections non vides sur 4**
+- la taille moyenne tombe à environ **42.1 Ko** au lieu de **65.5 Ko**
+- on gagne donc environ **35.7%** de payload par rapport au snapshot brut complet
+
+### Côté client
+
+- fenêtres observées : `13`
+- `fps_avg` moyen : `271.6`
+- `frame_ms_avg` moyen : `3.70`
+- `visible_avg` : `276` -> `845`
+- `receives_avg` moyen : `160.1`
+- `meshed_sections_avg` moyen : `2.59`
+
+Lecture :
+
+- le client rebuild effectivement des chunks dont seulement ~`2.6` sections sont non vides en moyenne
+- le nouveau format n'a pas introduit de régression visible sur le chargement statique lourd
+- le gain observé n'est pas seulement réseau : le meshing saute aussi une partie du volume vide
+
+### Conclusion statique
+
+- le v1 `Chunk Sections` atteint déjà un vrai gain structurel sans refactor complet du stockage
+- sur un gros chargement statique `RD=32`, on retombe en pratique autour de **64%** du payload brut
+- c'est nettement mieux que la simple compression RLE sur le format chunk complet
+
+---
+
+## 22/03 Bench Chunk Sections — fly-through `Render Distance = 32`
+
+> **Setup bench mouvement :**
+> même machine principale (`Ryzen 7 5700X3D`, `RTX 3070 Ti`, `32 Go RAM`)
+> `VoxPlaceServer --classic-gen`
+> `VOXPLACE_PROFILE_WORKERS=1`
+> `VOXPLACE_SERVER_WORKERS=2`
+> `VOXPLACE_RENDER_DISTANCE=32`
+> `VOXPLACE_MESH_WORKERS=1`
+> `VOXPLACE_BENCH_FLY=1`
+> `VOXPLACE_BENCH_FLY_SPEED=80`
+> `VOXPLACE_BENCH_SECONDS=20`
+
+### Côté serveur
+
+- fenêtres utiles observées : `10`
+- `snapshot_avg_bytes` moyen : `41429.9`
+- `snapshot_avg_raw_bytes` : `65553`
+- `snapshot_ratio` moyen : `0.632`
+- `snapshot_avg_sections` moyen : `2.528`
+
+Plages observées :
+
+- `snapshot_avg_bytes` : `38361.1` -> `44638.8`
+- `snapshot_ratio` : `0.585` -> `0.681`
+- `snapshot_avg_sections` : `2.340` -> `2.723`
+
+### Côté client
+
+- fenêtres observées : `9`
+- `fps_avg` moyen : `275.0`
+- `frame_ms_avg` moyen : `3.664`
+- `visible_avg` : `165.8` -> `712.1`
+- `receives_avg` moyen : `311.7`
+- `meshed_sections_avg` moyen : `2.581`
+- `drops_avg` max observé : `317.4`
+
+### Lecture
+
+- même en churn continu, les chunks réellement streamés restent autour de **2.5 sections non vides**
+- la taille moyenne descend à environ **41.4 Ko**
+- le ratio moyen `0.632` est nettement meilleur que le bench fly-through RLE précédent, qui tournait autour de `0.869`
+- cela représente environ **27% de payload en moins** par rapport au précédent chemin `ChunkSnapshotRle` sur ce type de scénario
+
+### Conclusion fly-through
+
+- la réduction de data n'est pas théorique : elle tient aussi quand la frontière de chunks se renouvelle en continu
+- le v1 `Chunk Sections` apporte déjà une amélioration bien plus structurante que le RLE seul
+- la suite logique reste :
+  - meilleure priorisation du streaming
+  - éventuellement `Zstd`
+  - et plus tard seulement un refactor stockage/rendu plus agressif si nécessaire
+
+---
+
+## 22/03 Zstd probe local — bon candidat, mais reporté
+
+Un probe local a été fait sur le payload actuel pour comparer **brut**, **RLE** et **Zstd niveau 1**.
+
+### Chiffres observés
+
+- `raw = 65553`
+- `RLE avg = 57148.5`
+- `Zstd level 1 avg = 15969.3`
+- encode `RLE ~= 0.100 ms/chunk`
+- encode `Zstd1 ~= 0.108 ms/chunk`
+- decode `Zstd1 ~= 0.0325 ms/chunk`
+
+### Lecture
+
+- `Zstd level 1` compresse **beaucoup** mieux que le RLE actuel
+- son coût CPU mesuré localement reste très raisonnable
+- donc oui, c'est un **très bon candidat**
+
+### Pourquoi on le reporte quand même
+
+- il vaut mieux d'abord **réduire la donnée à la source**
+- `Chunk Sections` enlève complètement des zones vides, ce que `Zstd` ne fait pas structurellement
+- une fois le payload sectionné stabilisé, appliquer `Zstd` dessus sera encore plus pertinent
+
+> **Décision :** garder `Zstd` comme prochaine marche réseau sérieuse, mais **après** validation de `Chunk Sections` en bench réel.
+
+---
+
+## 22/03 Bench live actuel vs commit `RLE` (`c9d5893`)
+
+> **Méthode de rerun propre :**
+> bench séquentiel sur la machine principale, avec le serveur **tué entre chaque run** pour éviter les conflits de port et les contaminations de mesure.
+
+Setup identique pour les deux versions :
+
+- `VoxPlaceServer --classic-gen`
+- `VOXPLACE_PROFILE_WORKERS=1`
+- `VOXPLACE_SERVER_WORKERS=2`
+- `VOXPLACE_RENDER_DISTANCE=32`
+- `VOXPLACE_MESH_WORKERS=1`
+- scénarios :
+  - statique `RD=32`
+  - fly-through `RD=32`, vitesse `80`, durée `20 s`
+
+Versions comparées :
+
+- **actuel** : implémentation `ChunkSnapshotSections`
+- **ancien** : commit `c9d5893` (`RLE`)
+
+### Résultats serveur
+
+Statique :
+
+- actuel `sections`
+  - fenêtres utiles : `7`
+  - `snapshot_avg_bytes = 42289.5`
+  - `snapshot_ratio = 0.645`
+  - `snapshot_avg_sections = 2.580`
+- ancien `RLE`
+  - fenêtres utiles : `7`
+  - `snapshot_avg_bytes = 56661.6`
+  - `snapshot_ratio = 0.864`
+
+Fly-through :
+
+- actuel `sections`
+  - fenêtres utiles : `9`
+  - `snapshot_avg_bytes = 41795.8`
+  - `snapshot_ratio = 0.638`
+  - `snapshot_avg_sections = 2.550`
+- ancien `RLE`
+  - fenêtres utiles : `9`
+  - `snapshot_avg_bytes = 56627.1`
+  - `snapshot_ratio = 0.864`
+
+Lecture serveur :
+
+- gain payload **statique** : environ `-25.4%`
+- gain payload **fly-through** : environ `-26.2%`
+- le résultat live colle très bien au micro-bench offline fait sur les mêmes chunks
+
+### Résultats client
+
+Statique :
+
+- actuel `sections`
+  - `avg_fps = 267.9`
+  - `avg_frame_ms = 3.752`
+  - `avg_visible = 796.5`
+  - `avg_streamed = 3125.6`
+  - `avg_receives = 159.6`
+- ancien `RLE`
+  - `avg_fps = 260.1`
+  - `avg_frame_ms = 3.869`
+  - `avg_visible = 796.9`
+  - `avg_streamed = 3103.2`
+  - `avg_receives = 158.8`
+
+Fly-through :
+
+- actuel `sections`
+  - `avg_fps = 269.4`
+  - `avg_frame_ms = 3.747`
+  - `avg_visible = 621.1`
+  - `avg_streamed = 2488.5`
+  - `avg_receives = 312.6`
+  - `max_drops = 592`
+- ancien `RLE`
+  - `avg_fps = 264.4`
+  - `avg_frame_ms = 3.821`
+  - `avg_visible = 614.4`
+  - `avg_streamed = 2443.4`
+  - `avg_receives = 305.8`
+  - `max_drops = 564`
+
+Lecture client :
+
+- gain FPS **statique** : environ `+3.0%`
+- gain FPS **fly-through** : environ `+1.9%`
+- amélioration frametime **statique** : environ `-3.0%`
+- amélioration frametime **fly-through** : environ `-1.9%`
+
+### Conclusion
+
+- le chemin `ChunkSnapshotSections` gagne **en même temps** sur :
+  - la taille des snapshots
+  - le coût CPU protocole
+  - et légèrement sur le comportement client live
+- le gain client n'est pas gigantesque, mais il est dans le bon sens et surtout obtenu **en réduisant fortement le payload**
+- à ce stade, le comparatif actuel vs ancien `RLE` valide bien le choix architectural :
+  - **réduire la donnée à la source** avant d'ajouter une compression plus forte
+
+> **Conclusion pratique :** `Chunk Sections` est déjà une vraie marche structurelle au-dessus du `RLE` historique. Le prochain gros candidat reste `Zstd`, mais cette fois sur un payload déjà réduit.
+
+---
+
 ## 12. Liens Utiles
 
 | Ressource | Lien |
