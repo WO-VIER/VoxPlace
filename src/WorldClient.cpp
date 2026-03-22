@@ -263,7 +263,8 @@ void WorldClient::handlePacket(const uint8_t *data, size_t size)
 		return;
 	}
 
-	if (type == PacketType::ChunkSnapshot)
+	if (type == PacketType::ChunkSnapshot ||
+		type == PacketType::ChunkSnapshotRle)
 	{
 		DecodedChunkSnapshot snapshot;
 		if (!decodeChunkSnapshot(data, size, snapshot))

@@ -177,6 +177,8 @@ std::unordered_map<int64_t, uint64_t> gPendingMeshRevisions;
 size_t gProfileChunkRequestsWindow = 0;
 size_t gProfileChunkDropsWindow = 0;
 size_t gProfileChunkReceivesWindow = 0;
+size_t gClassicMaxInflightChunkRequests = 192;
+size_t gClassicMaxChunkRequestsPerFrame = 16;
 
 bool usesIndirectRendering()
 {
@@ -200,6 +202,19 @@ void rebuildIndirectArenaFromLoadedChunks()
 		}
 		gChunkIndirectRenderer.upsertChunk(*chunk);
 	}
+}
+
+size_t inflightChunkRequestCount()
+{
+	size_t inflightCount = 0;
+	for (int64_t key : streamedChunkKeys)
+	{
+		if (chunkMap.find(key) == chunkMap.end())
+		{
+			inflightCount++;
+		}
+	}
+	return inflightCount;
 }
 
 const char *cameraHeadingCardinal(const glm::vec3 &front)
@@ -826,11 +841,41 @@ void syncChunkStreaming()
 				  return left.distSq < right.distSq;
 			  });
 
+	size_t maxNewRequestsThisFrame = requestCandidates.size();
+	if (usesClassicStreaming())
+	{
+		size_t inflightRequests = inflightChunkRequestCount();
+		size_t inflightBudget = 0;
+		if (inflightRequests < gClassicMaxInflightChunkRequests)
+		{
+			inflightBudget = gClassicMaxInflightChunkRequests - inflightRequests;
+		}
+
+		// Bench fly-through: envoyer toute la couronne en une frame crée une
+		// backlog géante côté serveur, puis une longue file de chunks déjà
+		// moins pertinents quand la caméra a avancé.
+		//
+		// On garde donc deux limites simples:
+		// - un nombre max de requêtes encore "en vol"
+		// - un burst max de nouvelles requêtes par frame
+		//
+		// Le tri frustum + distance reste inchangé, donc si le budget est serré,
+		// ce sont bien les chunks les plus utiles qui partent d'abord.
+		maxNewRequestsThisFrame = std::min(maxNewRequestsThisFrame, inflightBudget);
+		maxNewRequestsThisFrame = std::min(maxNewRequestsThisFrame, gClassicMaxChunkRequestsPerFrame);
+	}
+
+	size_t sentRequestsThisFrame = 0;
 	for (const ChunkRequestCandidate &candidate : requestCandidates)
 	{
+		if (sentRequestsThisFrame >= maxNewRequestsThisFrame)
+		{
+			break;
+		}
 		gWorldClient.sendChunkRequest(candidate.chunkX, candidate.chunkZ);
 		streamedChunkKeys.insert(chunkKey(candidate.chunkX, candidate.chunkZ));
 		gProfileChunkRequestsWindow++;
+		sentRequestsThisFrame++;
 	}
 
 	std::vector<int64_t> keysToDrop;
@@ -967,6 +1012,24 @@ int main()
 	{
 		envClassicPadding = std::clamp(envClassicPadding, 0, 8);
 		classicStreamingPaddingChunks = envClassicPadding;
+	}
+
+	int envClassicMaxInflightRequests = 0;
+	if (tryReadEnvInt("VOXPLACE_CLASSIC_MAX_INFLIGHT_REQUESTS", envClassicMaxInflightRequests))
+	{
+		if (envClassicMaxInflightRequests > 0)
+		{
+			gClassicMaxInflightChunkRequests = static_cast<size_t>(envClassicMaxInflightRequests);
+		}
+	}
+
+	int envClassicMaxRequestsPerFrame = 0;
+	if (tryReadEnvInt("VOXPLACE_CLASSIC_MAX_REQUESTS_PER_FRAME", envClassicMaxRequestsPerFrame))
+	{
+		if (envClassicMaxRequestsPerFrame > 0)
+		{
+			gClassicMaxChunkRequestsPerFrame = static_cast<size_t>(envClassicMaxRequestsPerFrame);
+		}
 	}
 
 	size_t requestedMeshWorkers = 0;

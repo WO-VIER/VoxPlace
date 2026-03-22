@@ -2152,6 +2152,121 @@ Les sections précédentes du document donnent une piste plus intéressante que 
 
 ---
 
+## 22/03 Bugfix RLE + lesson learned
+
+Le premier passage à `ChunkSnapshotRle` a introduit un bug de protocole très simple, mais très violent visuellement :
+
+- le serveur envoyait correctement des `ChunkSnapshotRle`
+- `decodeChunkSnapshot()` savait déjà décoder ce nouveau format
+- **mais** le client ne traitait explicitement dans `handlePacket()` que `PacketType::ChunkSnapshot`
+
+Résultat :
+
+- réseau affiché comme **Connected**
+- serveur qui générait bien
+- mais une partie des chunks compressés était simplement **ignorée** côté client
+- visuellement, le monde ressemblait à un terrain "troué" ou incomplètement streamé
+
+### Correction
+
+- `WorldClient::handlePacket()` accepte maintenant :
+  - `PacketType::ChunkSnapshot`
+  - `PacketType::ChunkSnapshotRle`
+
+### Lesson learned
+
+- quand on ajoute un nouveau format de paquet, il ne suffit pas de :
+  - coder l'encodeur
+  - coder le décodeur
+- il faut aussi vérifier le **dispatch top-level** côté réception
+
+> **Règle à retenir :** toute évolution du protocole doit être validée par un smoke test réel **client + serveur**, pas seulement par le fait que `encode/decode` compilent.
+
+---
+
+## 22/03 Bench réseau réel — gain du `ChunkSnapshotRle`
+
+> **Setup bench :** `VoxPlaceServer --classic-gen` + `VoxPlace` avec `Render Distance = 20`, machine principale (`Ryzen 7 5700X3D`, `RTX 3070 Ti`, `32 Go RAM`), mesure faite sur les **chunks réellement envoyés** au client.
+
+### Format brut de référence
+
+- un `ChunkSnapshot` brut transporte actuellement :
+  - `PacketType`
+  - `chunkX`
+  - `chunkZ`
+  - `revision`
+  - `chunk.blocks`
+- taille brute de référence :
+  - `65553` octets par chunk
+
+### Résultats mesurés
+
+Fenêtres de profiling observées côté serveur :
+
+- fenêtre 1 :
+  - `snapshot_count = 560`
+  - `snapshot_avg_bytes = 58167.6`
+  - `snapshot_avg_raw_bytes = 65553`
+  - `snapshot_ratio = 0.887`
+
+- fenêtre 2 :
+  - `snapshot_count = 640`
+  - `snapshot_avg_bytes = 57082.2`
+  - `snapshot_avg_raw_bytes = 65553`
+  - `snapshot_ratio = 0.871`
+
+- fenêtre 3 :
+  - `snapshot_count = 592`
+  - `snapshot_avg_bytes = 59298.6`
+  - `snapshot_avg_raw_bytes = 65553`
+  - `snapshot_ratio = 0.905`
+
+### Lecture
+
+- Le `ChunkSnapshotRle` apporte un **gain réel**, mais **modéré** :
+  - environ `9%` à `13%` de réduction sur ce terrain
+- C'est logique :
+  - le terrain a beaucoup d'air
+  - mais aussi beaucoup de variations de couleurs `uint32_t`, donc moins de longues runs qu'un format palette plus compact
+
+### Conclusion
+
+- Le RLE actuel est **utile** et presque gratuit en complexité.
+- Mais il ne faut pas en attendre un miracle :
+  - ce n'est pas encore la grosse réduction de data
+- La vraie marche suivante pour le réseau reste probablement :
+  - **Chunk Sections `16³`**
+  - **format voxel plus compact que `uint32_t` brut**
+  - puis éventuellement une compression plus forte si nécessaire
+
+### Bench complémentaire — fly-through `Render Distance = 32`
+
+Un second bench a été fait dans un scénario plus représentatif du gameplay :
+
+- `VoxPlaceServer --classic-gen`
+- `VoxPlace`
+- `Render Distance = 32`
+- caméra auto-pilotée en déplacement continu
+
+Fenêtres observées côté serveur :
+
+- `snapshot_avg_bytes = 57417.8` → ratio `0.876`
+- `snapshot_avg_bytes = 55195.8` → ratio `0.842`
+- `snapshot_avg_bytes = 54775.6` → ratio `0.836`
+- `snapshot_avg_bytes = 59712.2` → ratio `0.911`
+- `snapshot_avg_bytes = 57768.2` → ratio `0.881`
+- `snapshot_avg_bytes = 56757.5` → ratio `0.866`
+
+Lecture :
+
+- en mouvement continu à `32` chunks, le gain du RLE reste du même ordre de grandeur
+- on observe environ **9% à 16%** de réduction sur les snapshots réellement envoyés
+- le RLE reste donc un **bon micro-gain**, mais toujours pas la grosse optimisation structurante
+
+> **Conclusion pratique :** le RLE vaut la peine d'être gardé, mais il confirme surtout que la vraie prochaine réduction de bande passante viendra d'un format plus compact (`sections 16³`, palette locale, ou représentation voxel non brute), pas d'une simple compression linéaire sur le format actuel.
+
+---
+
 ## 12. Liens Utiles
 
 | Ressource | Lien |

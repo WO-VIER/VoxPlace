@@ -1,9 +1,16 @@
 #include <WorldProtocol.h>
 
 #include <cstring>
+#include <limits>
 
 namespace
 {
+	struct ChunkSnapshotRleRun
+	{
+		uint16_t count = 0;
+		uint32_t value = 0;
+	};
+
 	template <typename T>
 	void appendValue(std::vector<uint8_t> &buffer, const T &value)
 	{
@@ -111,43 +118,139 @@ bool decodeChunkDrop(const uint8_t *data, size_t size, ChunkDropMessage &message
 
 std::vector<uint8_t> encodeChunkSnapshot(const VoxelChunkData &chunk)
 {
-	std::vector<uint8_t> buffer;
-	buffer.reserve(1 + sizeof(int32_t) * 2 + sizeof(uint64_t) + sizeof(chunk.blocks));
-	appendValue(buffer, PacketType::ChunkSnapshot);
-	appendValue(buffer, chunk.chunkX);
-	appendValue(buffer, chunk.chunkZ);
-	appendValue(buffer, chunk.revision);
-	size_t start = buffer.size();
-	buffer.resize(start + sizeof(chunk.blocks));
-	std::memcpy(buffer.data() + start, chunk.blocks, sizeof(chunk.blocks));
-	return buffer;
+	std::vector<uint8_t> rawBuffer;
+	rawBuffer.reserve(1 + sizeof(int32_t) * 2 + sizeof(uint64_t) + sizeof(chunk.blocks));
+	appendValue(rawBuffer, PacketType::ChunkSnapshot);
+	appendValue(rawBuffer, chunk.chunkX);
+	appendValue(rawBuffer, chunk.chunkZ);
+	appendValue(rawBuffer, chunk.revision);
+	size_t rawStart = rawBuffer.size();
+	rawBuffer.resize(rawStart + sizeof(chunk.blocks));
+	std::memcpy(rawBuffer.data() + rawStart, chunk.blocks, sizeof(chunk.blocks));
+
+	const uint32_t *values = &chunk.blocks[0][0][0];
+	std::vector<ChunkSnapshotRleRun> runs;
+	runs.reserve(CHUNK_BLOCK_COUNT);
+
+	size_t index = 0;
+	while (index < CHUNK_BLOCK_COUNT)
+	{
+		uint32_t value = values[index];
+		uint16_t runCount = 1;
+		while (index + static_cast<size_t>(runCount) < CHUNK_BLOCK_COUNT &&
+			   values[index + static_cast<size_t>(runCount)] == value &&
+			   runCount < std::numeric_limits<uint16_t>::max())
+		{
+			runCount++;
+		}
+
+		ChunkSnapshotRleRun run;
+		run.count = runCount;
+		run.value = value;
+		runs.push_back(run);
+		index += static_cast<size_t>(runCount);
+	}
+
+	std::vector<uint8_t> compressedBuffer;
+	compressedBuffer.reserve(
+		1 + sizeof(int32_t) * 2 + sizeof(uint64_t) + sizeof(uint32_t) +
+		runs.size() * sizeof(ChunkSnapshotRleRun));
+	appendValue(compressedBuffer, PacketType::ChunkSnapshotRle);
+	appendValue(compressedBuffer, chunk.chunkX);
+	appendValue(compressedBuffer, chunk.chunkZ);
+	appendValue(compressedBuffer, chunk.revision);
+	uint32_t runCount = static_cast<uint32_t>(runs.size());
+	appendValue(compressedBuffer, runCount);
+	for (const ChunkSnapshotRleRun &run : runs)
+	{
+		appendValue(compressedBuffer, run);
+	}
+
+	if (compressedBuffer.size() < rawBuffer.size())
+	{
+		return compressedBuffer;
+	}
+	return rawBuffer;
 }
 
 bool decodeChunkSnapshot(const uint8_t *data, size_t size, DecodedChunkSnapshot &message)
 {
 	size_t offset = 0;
-	if (!readPacketType(data, size, PacketType::ChunkSnapshot, offset))
+	PacketType packetType = PacketType::Hello;
+	if (!readValue(data, size, offset, packetType))
 	{
 		return false;
 	}
-	if (!readValue(data, size, offset, message.chunk.chunkX))
+	if (packetType == PacketType::ChunkSnapshot)
 	{
-		return false;
+		if (!readValue(data, size, offset, message.chunk.chunkX))
+		{
+			return false;
+		}
+		if (!readValue(data, size, offset, message.chunk.chunkZ))
+		{
+			return false;
+		}
+		if (!readValue(data, size, offset, message.chunk.revision))
+		{
+			return false;
+		}
+		if (offset + sizeof(message.chunk.blocks) > size)
+		{
+			return false;
+		}
+		std::memcpy(message.chunk.blocks, data + offset, sizeof(message.chunk.blocks));
+		return true;
 	}
-	if (!readValue(data, size, offset, message.chunk.chunkZ))
+
+	if (packetType == PacketType::ChunkSnapshotRle)
 	{
-		return false;
+		if (!readValue(data, size, offset, message.chunk.chunkX))
+		{
+			return false;
+		}
+		if (!readValue(data, size, offset, message.chunk.chunkZ))
+		{
+			return false;
+		}
+		if (!readValue(data, size, offset, message.chunk.revision))
+		{
+			return false;
+		}
+
+		uint32_t runCount = 0;
+		if (!readValue(data, size, offset, runCount))
+		{
+			return false;
+		}
+
+		uint32_t *values = &message.chunk.blocks[0][0][0];
+		size_t written = 0;
+		for (uint32_t index = 0; index < runCount; index++)
+		{
+			ChunkSnapshotRleRun run;
+			if (!readValue(data, size, offset, run))
+			{
+				return false;
+			}
+			if (written + static_cast<size_t>(run.count) > CHUNK_BLOCK_COUNT)
+			{
+				return false;
+			}
+			for (uint16_t countIndex = 0; countIndex < run.count; countIndex++)
+			{
+				values[written] = run.value;
+				written++;
+			}
+		}
+		if (written != CHUNK_BLOCK_COUNT)
+		{
+			return false;
+		}
+		return true;
 	}
-	if (!readValue(data, size, offset, message.chunk.revision))
-	{
-		return false;
-	}
-	if (offset + sizeof(message.chunk.blocks) > size)
-	{
-		return false;
-	}
-	std::memcpy(message.chunk.blocks, data + offset, sizeof(message.chunk.blocks));
-	return true;
+
+	return false;
 }
 
 std::vector<uint8_t> encodeBlockActionRequest(const BlockActionRequestMessage &message)
@@ -198,6 +301,8 @@ const char *packetTypeName(PacketType type)
 		return "BlockActionRequest";
 	case PacketType::BlockUpdateBroadcast:
 		return "BlockUpdateBroadcast";
+	case PacketType::ChunkSnapshotRle:
+		return "ChunkSnapshotRle";
 	}
 	return "Unknown";
 }
