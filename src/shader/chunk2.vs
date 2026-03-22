@@ -12,16 +12,10 @@ layout(std430, binding = 0) readonly buffer ChunkData {
     uint faces[];
 };
 
-struct DrawInfo {
-    uint faceOffset;
-    int chunkX;
-    int chunkZ;
-    int padding;
-};
-
-layout(std430, binding = 1) readonly buffer ChunkDrawData {
-    DrawInfo draws[];
-};
+layout(location = 0) in uint inWord0;
+layout(location = 1) in uint inWord1;
+layout(location = 2) in int inChunkX;
+layout(location = 3) in int inChunkZ;
 
 uniform mat4 view;
 uniform mat4 projection;
@@ -65,19 +59,20 @@ const float AO_CURVE[4] = float[4](0.25, 0.50, 0.75, 1.00);
 
 void main()
 {
-    int faceID = gl_VertexID / 6;
     int vertID = gl_VertexID % 6;
+    int faceID = gl_VertexID / 6;
     vec3 chunkOrigin = chunkPos;
+    uint word0 = 0u;
+    uint word1 = 0u;
 
     if (useIndirectDraw == 1) {
-        DrawInfo drawInfo = draws[gl_DrawID];
-        faceID += int(drawInfo.faceOffset);
-        chunkOrigin = vec3(float(drawInfo.chunkX * 16), 0.0, float(drawInfo.chunkZ * 16));
+        word0 = inWord0;
+        word1 = inWord1;
+        chunkOrigin = vec3(float(inChunkX * 16), 0.0, float(inChunkZ * 16));
+    } else {
+        word0 = faces[faceID * 2];
+        word1 = faces[faceID * 2 + 1];
     }
-
-    // Lecture des 2 words du SSBO
-    uint word0 = faces[faceID * 2];
-    uint word1 = faces[faceID * 2 + 1];
 
     // Dépacking Word 0 : position + face + sunblock + AO
     int x       = int(word0 & 0xFu);

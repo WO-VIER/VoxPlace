@@ -45,6 +45,24 @@ namespace
 	constexpr float PLACE_REACH = 8.0f;
 	constexpr uint16_t SERVER_PORT = 28713;
 	constexpr const char *SERVER_HOST = "127.0.0.1";
+
+	enum class TerrainRenderArchitecture
+	{
+		ChunkSsboDirect = 0,
+		BigGpuBufferIndirect = 1
+	};
+
+	const char *terrainRenderArchitectureName(TerrainRenderArchitecture architecture)
+	{
+		switch (architecture)
+		{
+		case TerrainRenderArchitecture::ChunkSsboDirect:
+			return "Chunk SSBO Direct";
+		case TerrainRenderArchitecture::BigGpuBufferIndirect:
+			return "Big GPU Buffer Indirect";
+		}
+		return "Unknown";
+	}
 }
 
 float fogStart = 80.0f;
@@ -59,7 +77,8 @@ int classicStreamingPaddingChunks = 4;
 
 bool useAO = true;
 bool debugSunblockOnly = false;
-bool useIndirectRendering = false;
+TerrainRenderArchitecture gTerrainRenderArchitecture = TerrainRenderArchitecture::ChunkSsboDirect;
+TerrainRenderArchitecture gPreviousTerrainRenderArchitecture = TerrainRenderArchitecture::ChunkSsboDirect;
 int selectedPaletteIndex = 32;
 Crosshair crosshair;
 float chunkRenderCpuMs = 0.0f;
@@ -83,6 +102,30 @@ ChunkIndirectRenderer gChunkIndirectRenderer;
 std::unordered_map<int64_t, Chunk2 *> chunkMap;
 std::unordered_set<int64_t> streamedChunkKeys;
 std::unordered_map<int64_t, uint64_t> gPendingMeshRevisions;
+
+bool usesIndirectRendering()
+{
+	if (gTerrainRenderArchitecture == TerrainRenderArchitecture::BigGpuBufferIndirect)
+	{
+		return true;
+	}
+	return false;
+}
+
+void rebuildIndirectArenaFromLoadedChunks()
+{
+	gChunkIndirectRenderer.cleanup();
+	gChunkIndirectRenderer.init();
+
+	for (auto &[key, chunk] : chunkMap)
+	{
+		if (chunk == nullptr)
+		{
+			continue;
+		}
+		gChunkIndirectRenderer.upsertChunk(*chunk);
+	}
+}
 
 const char *cameraHeadingCardinal(const glm::vec3 &front)
 {
@@ -1057,7 +1100,7 @@ int main()
 
 		int visibleChunks = static_cast<int>(visibleList.size());
 		auto chunkRenderCpuStart = std::chrono::steady_clock::now();
-		if (useIndirectRendering)
+		if (usesIndirectRendering())
 		{
 			std::vector<Chunk2 *> visibleChunksForIndirect;
 			visibleChunksForIndirect.reserve(visibleList.size());
@@ -1117,7 +1160,7 @@ int main()
 		ImGui::Text("Chunks: %d / %zu visible", visibleChunks, chunkMap.size());
 		ImGui::Text("Streamed chunks: %zu", streamedChunkKeys.size());
 		ImGui::Text("Chunk render CPU: %.3f ms", chunkRenderCpuMs);
-		if (useIndirectRendering)
+		if (usesIndirectRendering())
 		{
 			int cpuDrawCalls = 0;
 			if (gChunkIndirectRenderer.drawCount > 0)
@@ -1132,8 +1175,14 @@ int main()
 						gChunkIndirectRenderer.lastBuildReused ? "reused" : "rebuilt",
 						static_cast<unsigned long long>(gChunkIndirectRenderer.drawDataBuildCount));
 			ImGui::Text("Arena usage: %.2f / %.2f MB",
-						static_cast<float>(gChunkIndirectRenderer.arenaReservedWords * sizeof(uint32_t)) / (1024.0f * 1024.0f),
-						static_cast<float>(gChunkIndirectRenderer.arenaWordCapacity * sizeof(uint32_t)) / (1024.0f * 1024.0f));
+						static_cast<float>(gChunkIndirectRenderer.arenaReservedFaces * sizeof(ChunkFaceInstanceGpu)) / (1024.0f * 1024.0f),
+						static_cast<float>(gChunkIndirectRenderer.arenaFaceCapacity * sizeof(ChunkFaceInstanceGpu)) / (1024.0f * 1024.0f));
+			ImGui::Text("Arena used faces: %zu", gChunkIndirectRenderer.arenaUsedFaces);
+			ImGui::Text("Largest free span: %zu faces", gChunkIndirectRenderer.largestFreeFaceSpan);
+			if (ImGui::Button("Compact Arena"))
+			{
+				gChunkIndirectRenderer.compact();
+			}
 		}
 		else
 		{
@@ -1202,7 +1251,18 @@ int main()
 		ImGui::Separator();
 		ImGui::Checkbox("Ambient Occlusion", &useAO);
 		ImGui::Checkbox("Sunblock debug", &debugSunblockOnly);
-		ImGui::Checkbox("Indirect Rendering", &useIndirectRendering);
+		ImGui::Text("Terrain Architecture: %s", terrainRenderArchitectureName(gTerrainRenderArchitecture));
+		int terrainArchitectureIndex = static_cast<int>(gTerrainRenderArchitecture);
+		ImGui::SliderInt("Terrain Arch", &terrainArchitectureIndex, 0, 1);
+		gTerrainRenderArchitecture = static_cast<TerrainRenderArchitecture>(terrainArchitectureIndex);
+		if (gTerrainRenderArchitecture != gPreviousTerrainRenderArchitecture)
+		{
+			if (usesIndirectRendering())
+			{
+				rebuildIndirectArenaFromLoadedChunks();
+			}
+			gPreviousTerrainRenderArchitecture = gTerrainRenderArchitecture;
+		}
 		ImGui::SliderInt("Palette index", &selectedPaletteIndex, 1, static_cast<int>(PLAYER_COLOR_PALETTE_SIZE));
 		uint32_t selectedColor = playerPaletteColor(static_cast<uint8_t>(selectedPaletteIndex - 1));
 		ImVec4 previewColor(
