@@ -8,7 +8,7 @@ option(ENABLE_GL_DEBUG "Enable OpenGL debug output for native builds" ON)
 option(ENABLE_ASAN "Enable Address Sanitizer for debugging" OFF)
 
 if(NOT EMSCRIPTEN)
-    add_compile_options(-O0 -w)
+    add_compile_options(-w)
 
     if(ENABLE_ASAN)
         add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g3)

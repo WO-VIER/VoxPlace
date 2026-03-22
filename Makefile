@@ -1,11 +1,12 @@
 JOBS ?= 8
 
-.PHONY: help native native-asan wasm serve clean fclean
+.PHONY: help native native-release native-asan wasm serve clean fclean
 
 help:
 	@echo "Usage: make <target>"
 	@echo "Targets:"
 	@echo "  native      Configure & build native (CMake)"
+	@echo "  native-release Configure & build native release (CMake)"
 	@echo "  native-asan Configure & build native with Address Sanitizer"
 	@echo "  wasm        Configure & build WebAssembly (Emscripten)"
 	@echo "  serve       Serve build_wasm/ on http://localhost:8000"
@@ -14,6 +15,9 @@ help:
 
 native:
 	scripts/build_native.sh
+
+native-release:
+	BUILD_TYPE=Release scripts/build_native.sh
 
 native-asan:
 	scripts/build_native_asan.sh
@@ -25,7 +29,7 @@ serve:
 	scripts/serve_wasm.sh
 
 clean:
-	rm -rf build build_wasm
+	rm -rf build build_release build_relwithdebinfo build_minsizerel build_wasm
 
 fclean:
 	# full-clean: supprime les dossiers de build et les fichiers générés
