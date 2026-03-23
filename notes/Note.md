@@ -1068,6 +1068,123 @@ L'apparition soudaine d'un chunk provoque un **stutter** (chute brutale de FPS).
 - La couleur du brouillard doit correspondre à la `glClearColor` (Skybox) pour un fondu parfait.
 - ✅ **Implémenté** dans `chunk2.fs` (uniforms `fogStart`, `fogEnd`, `fogColor`) mais **désactivé** (`FOG_START = FOG_END = 0`).
 
+### Reverse Minecraft Java (client vanilla)
+
+#### Fog exact du client récent (`1.20.4` / `1.21.11`)
+
+Le reverse du client vanilla récent montre que le fog de render distance **n'est plus** un simple `start = 0.75 * far`.
+
+Le pipeline réel côté Mojang est :
+
+```cpp
+// Vanilla récent — idée équivalente
+float far = renderDistanceChunks * 16.0f;
+float band = std::clamp(far / 10.0f, 4.0f, 64.0f);
+float fogStart = far - band;
+float fogEnd = far;
+```
+
+- `far` est la **render distance client en chunks**, convertie en blocs (`chunks * 16`).
+- le fog commence seulement dans la **dernière bande** de visibilité.
+- la largeur de cette bande vaut entre **4 blocs** et **64 blocs**.
+- donc à `12 chunks` (`192 blocs`), le fog commence vers `172.8 blocs` → **~90%** de la render distance, pas `75%`.
+- à grande distance, la bande finit par saturer à `64 blocs`, donc le fog devient relativement **plus tardif** en pourcentage.
+
+#### Distance réellement utilisée dans le shader vanilla
+
+Le shader moderne ne fait pas juste un `length(worldPos - cameraPos)` uniforme pour tout :
+
+- le **fog environnemental** utilise une distance **sphérique** : `length(pos)`.
+- le **fog de render distance** utilise une distance **cylindrique** : `max(length(pos.xz), abs(pos.y))`.
+- la valeur finale est le **max** entre les deux contributions.
+
+En pratique, pour reproduire Minecraft Java récent sur terrain normal :
+- il faut aligner `fogEnd` sur la **render distance en blocs**, pas sur le `far plane`.
+- il faut calculer le fog de render distance sur une distance **cylindrique**.
+- le `far plane` peut rester un peu au-delà pour éviter de couper trop tôt la géométrie, mais le **fog** doit finir sur la vraie portée visuelle.
+
+#### Important : notre réglage actuel `0.75` correspond à l'ancien Java
+
+Le reverse de `Minecraft Java 1.16.5` confirme bien l'ancien comportement terrain classique :
+
+```cpp
+float fogStart = far * 0.75f;
+float fogEnd = far;
+```
+
+Conclusion :
+- `minecraftFogStartPercent = 0.75f` est **authentique Minecraft Java ancien**.
+- ce n'est **pas** le comportement exact du client vanilla récent (`1.20.4` / `1.21.11`).
+
+#### Pourquoi l'apparition des chunks est moins visible dans le vanilla récent
+
+Le client moderne ne masque pas le popping avec une seule astuce. Il combine plusieurs mécanismes :
+
+- le rendu n'est plus pensé comme un gros chunk colonne `16x16x256`, mais comme des **RenderSections `16x16x16`**.
+- `SectionOcclusionGraph` propage les sections visibles **depuis la caméra vers l'extérieur**.
+- `CompileTaskDynamicQueue` choisit les tâches de compilation **les plus proches de la caméra**.
+- `RenderSection::hasAllNeighbors()` attend la présence des voisins horizontaux avant certains builds, ce qui réduit les bords visibles pendant les arrivées de données.
+- l'option client `PrioritizeChunkUpdates` permet de favoriser les sections :
+  - `NONE`
+  - `PLAYER_AFFECTED`
+  - `NEARBY`
+- en mode `NEARBY`, les sections proches peuvent être compilées **synchro** plus tôt, au lieu d'attendre uniquement l'async.
+
+#### Le vrai anti-pop moderne : fade-in des sections
+
+Minecraft Java récent possède un vrai **fade-in** de sections côté client :
+
+- option : `Options::chunkSectionFadeInTime`
+- clé UI : `options.chunkFade`
+- valeur par défaut : **`0.75 s`**
+- plage : **`0.0 s` → `2.0 s`**
+
+Chaque `RenderSection` stocke :
+- `uploadedTime`
+- `fadeDuration`
+- `getVisibility(now)`
+
+Le `LevelRenderer` règle :
+- `fadeDuration = 0` pour les sections **très proches** ou explicitement prioritaires
+- `fadeDuration = optionChunkFade` pour les sections plus lointaines
+
+Puis le shader terrain mélange d'abord la géométrie vers la couleur du fog :
+
+```glsl
+color = mix(FogColor * vec4(1, 1, 1, color.a), color, ChunkVisibility);
+```
+
+Ensuite seulement il applique le fog de distance.
+
+Effet visuel :
+- une section lointaine nouvellement uploadée apparaît déjà **teintée comme le fog**.
+- elle se révèle progressivement au lieu de surgir d'un coup.
+- le popping est donc masqué par la combinaison **fog + ordre de compile + fade-in**.
+
+#### Traduction directe pour VoxPlace
+
+Si on veut coller au vanilla récent :
+
+- fog terrain : `start = far - clamp(far / 10, 4, 64)`, `end = far`
+- distance de fog : **cylindrique**, pas purement sphérique
+- apparition chunks : idéalement passer à des **sections `16x16x16`**
+- priorité de build : **proche caméra d'abord**
+- fade-in lointain : **~`0.75 s`**
+
+Si on veut garder le look "Minecraft Java ancien" :
+
+- le réglage actuel `start = 0.75 * far` reste cohérent
+- mais il faut l'assumer comme un choix **old-school**, pas comme le comportement exact du client moderne
+
+#### Point réseau à ne pas oublier
+
+La distance réellement visible dépend de deux limites :
+
+- la **render distance client**
+- la distance maximale réellement **envoyée par le serveur**
+
+Le client peut demander `N` chunks de rendu et fogger correctement, mais il ne pourra jamais afficher au-delà de ce que le serveur stream effectivement.
+
 ---
 
 ## 10. Les "Fausses" Bonnes Idées (À Éviter)
@@ -1147,7 +1264,9 @@ std::sort(chunkVector.begin(), chunkVector.end(),
     });
 ```
 
-> ✅ **C'est un Z-Prepass "gratuit"** grâce au hardware Early-Z du GPU. Pas de double pass, pas de changement de shader. Juste un `std::sort` une fois par frame.
+> ✅ **C'est une manière "gratuite" d'aider le Early-Z** du GPU : pas de double pass, pas de changement de shader, juste un ordre de draw plus favorable.
+>
+> ⚠️ **Important :** "gratuit" ne veut pas dire "toujours rentable". Il reste un coût CPU de tri (`std::sort`) à chaque frame. Sur un renderer où le fragment shader est très léger, ce coût peut annuler le gain GPU. Un bench réel sur VoxPlace a été ajouté plus bas.
 
 #### 2. Chunk Sections (subdiviser en 16³)
 
@@ -1520,13 +1639,13 @@ Le rebuild se fait en **spirale** depuis le centre (chunks proches du joueur en 
 | Fog linéaire | ✅ | ✅ | Identique |
 | Frustum culling | ✅ | ✅ | Identique |
 | Per-vertex AO | ✅ (même réf 0fps) | ✅ | Identique |
-| Front-to-back sort | ✅ `qsort` | ❌ | **→ prochaine étape** |
+| Front-to-back sort | ✅ `qsort` | ✅ `std::sort` des chunks visibles | Implémenté, gain perf net non démontré sur bench statique |
 | `solid_sunblock` (ombres diag.) | ✅ | ❌ | **Faisable dans le shader VS** |
 | Multithreaded meshing | ✅ pthread | ❌ | Futur |
 | RGB per-bloc libre | ✅ uint32 RGBA | ❌ (palette 32) | Palette suffit pour r/place |
 | Greedy meshing (option) | ✅ | ❌ (par choix) | Vertex pulling > greedy |
 
-> ✅ **VoxPlace est fonctionnellement très proche** de BetterSpades. Les 2 features manquantes les plus impactantes visuellement sont le **front-to-back sorting** (~5 lignes) et le **sunblock diagonal** (faisable dans le vertex shader en sampling la position monde).
+> ✅ **VoxPlace est fonctionnellement très proche** de BetterSpades. Le **front-to-back sorting** est maintenant en place côté chunks visibles ; la grosse feature visuelle manquante la plus évidente reste surtout le **sunblock diagonal**.
 
 ---
 
@@ -1947,7 +2066,7 @@ perimeterChunkCount = 4 * sideChunks - 4
 - Profil terrain ajusté vers un rendu plus "Minecraft-like" : relief moins agressif + plaines plus étendues via terracing doux.
 - `Render Dist (chunks)` ajouté dans ImGui : le `far plane` suit automatiquement la distance choisie.
 - Culling chunks aligné fog : un chunk est dessiné dès que son bord proche peut entrer dans la zone de fog (moins de "tranches" visibles).
-- Fog style Minecraft : début du fog piloté par `%` de la render distance, fin du fog alignée à la **distance de rendu chunks** (et non plus au `far plane`).
+- Fog style Minecraft **ancien** (`1.16.5` validé) : début du fog à `75%` de la render distance, fin alignée à la **distance de rendu chunks** (et non plus au `far plane`).
 - `Limit to generated world` ajouté : empêche le joueur de sortir d'une zone de jeu circulaire centrée sur la map.
 - `World Border Pad (chunks)` ajouté : réserve une couronne de chunks hors zone jouable pour masquer les coupes en bord de monde.
 - TODO architecture serveur : déplacer la génération chunk côté serveur et, plus tard, supporter une génération guidée par les blocs posés pour concentrer les zones d'activité joueur.
@@ -2568,6 +2687,596 @@ Lecture client :
 
 ---
 
+## 23/03 Bench Early-Z / Front-to-Back Sorting — static `Render Distance = 32`
+
+### C'est quoi exactement le front-to-back sorting ?
+
+- Le principe est de dessiner d'abord les chunks **proches**, puis les chunks **lointains**.
+- Comme le depth buffer est rempli en priorité par la géométrie proche, beaucoup de fragments lointains échouent ensuite au depth test.
+- Le GPU peut alors **court-circuiter** une partie du travail fragment via le **Early-Z rejection**.
+- Ce n'est **pas** un Z-prepass :
+  - pas de deuxième passe depth-only
+  - pas de `GL_EQUAL`
+  - pas de shader spécial
+  - juste un ordre de rendu plus favorable pour le hardware depth culling
+
+Résumé mental :
+
+```text
+Front-to-back
+chunk proche   -> écrit le depth
+chunk lointain -> beaucoup de pixels échouent au depth test
+=> moins de travail fragment inutile
+
+Ordre non favorable
+chunk lointain -> exécute son fragment shader
+chunk proche   -> repasse ensuite par-dessus
+=> overdraw plus élevé
+```
+
+### Setup bench
+
+> **Machine / scénario :**
+> même bench local client/serveur que les autres mesures lourdes `RD=32`
+>
+> `VoxPlaceServer --classic-gen`
+> `VOXPLACE_PROFILE_WORKERS=1`
+> `VOXPLACE_SERVER_WORKERS=2`
+> `VOXPLACE_RENDER_DISTANCE=32`
+> `VOXPLACE_MESH_WORKERS=1`
+
+Toggle bench ajouté :
+
+- tri **ON** : `VOXPLACE_SORT_VISIBLE_CHUNKS=1`
+- tri **OFF** : `VOXPLACE_SORT_VISIBLE_CHUNKS=0`
+
+Méthode de lecture :
+
+- on ne garde que les fenêtres **steady-state**
+- critères retenus :
+  - `requests_avg = 0`
+  - `receives_avg = 0`
+  - `meshed_chunks = 0`
+- les deux runs comparés ont `visible_avg = 845`
+
+### Résultats steady-state
+
+- tri **ON** (`sort_visible_chunks = 1`)
+  - `fps_avg = 250.422`
+  - `frame_ms_avg = 3.993`
+  - `render_cpu_ms_avg = 0.352`
+- tri **OFF** (`sort_visible_chunks = 0`)
+  - `fps_avg = 255.011`
+  - `frame_ms_avg = 3.922`
+  - `render_cpu_ms_avg = 0.375`
+
+Delta `OFF - ON` :
+
+- FPS : `+4.589` soit environ `+1.83%`
+- frametime : `-0.071 ms` soit environ `-1.78%`
+- `render_cpu_ms_avg` : `+0.023 ms` soit environ `+6.53%`
+
+### Lecture
+
+- Sur ce bench statique `RD=32`, le front-to-back sorting **ne donne pas de gain global visible**.
+- Le run sans tri est même **légèrement meilleur** en frametime total.
+- En revanche, le `render_cpu_ms_avg` du draw pur reste un peu **meilleur avec tri**.
+- Cela suggère que :
+  - l'ordre front-to-back peut encore aider un peu le coût de draw / driver / depth culling
+  - mais ce petit gain est **mangé** par le coût CPU du `std::sort`
+  - et surtout par le fait que le fragment shader de VoxPlace est **très léger**
+
+Point important sur la mesure :
+
+- `render_cpu_ms_avg` mesure le bloc de draw des chunks
+- il **n'inclut pas** le coût du `std::sort(visibleList...)`
+- donc le frametime global est le meilleur juge pour savoir si l'optimisation vaut vraiment la peine
+
+### Conclusion pratique
+
+- **Oui**, le front-to-back sorting est bien la façon classique d'aider le **Early-Z rejection**.
+- **Non**, sur le renderer actuel de VoxPlace, ce bench ne montre pas qu'il s'agit d'un vrai gain perf net.
+- La raison la plus probable :
+  - `chunk2.fs` est trop peu coûteux
+  - le moteur enlève déjà beaucoup de travail via face culling + frustum culling
+  - donc l'overdraw restant n'est pas assez cher pour rembourser le tri CPU
+
+> **Décision actuelle :** considérer le front-to-back sorting comme une optimisation **plausible en théorie**, mais **non validée comme gain net** sur le bench statique lourd actuel de VoxPlace.
+
+### Bench fly-through `Render Distance = 32`
+
+Pour éviter de juger uniquement un monde déjà stabilisé, un second bench a été fait en **mouvement continu** avec la caméra auto-pilotée :
+
+> `VoxPlaceServer --classic-gen`
+> `VOXPLACE_PROFILE_WORKERS=1`
+> `VOXPLACE_SERVER_WORKERS=2`
+> `VOXPLACE_RENDER_DISTANCE=32`
+> `VOXPLACE_MESH_WORKERS=1`
+> `VOXPLACE_BENCH_FLY=1`
+> `VOXPLACE_BENCH_FLY_SPEED=80`
+> `VOXPLACE_BENCH_SECONDS=20`
+
+Même logique de comparaison :
+
+- tri **ON** : `VOXPLACE_SORT_VISIBLE_CHUNKS=1`
+- tri **OFF** : `VOXPLACE_SORT_VISIBLE_CHUNKS=0`
+
+Méthode de lecture :
+
+- ici, contrairement au bench statique, on garde **toutes** les fenêtres du run
+- c'est volontaire, parce que le but du fly-through est justement de mesurer :
+  - la montée en charge
+  - le churn réseau
+  - les `ChunkDrop`
+  - et le coût client pendant le renouvellement continu de la frontière
+
+### Résultats fly-through
+
+- tri **ON** (`sort_visible_chunks = 1`)
+  - fenêtres observées : `9`
+  - `avg_fps = 250.091`
+  - `avg_frame_ms = 4.032`
+  - `avg_render_cpu_ms = 0.279`
+  - `avg_visible = 619.131`
+  - `visible_min = 166.678`
+  - `visible_max = 711.816`
+  - `avg_receives = 312.144`
+  - `avg_requests = 333.251`
+  - `avg_drops = 122.263`
+  - `max_drops = 300.006`
+- tri **OFF** (`sort_visible_chunks = 0`)
+  - fenêtres observées : `9`
+  - `avg_fps = 259.187`
+  - `avg_frame_ms = 3.877`
+  - `avg_render_cpu_ms = 0.276`
+  - `avg_visible = 617.676`
+  - `visible_min = 160.618`
+  - `visible_max = 712.641`
+  - `avg_receives = 311.704`
+  - `avg_requests = 332.821`
+  - `avg_drops = 121.169`
+  - `max_drops = 294.778`
+
+Delta `OFF - ON` :
+
+- FPS : `+9.096` soit environ `+3.64%`
+- frametime : `-0.155 ms` soit environ `-3.84%`
+- `render_cpu_ms` : `-0.003 ms` soit environ `-1.08%`
+- `avg_visible` : `-1.455`
+- `avg_receives` : `-0.440`
+- `avg_requests` : `-0.430`
+- `avg_drops` : `-1.094`
+- `max_drops` : `-5.228`
+
+### Lecture fly-through
+
+- Le fly-through va **dans le même sens** que le bench statique.
+- Le tri front-to-back ne donne pas de gain observable ici non plus.
+- Sur ce scénario mouvement, le run **sans tri** est même un peu meilleur :
+  - en FPS moyen
+  - en frametime moyen
+  - et très légèrement sur le coût CPU de rendu mesuré
+- Les métriques de streaming (`requests`, `receives`, `drops`) restent très proches entre les deux runs.
+- Cela renforce l'idée que le facteur dominant n'est **pas** l'overdraw fragment, mais plutôt :
+  - le coût CPU du tri
+  - et le fait que le shader fragment reste trop simple pour que l'Early-Z aidé par le tri rembourse ce coût
+
+### Conclusion consolidée
+
+- Le **concept** de front-to-back sorting reste correct et standard pour aider l'**Early-Z rejection**.
+- Mais sur **VoxPlace actuel**, ni le bench statique `RD=32`, ni le bench fly-through `RD=32` ne montrent un gain net.
+- Dans les deux cas, le run **sans tri** finit légèrement devant.
+
+> **Conclusion finale actuelle :** garder cette idée comme référence théorique utile, mais **ne pas la considérer comme une optimisation validée** pour le renderer actuel de VoxPlace tant que le coût fragment n'augmente pas fortement ou que l'architecture de rendu ne change pas.
+
+---
+
+## 23/03 Audit du pipeline de rendu
+
+### Verdict global
+
+- Le rendu de VoxPlace n'est **pas catastrophique**.
+- Il y a déjà plusieurs filtres utiles :
+  - frustum culling par chunk
+  - face culling CPU dans le mesher
+  - skip des sections verticales vides
+  - `GL_CULL_FACE` + `GL_DEPTH_TEST`
+- Donc le moteur ne dessine **pas** bêtement tous les chunks chargés.
+
+Lecture pratique :
+
+- sur un run local `Render Distance = 32`, on observe typiquement environ `4053` chunks streamés pour `845` chunks visibles une fois stabilisé
+- le problème principal n'est donc pas un "je rends tout le monde"
+- le vrai sujet est plutôt :
+  - le **travail fixe** autour du rendu
+  - la **géométrie encore trop détaillée**
+  - et quelques cas où le client peut **garder trop** ou **traiter trop**
+
+### Ce qui est déjà bien
+
+- Le frustum culling est réel :
+  - `projection * view`
+  - extraction des 6 plans
+  - test AABB par chunk
+- Le streaming priorise déjà les chunks :
+  - dans le frustum
+  - puis les plus proches
+- Le meshing saute les sections totalement vides grâce à `nonEmptySectionMask`.
+- Les faces entre blocs opaques ne semblent pas passer "au travers" du culling CPU.
+- Les chunks sans faces ne dessinent rien :
+  - direct : `render()` retourne tout de suite
+  - indirect : ils sont retirés / ignorés
+
+### Sur-rendu ou travail en trop probable
+
+#### 1. `LowResRenderer` faisait une vraie passe inutile
+
+Avant retrait :
+
+- le FBO "low-res" était en fait en `1920x1080`
+- la fenêtre aussi
+- donc la scène était :
+  - rendue offscreen
+  - puis recopiée via un quad fullscreen
+
+Conséquence :
+
+- aucun vrai gain de raster/shading
+- une passe plein écran fixe en plus
+- un `glClear` couleur supplémentaire avant le fullscreen quad
+- de la VRAM occupée pour rien
+
+> **Action du 23/03 :** le chemin principal client a été remis en rendu direct sur le framebuffer par défaut, et la projection utilise maintenant la vraie taille du framebuffer courant au lieu du ratio fixe `1920/1080`.
+
+#### 2. Le meshing reste correct mais encore "naïf"
+
+- `buildPackedFaces()` émet une face dès qu'un voisin vaut `0`.
+- Il n'y a pas de fusion de faces coplanaires.
+- Donc une grande surface plane visible produit encore énormément de quads.
+
+Ce que ça veut dire :
+
+- le face culling est **bon**
+- mais la géométrie n'est pas encore **minimisée**
+
+En clair :
+
+- tu ne rends pas plein de faces internes "par bug"
+- tu rends encore trop de faces parce que tu ne fais pas de **greedy meshing** ou de fusion équivalente
+
+#### 3. Des chunks vides peuvent encore consommer du CPU
+
+- les chunks complètement vides finissent bien avec `faceCount = 0`
+- donc côté draw final, ils ne coûtent presque rien
+- par contre, ils peuvent encore :
+  - entrer dans la file de meshing
+  - produire un job
+  - traverser la pipeline CPU avant d'être réduits à zéro face
+
+Conclusion :
+
+- gaspillage surtout **CPU / queue**
+- pas vraiment **GPU draw**
+
+#### 4. Le frustum est conservateur
+
+- le test de visibilité prend une AABB chunk complète `y = 0..64`
+- même si le chunk n'a du contenu que sur quelques sections basses
+
+Donc :
+
+- un chunk peu rempli peut rester considéré "visible" plus longtemps que nécessaire
+- c'est un culling correct, mais **grossier**
+
+#### 5. Pas d'occlusion culling
+
+- le moteur fait :
+  - frustum culling
+  - back-face culling
+  - depth test
+- mais pas de rejet explicite des chunks totalement cachés derrière d'autres chunks
+
+Donc :
+
+- tous les chunks du frustum restent candidats au draw
+- même si certains sont complètement masqués par du terrain
+
+#### 6. Cas limite : chunk reçu après drop
+
+C'était le point logique le plus concret côté "on garde trop" :
+
+- un `ChunkReceived` était accepté et injecté dans `chunkMap`
+- sans vérifier si ce chunk était encore désiré côté `streamedChunkKeys`
+- si un snapshot arrivait en retard après un `ChunkDrop`, il pouvait devenir un chunk "orphelin"
+
+Conséquence :
+
+- ce chunk pouvait continuer à être meshed puis rendu
+- alors qu'il n'était plus censé faire partie de l'ensemble streamé
+
+> **Action du 23/03 :** correctif retenu côté client.
+>
+> Désormais :
+> - un `ChunkReceived` est ignoré s'il n'est plus suivi dans `streamedChunkKeys`
+> - et tout chunk local éventuellement déjà présent pour cette clé est nettoyé
+>
+> Cela ferme le cas principal de chunk "orphelin" persistant côté rendu/meshing.
+
+#### 7. Le mode indirect est entretenu même quand il n'est pas actif
+
+- le rendu terrain ne passe jamais en direct **et** indirect dans la même frame
+- donc il n'y a pas de double draw terrain
+- par contre, le pipeline indirect est quand même tenu à jour même quand le mode actif reste direct
+
+Conséquence :
+
+- duplication de maintenance CPU
+- duplication d'uploads GPU
+- stockage indirect entretenu en permanence
+
+### Priorités d'optimisation
+
+Ordre recommandé, du plus rentable au plus crédible :
+
+1. **Rendre le culling plus fin**
+   - culling par section verticale
+   - puis éventuellement occlusion culling
+
+2. **Réduire réellement la géométrie**
+   - greedy meshing
+   - ou fusion partielle compatible avec AO / sunblock
+
+3. **Éventuellement couper les chunks totalement vides du meshing**
+   - utile seulement si un mode de génération produit vraiment des chunks `100% air`
+   - pas prioritaire pour `ClassicStreaming`
+
+Actions déjà faites dans cette passe :
+
+- retrait de `LowResRenderer` du chemin client principal
+- correction du cas de chunk reçu après `ChunkDrop`
+
+### Faut-il faire de l'occlusion culling maintenant ?
+
+Réponse courte :
+
+- **pas comme toute première optimisation restante**
+- **oui comme direction probable après les gains simples**
+
+Pourquoi ?
+
+- Le frustum culling répond à la question :
+  - "est-ce que ce chunk est dans le cône de vision ?"
+- L'early-z répond à la question :
+  - "si je le draw quand même, est-ce que le GPU peut skip une partie des fragments cachés ?"
+- L'occlusion culling répond à une autre question :
+  - "est-ce que je peux éviter de soumettre complètement ce chunk au draw parce qu'il est caché par d'autres chunks plus proches ?"
+
+Autrement dit :
+
+- frustum culling = **hors champ**
+- early-z = **dans le champ mais caché pixel par pixel**
+- occlusion culling = **dans le champ, mais caché globalement donc on ne le draw même pas**
+
+### Pourquoi ce n'est pas forcément la première marche
+
+- C'est une optimisation plus complexe et plus fragile que :
+  - ignorer les chunks vides
+  - mieux utiliser `nonEmptySectionMask`
+  - ou réduire la géométrie
+- Un mauvais occlusion culling peut créer :
+  - popping
+  - trous visuels
+  - latence d'apparition quand la caméra tourne vite
+  - bugs subtils si le monde est modifié dynamiquement
+- Si la géométrie est encore trop détaillée ou si le pipeline fait encore du travail CPU simple inutile, on risque de payer une grosse complexité pour un gain modeste.
+
+### La bonne démarche pour VoxPlace
+
+Étape 1 : finir les gains simples et sûrs
+
+- ne plus envoyer les chunks totalement vides au meshing
+- garder le rendu direct propre
+- corriger les cas logiques comme les chunks orphelins
+
+Étape 2 : faire un culling plus fin sans vraie occlusion
+
+- utiliser `nonEmptySectionMask` pour calculer une hauteur utile du chunk
+- remplacer l'AABB `y = 0..64` par une AABB plus serrée quand c'est possible
+- objectif :
+  - réduire les chunks "visibles" à cause de leur volume vide
+  - sans introduire de système d'occlusion complet
+
+Étape 3 : mesurer si le problème restant est bien l'occlusion
+
+- compter :
+  - chunks chargés
+  - chunks dans le frustum
+  - chunks réellement drawés
+  - faces réellement soumises
+- si beaucoup de chunks dans le frustum restent en pratique complètement cachés par le terrain, alors l'occlusion culling devient un vrai candidat rentable
+
+Étape 4 : choisir une v1 d'occlusion conservative
+
+Pour VoxPlace, la bonne v1 n'est probablement **pas** :
+
+- des `GL occlusion queries` par chunk
+
+Pourquoi éviter ça au début :
+
+- beaucoup de queries
+- risque de stalls CPU/GPU
+- résultats disponibles avec retard
+- intégration pénible dans un moteur temps réel simple
+
+Les deux directions plus crédibles sont :
+
+- **occlusion software conservative**
+  - par exemple une logique "terrain/horizon" simple
+  - utile surtout si le monde est majoritairement extérieur
+- **Hi-Z / depth pyramid**
+  - construire une hiérarchie de depth
+  - tester les AABB projetées des chunks contre cette hiérarchie
+  - plus puissant, mais plus complexe
+
+### Ce que je ferais concrètement
+
+Ordre recommandé :
+
+1. ignorer les chunks vides au meshing
+2. faire un frustum culling par section / AABB verticale serrée
+3. re-mesurer `visibleChunks`, `faceCount` et frametime
+4. seulement si le frustum reste rempli de chunks totalement cachés :
+   - prototyper une occlusion culling v1 conservative
+
+### Conclusion sur l'occlusion culling
+
+- **Oui**, c'est probablement une vraie piste à moyen terme.
+- **Non**, ce n'est pas forcément "le prochain patch" si on veut rester pragmatique.
+- La bonne stratégie est :
+  - d'abord retirer le travail simple inutile
+  - puis rendre le culling plus fin
+  - et ensuite seulement ajouter un vrai système d'occlusion si les mesures montrent qu'il reste rentable
+
+### Conclusion audit
+
+- VoxPlace ne souffre pas surtout d'un gros bug de rendu qui dessinerait "tout en trop".
+- Le pipeline est déjà **raisonnable** sur :
+  - le frustum
+  - le culling de faces
+  - le skip des sections vides
+- Les principaux gains restants sont plus structurels :
+  - enlever le travail fixe inutile
+  - éviter les jobs CPU inutiles
+  - réduire la géométrie
+- et, plus tard, ajouter un culling plus intelligent que le simple chunk-frustum
+
+> **Conclusion pratique :** le renderer actuel est plutôt sain, mais il reste encore "coûteux par structure" plus que "cassé par bug". Les meilleures optimisations sont donc celles qui retirent du travail entier, pas celles qui micro-ajustent seulement l'ordre des draws.
+
+### Bench complémentaire — skip des chunks totalement vides au meshing
+
+Hypothèse testée :
+
+- si un chunk est complètement vide, on peut éviter d'envoyer un job au `ClientChunkMesher`
+- idée :
+  - vider directement son mesh côté client
+  - ne pas occuper de worker
+  - ne pas traverser la pipeline de build pour rien
+
+### Pourquoi l'idée semblait bonne
+
+- le gain CPU est trivial en théorie
+- la logique est simple
+- elle évite du travail entier, ce qui colle bien au type d'optimisations qu'on cherche
+
+### Problème réel rencontré
+
+Sur `ClassicStreaming`, cette optimisation a très peu d'occasions de s'appliquer.
+
+Raison probable :
+
+- le générateur classique écrit une couche de base à `y = 0` pour chaque colonne du chunk
+- donc, dans ce mode, un chunk complètement vide est en pratique **très rare voire inexistant**
+- résultat :
+  - la condition "chunk totalement vide" n'enlève presque aucun job réel
+
+En revanche, cette idée pourrait rester plus pertinente dans un mode comme `Skyblock`, où certains chunks hors île peuvent être réellement vides.
+
+### Bench avant / après — static `Render Distance = 32`
+
+Setup :
+
+> `VoxPlaceServer --classic-gen`
+> `VOXPLACE_PROFILE_WORKERS=1`
+> `VOXPLACE_SERVER_WORKERS=2`
+> `VOXPLACE_RENDER_DISTANCE=32`
+> `VOXPLACE_MESH_WORKERS=1`
+
+Méthode de lecture :
+
+- mêmes fenêtres **steady-state** que les autres benches statiques lourds
+- critères :
+  - `requests_avg = 0`
+  - `receives_avg = 0`
+  - `meshed_chunks = 0`
+
+Avant patch :
+
+- `steady_fps_avg = 250.460`
+- `steady_frame_ms_avg = 3.993`
+- `steady_render_cpu_ms_avg = 0.367`
+- `steady_visible_avg = 865.0`
+
+Après patch :
+
+- `steady_fps_avg = 245.362`
+- `steady_frame_ms_avg = 4.076`
+- `steady_render_cpu_ms_avg = 0.385`
+- `steady_visible_avg = 865.0`
+
+Delta `après - avant` :
+
+- FPS : `-5.098` soit environ `-2.04%`
+- frametime : `+0.083 ms` soit environ `+2.08%`
+- `render_cpu_ms` : `+0.018 ms` soit environ `+4.90%`
+
+### Bench avant / après — fly-through `Render Distance = 32`
+
+Setup :
+
+> `VoxPlaceServer --classic-gen`
+> `VOXPLACE_PROFILE_WORKERS=1`
+> `VOXPLACE_SERVER_WORKERS=2`
+> `VOXPLACE_RENDER_DISTANCE=32`
+> `VOXPLACE_MESH_WORKERS=1`
+> `VOXPLACE_BENCH_FLY=1`
+> `VOXPLACE_BENCH_FLY_SPEED=80`
+> `VOXPLACE_BENCH_SECONDS=20`
+
+Avant patch :
+
+- `avg_fps = 251.665`
+- `avg_frame_ms = 4.016`
+- `avg_render_cpu_ms = 0.296`
+- `avg_visible = 633.737`
+- `visible_min = 188.155`
+- `visible_max = 725.754`
+- `avg_receives = 314.759`
+- `avg_requests = 335.880`
+- `avg_drops = 131.523`
+- `max_drops = 325.774`
+
+Après patch :
+
+- `avg_fps = 249.550`
+- `avg_frame_ms = 4.041`
+- `avg_render_cpu_ms = 0.290`
+- `avg_visible = 633.276`
+- `visible_min = 187.723`
+- `visible_max = 725.380`
+- `avg_receives = 313.790`
+- `avg_requests = 334.897`
+- `avg_drops = 111.760`
+- `max_drops = 271.069`
+
+Delta `après - avant` :
+
+- FPS : `-2.115` soit environ `-0.84%`
+- frametime : `+0.025 ms` soit environ `+0.62%`
+- `render_cpu_ms` : `-0.006 ms` soit environ `-2.03%`
+
+### Conclusion de ce test
+
+- Sur `ClassicStreaming`, cette optimisation n'apporte **pas de gain net**.
+- Le bench statique est clairement dans le mauvais sens.
+- Le fly-through est quasi neutre, mais reste légèrement défavorable en FPS / frametime global.
+- La lecture la plus crédible est :
+  - l'optimisation touche trop peu de chunks dans ce mode
+  - donc elle ne rembourse pas le coût structurel ajouté / la variance mesurée
+
+> **Décision retenue :** ne pas garder ce patch dans le chemin principal pour l'instant. L'idée reste valable si un mode de génération produit beaucoup de chunks réellement vides, mais elle n'est pas une optimisation validée pour le scénario `ClassicStreaming` benché ici.
+
+---
+
 ## 12. Liens Utiles
 
 | Ressource | Lien |
@@ -2611,4 +3320,4 @@ Lecture client :
 
 ---
 
-*Dernière mise à jour : 19 février 2026*
+*Dernière mise à jour : 23 mars 2026*

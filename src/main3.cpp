@@ -14,7 +14,6 @@
 #include <ChunkPalette.h>
 #include <Crosshair.h>
 #include <Frustum.h>
-#include <LowResRenderer.h>
 #include <Shader.h>
 #include <WorldBounds.h>
 #include <WorldClient.h>
@@ -182,6 +181,8 @@ size_t gProfileMeshedSectionCountWindow = 0;
 size_t gClassicMaxInflightChunkRequests = 192;
 size_t gClassicMaxChunkRequestsPerFrame = 16;
 
+void markChunkNeighborhoodDirty(int cx, int cz);
+
 bool usesIndirectRendering()
 {
 	if (gTerrainRenderArchitecture == TerrainRenderArchitecture::BigGpuBufferIndirect)
@@ -275,6 +276,34 @@ float chunkCenterDistanceSqToCamera(int chunkX, int chunkZ)
 	float dx = centerX - camera.Position.x;
 	float dz = centerZ - camera.Position.z;
 	return dx * dx + dz * dz;
+}
+
+void getCurrentFramebufferSize(int &outWidth, int &outHeight)
+{
+	outWidth = SCREEN_WIDTH;
+	outHeight = SCREEN_HEIGHT;
+
+	if (g_window != nullptr)
+	{
+		glfwGetFramebufferSize(g_window, &outWidth, &outHeight);
+	}
+
+	if (outWidth < 1)
+	{
+		outWidth = 1;
+	}
+	if (outHeight < 1)
+	{
+		outHeight = 1;
+	}
+}
+
+float currentFramebufferAspectRatio()
+{
+	int framebufferWidth = 0;
+	int framebufferHeight = 0;
+	getCurrentFramebufferSize(framebufferWidth, framebufferHeight);
+	return static_cast<float>(framebufferWidth) / static_cast<float>(framebufferHeight);
 }
 
 bool usesClassicStreaming()
@@ -376,6 +405,34 @@ Chunk2 *getChunkAt(int cx, int cz)
 		return nullptr;
 	}
 	return it->second;
+}
+
+bool isChunkTrackedForStreaming(int64_t key)
+{
+	if (streamedChunkKeys.find(key) == streamedChunkKeys.end())
+	{
+		return false;
+	}
+	return true;
+}
+
+bool removeClientChunkByKey(int64_t key)
+{
+	gPendingMeshRevisions.erase(key);
+	gChunkIndirectRenderer.removeChunk(key);
+
+	auto chunkIt = chunkMap.find(key);
+	if (chunkIt == chunkMap.end())
+	{
+		return false;
+	}
+
+	int cx = chunkIt->second->chunkX;
+	int cz = chunkIt->second->chunkZ;
+	delete chunkIt->second;
+	chunkMap.erase(chunkIt);
+	markChunkNeighborhoodDirty(cx, cz);
+	return true;
 }
 
 bool isMeshBuildPendingForCurrentRevision(Chunk2 *chunk)
@@ -513,9 +570,15 @@ void applyBlockUpdateLocal(int wx, int wy, int wz, uint32_t color)
 	markChunkNeighborhoodDirty(cx, cz);
 }
 
-void upsertChunkSnapshot(const VoxelChunkData &snapshot)
+bool upsertChunkSnapshot(const VoxelChunkData &snapshot)
 {
 	int64_t key = chunkKey(snapshot.chunkX, snapshot.chunkZ);
+	if (!isChunkTrackedForStreaming(key))
+	{
+		removeClientChunkByKey(key);
+		return false;
+	}
+
 	Chunk2 *chunk = nullptr;
 
 	auto it = chunkMap.find(key);
@@ -531,6 +594,7 @@ void upsertChunkSnapshot(const VoxelChunkData &snapshot)
 
 	chunk->copyFromData(snapshot);
 	markChunkNeighborhoodDirty(snapshot.chunkX, snapshot.chunkZ);
+	return true;
 }
 
 bool raycastPlaceTarget(const glm::vec3 &origin, const glm::vec3 &direction, float maxDist,
@@ -778,7 +842,7 @@ void syncChunkStreaming()
 	float farPlane = computeRenderFarPlane();
 	glm::mat4 projection = glm::perspective(
 		glm::radians(camera.Zoom),
-		static_cast<float>(SCREEN_WIDTH) / static_cast<float>(SCREEN_HEIGHT),
+		currentFramebufferAspectRatio(),
 		0.1f,
 		farPlane);
 	glm::mat4 view = camera.GetViewMatrix();
@@ -898,16 +962,7 @@ void syncChunkStreaming()
 		gWorldClient.sendChunkDrop(cx, cz);
 		streamedChunkKeys.erase(key);
 		gProfileChunkDropsWindow++;
-		gPendingMeshRevisions.erase(key);
-		gChunkIndirectRenderer.removeChunk(key);
-		markChunkNeighborhoodDirty(cx, cz);
-
-		auto it = chunkMap.find(key);
-		if (it != chunkMap.end())
-		{
-			delete it->second;
-			chunkMap.erase(it);
-		}
+		removeClientChunkByKey(key);
 	}
 }
 
@@ -1067,6 +1122,16 @@ int main()
 		}
 	}
 
+	bool sortVisibleChunksFrontToBack = true;
+	int envSortVisibleChunks = 0;
+	if (tryReadEnvInt("VOXPLACE_SORT_VISIBLE_CHUNKS", envSortVisibleChunks))
+	{
+		if (envSortVisibleChunks == 0)
+		{
+			sortVisibleChunksFrontToBack = false;
+		}
+	}
+
 	std::cout << "INITIALISATION de GLFW" << std::endl;
 	if (!glfwInit())
 	{
@@ -1117,7 +1182,6 @@ int main()
 	ImGui_ImplOpenGL3_Init("#version 460");
 
 	Shader chunkShader("src/shader/chunk2.vs", "src/shader/chunk2.fs");
-	LowResRenderer::init(SCREEN_WIDTH, SCREEN_HEIGHT);
 	gChunkMesher.start(requestedMeshWorkers);
 	gChunkIndirectRenderer.init();
 	std::cout << "Client mesh workers: " << gChunkMesher.workerCount() << std::endl;
@@ -1140,6 +1204,10 @@ int main()
 		{
 			std::cout << "Client bench duration: " << benchDurationSeconds << " s" << std::endl;
 		}
+	}
+	if (!sortVisibleChunksFrontToBack)
+	{
+		std::cout << "Client visible chunk sorting disabled" << std::endl;
 	}
 
 	if (!gWorldClient.connectToServer(SERVER_HOST, SERVER_PORT))
@@ -1197,7 +1265,13 @@ int main()
 			gPlaceBlockRequested = false;
 		}
 
-		LowResRenderer::beginFrame();
+		int currentFbW = 0;
+		int currentFbH = 0;
+		getCurrentFramebufferSize(currentFbW, currentFbH);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		glViewport(0, 0, currentFbW, currentFbH);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glEnable(GL_DEPTH_TEST);
 		chunkShader.use();
 
 		float fogReferenceDistance = static_cast<float>(renderDistanceChunks * CHUNK_SIZE_X);
@@ -1213,7 +1287,7 @@ int main()
 
 		glm::mat4 projection = glm::perspective(
 			glm::radians(camera.Zoom),
-			static_cast<float>(SCREEN_WIDTH) / static_cast<float>(SCREEN_HEIGHT),
+			static_cast<float>(currentFbW) / static_cast<float>(currentFbH),
 			0.1f,
 			farPlane);
 		glm::mat4 view = camera.GetViewMatrix();
@@ -1321,9 +1395,12 @@ int main()
 			scheduleBudget--;
 		}
 
-		std::sort(visibleList.begin(), visibleList.end(),
-				  [](const ChunkDraw &left, const ChunkDraw &right)
-				  { return left.distSq < right.distSq; });
+		if (sortVisibleChunksFrontToBack)
+		{
+			std::sort(visibleList.begin(), visibleList.end(),
+					  [](const ChunkDraw &left, const ChunkDraw &right)
+					  { return left.distSq < right.distSq; });
+		}
 
 		int visibleChunks = static_cast<int>(visibleList.size());
 		auto chunkRenderCpuStart = std::chrono::steady_clock::now();
@@ -1356,11 +1433,6 @@ int main()
 		chunkRenderCpuMs = std::chrono::duration<float, std::milli>(
 			chunkRenderCpuEnd - chunkRenderCpuStart)
 							   .count();
-
-		int currentFbW = 0;
-		int currentFbH = 0;
-		glfwGetFramebufferSize(g_window, &currentFbW, &currentFbH);
-		LowResRenderer::endFrame(currentFbW, currentFbH);
 
 		ImGui_ImplOpenGL3_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
@@ -1597,9 +1669,15 @@ int main()
 					}
 					int cameraChunkX = floorDiv(static_cast<int>(std::floor(camera.Position.x)), CHUNK_SIZE_X);
 					int cameraChunkZ = floorDiv(static_cast<int>(std::floor(camera.Position.z)), CHUNK_SIZE_Z);
+					int sortVisibleChunksProfileValue = 1;
+					if (!sortVisibleChunksFrontToBack)
+					{
+						sortVisibleChunksProfileValue = 0;
+					}
 
 				std::cout << "[client-profile] workers=" << gChunkMesher.workerCount()
 						  << " renderDist=" << renderDistanceChunks
+						  << " sort_visible_chunks=" << sortVisibleChunksProfileValue
 						  << " camera_chunk=(" << cameraChunkX << "," << cameraChunkZ << ")"
 						  << " fps_avg=" << avgFps
 						  << " frame_ms_avg=" << avgFrameMs
@@ -1686,7 +1764,6 @@ int main()
 	streamedChunkKeys.clear();
 
 	crosshair.cleanup();
-	LowResRenderer::cleanup();
 	glfwTerminate();
 	return 0;
 }
