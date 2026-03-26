@@ -1,6 +1,11 @@
 #include <WorldServer.h>
 
 #include <ChunkPalette.h>
+#include <PlayerData.h>
+#include <PlayerHotData.h>
+#include <PlayerSessionData.h>
+#include <PlayerTable.h>
+#include <PlayerUsername.h>
 
 #include <enet/enet.h>
 
@@ -14,7 +19,9 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -137,6 +144,13 @@ namespace
 		coord.z = static_cast<int>(key & 0xFFFFFFFF);
 		return coord;
 	}
+
+	uint64_t systemNowMs()
+	{
+		auto now = std::chrono::system_clock::now().time_since_epoch();
+		return static_cast<uint64_t>(
+			std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+	}
 }
 
 struct WorldServer::Impl
@@ -148,18 +162,24 @@ struct WorldServer::Impl
 		std::unordered_set<int64_t> loadedChunks;
 		std::unordered_set<int64_t> queuedChunks;
 		std::deque<int64_t> sendQueue;
+		PlayerData player;
+		PlayerSessionData playerSession;
+		std::string usernameKey;
 	};
 
 	uint16_t port = 0;
+	std::string playerDatabasePath;
 	bool enetInitialized = false;
 	ENetHost *host = nullptr;
 	std::unique_ptr<IChunkGenerator> generator;
 	WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier;
+	PlayerTable playerTable;
 
 	WorldFrontier frontier;
 	std::unordered_map<int64_t, VoxelChunkData> worldChunks;
 	std::unordered_set<int64_t> activeChunkKeys;
 	std::unordered_map<ENetPeer *, ClientSession> clients;
+	std::unordered_map<std::string, uint64_t> activeUsernames;
 
 	std::atomic<bool> running = false;
 	std::mutex taskMutex;
@@ -186,8 +206,10 @@ struct WorldServer::Impl
 
 	Impl(uint16_t listenPort,
 		 std::unique_ptr<IChunkGenerator> worldGenerator,
-		 WorldGenerationMode selectedGenerationMode)
+		 WorldGenerationMode selectedGenerationMode,
+		 std::string selectedPlayerDatabasePath)
 		: port(listenPort),
+		  playerDatabasePath(std::move(selectedPlayerDatabasePath)),
 		  generator(std::move(worldGenerator)),
 		  generationMode(selectedGenerationMode)
 	{
@@ -206,6 +228,13 @@ struct WorldServer::Impl
 
 	bool start()
 	{
+		if (!playerTable.open(playerDatabasePath))
+		{
+			std::cerr << "Failed to open player database: "
+					  << playerTable.lastError() << std::endl;
+			return false;
+		}
+
 		if (enet_initialize() != 0)
 		{
 			return false;
@@ -246,6 +275,7 @@ struct WorldServer::Impl
 	{
 		if (!running)
 		{
+			saveAllAuthenticatedPlayers();
 			cleanupNetwork();
 			return;
 		}
@@ -260,6 +290,7 @@ struct WorldServer::Impl
 			}
 		}
 		workers.clear();
+		saveAllAuthenticatedPlayers();
 		cleanupNetwork();
 	}
 
@@ -592,14 +623,146 @@ struct WorldServer::Impl
 	{
 		ClientSession session;
 		session.peer = peer;
+		session.playerSession.lastSeenAtMs = systemNowMs();
 		clients[peer] = std::move(session);
 		std::cout << "Client connected" << std::endl;
 	}
 
 	void handleDisconnect(ENetPeer *peer)
 	{
-		clients.erase(peer);
+		auto sessionIt = clients.find(peer);
+		if (sessionIt != clients.end())
+		{
+			savePlayerForSession(sessionIt->second);
+			if (!sessionIt->second.usernameKey.empty())
+			{
+				activeUsernames.erase(sessionIt->second.usernameKey);
+			}
+			clients.erase(sessionIt);
+		}
 		std::cout << "Client disconnected" << std::endl;
+	}
+
+	void sendPlayerState(ClientSession &session)
+	{
+		if (!session.playerSession.authenticated)
+		{
+			return;
+		}
+
+		PlayerStateMessage message;
+		message.playerId = session.player.cold.playerId;
+		message.positionX = session.player.hot.position.x;
+		message.positionY = session.player.hot.position.y;
+		message.positionZ = session.player.hot.position.z;
+		message.blockActionReadyAtMs = session.player.hot.blockActionReadyAtMs;
+		message.serverNowMs = systemNowMs();
+		sendReliable(session.peer, encodePlayerState(message));
+	}
+
+	bool savePlayerForSession(ClientSession &session)
+	{
+		if (!session.playerSession.authenticated)
+		{
+			return true;
+		}
+		if (!playerTable.isOpen())
+		{
+			return false;
+		}
+		if (!playerTable.savePlayer(session.player))
+		{
+			std::cerr << "Failed to save player "
+					  << session.player.cold.username
+					  << ": " << playerTable.lastError() << std::endl;
+			return false;
+		}
+		return true;
+	}
+
+	void saveAllAuthenticatedPlayers()
+	{
+		for (auto &entry : clients)
+		{
+			savePlayerForSession(entry.second);
+		}
+	}
+
+	void handleLoginRequest(ENetPeer *peer, const LoginRequestMessage &request)
+	{
+		auto sessionIt = clients.find(peer);
+		if (sessionIt == clients.end())
+		{
+			return;
+		}
+
+		ClientSession &session = sessionIt->second;
+		session.playerSession.lastSeenAtMs = systemNowMs();
+		if (session.playerSession.authenticated)
+		{
+			return;
+		}
+
+		std::string trimmedUsername = trimPlayerUsername(playerUsernameFromBuffer(request.username));
+		PlayerUsernameValidationError usernameError = validatePlayerUsername(trimmedUsername);
+
+		LoginResponseMessage response;
+		response.serverNowMs = systemNowMs();
+		if (usernameError != PlayerUsernameValidationError::None)
+		{
+			response.status = LoginStatus::InvalidUsername;
+			sendReliable(peer, encodeLoginResponse(response));
+			return;
+		}
+
+		if (activeUsernames.find(trimmedUsername) != activeUsernames.end())
+		{
+			response.status = LoginStatus::UsernameAlreadyInUse;
+			copyPlayerUsernameToBuffer(trimmedUsername, response.username);
+			sendReliable(peer, encodeLoginResponse(response));
+			return;
+		}
+
+		bool createdPlayer = false;
+		PlayerData loadedPlayer;
+		if (!playerTable.loadOrCreatePlayer(trimmedUsername, loadedPlayer, createdPlayer))
+		{
+			std::cerr << "Failed to load/create player "
+					  << trimmedUsername
+					  << ": " << playerTable.lastError() << std::endl;
+			response.status = LoginStatus::InvalidUsername;
+			sendReliable(peer, encodeLoginResponse(response));
+			return;
+		}
+
+		session.player = loadedPlayer;
+		session.playerSession.playerId = session.player.cold.playerId;
+		session.playerSession.authenticated = true;
+		session.usernameKey = trimmedUsername;
+		activeUsernames[trimmedUsername] = session.player.cold.playerId;
+
+		response.status = LoginStatus::Accepted;
+		response.playerId = session.player.cold.playerId;
+		copyPlayerUsernameToBuffer(trimmedUsername, response.username);
+		response.skinId = session.player.cold.skinId;
+		response.positionX = session.player.hot.position.x;
+		response.positionY = session.player.hot.position.y;
+		response.positionZ = session.player.hot.position.z;
+		response.blockActionReadyAtMs = session.player.hot.blockActionReadyAtMs;
+		sendReliable(peer, encodeLoginResponse(response));
+		sendReliable(peer, encodeWorldFrontier(frontier));
+
+		std::cout << "Player authenticated: " << trimmedUsername
+				  << " id=" << session.player.cold.playerId;
+		if (createdPlayer)
+		{
+			std::cout << " (created)";
+		}
+		else
+		{
+			std::cout << " (loaded)";
+		}
+		std::cout << std::endl;
 	}
 
 	void handlePacket(ENetPeer *peer, const uint8_t *data, size_t size)
@@ -619,7 +782,28 @@ struct WorldServer::Impl
 				return;
 			}
 			sendReliable(peer, encodeHello(hello));
-			sendReliable(peer, encodeWorldFrontier(frontier));
+			return;
+		}
+
+		if (type == PacketType::LoginRequest)
+		{
+			LoginRequestMessage loginRequest;
+			if (!decodeLoginRequest(data, size, loginRequest))
+			{
+				return;
+			}
+			handleLoginRequest(peer, loginRequest);
+			return;
+		}
+
+		auto sessionIt = clients.find(peer);
+		if (sessionIt == clients.end())
+		{
+			return;
+		}
+		sessionIt->second.playerSession.lastSeenAtMs = systemNowMs();
+		if (!sessionIt->second.playerSession.authenticated)
+		{
 			return;
 		}
 
@@ -652,7 +836,7 @@ struct WorldServer::Impl
 			{
 				return;
 			}
-			handleBlockAction(request);
+			handleBlockAction(peer, request);
 		}
 	}
 
@@ -698,15 +882,35 @@ struct WorldServer::Impl
 		session.queuedChunks.erase(key);
 	}
 
-	void handleBlockAction(const BlockActionRequestMessage &request)
+	void handleBlockAction(ENetPeer *peer, const BlockActionRequestMessage &request)
 	{
+		auto sessionIt = clients.find(peer);
+		if (sessionIt == clients.end())
+		{
+			return;
+		}
+
+		ClientSession &session = sessionIt->second;
+		auto rejectActionAndSync = [&]()
+		{
+			sendPlayerState(session);
+		};
+
+		uint64_t nowMs = systemNowMs();
+		if (nowMs < session.player.hot.blockActionReadyAtMs)
+		{
+			rejectActionAndSync();
+			return;
+		}
 		if (request.worldY < 0 || request.worldY >= CHUNK_SIZE_Y)
 		{
+			rejectActionAndSync();
 			return;
 		}
 		if (!usesClassicStreaming() &&
 			!frontier.playableBounds.containsWorldBlock(request.worldX, request.worldZ))
 		{
+			rejectActionAndSync();
 			return;
 		}
 
@@ -719,6 +923,7 @@ struct WorldServer::Impl
 		auto worldIt = worldChunks.find(key);
 		if (worldIt == worldChunks.end())
 		{
+			rejectActionAndSync();
 			return;
 		}
 
@@ -730,8 +935,11 @@ struct WorldServer::Impl
 
 		if (!worldIt->second.setBlockRaw(lx, request.worldY, lz, finalColor))
 		{
+			rejectActionAndSync();
 			return;
 		}
+
+		session.player.hot.blockActionReadyAtMs = nowMs + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
 
 		BlockUpdateBroadcastMessage update;
 		update.worldX = request.worldX;
@@ -740,6 +948,7 @@ struct WorldServer::Impl
 		update.finalColor = finalColor;
 		update.revision = worldIt->second.revision;
 		broadcastReliable(encodeBlockUpdateBroadcast(update));
+		sendPlayerState(session);
 
 		if (usesClassicStreaming())
 		{
@@ -936,9 +1145,14 @@ struct WorldServer::Impl
 
 WorldServer::WorldServer(uint16_t port,
 						 std::unique_ptr<IChunkGenerator> generator,
-						 WorldGenerationMode generationMode)
+						 WorldGenerationMode generationMode,
+						 std::string playerDatabasePath)
 {
-	m_impl = new Impl(port, std::move(generator), generationMode);
+	m_impl = new Impl(
+		port,
+		std::move(generator),
+		generationMode,
+		std::move(playerDatabasePath));
 }
 
 WorldServer::~WorldServer()

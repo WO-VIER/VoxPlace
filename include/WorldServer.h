@@ -5,6 +5,7 @@
 #include <WorldBounds.h>
 #include <WorldProtocol.h>
 #include <memory>
+#include <string>
 #include <unordered_map>
 
 class WorldServer
@@ -12,7 +13,8 @@ class WorldServer
 public:
 	WorldServer(uint16_t port,
 				std::unique_ptr<IChunkGenerator> generator,
-				WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier);
+				WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier,
+				std::string playerDatabasePath = "voxplace_players.sqlite3");
 	~WorldServer();
 
 	bool start();

@@ -23,6 +23,7 @@ if(NOT EMSCRIPTEN)
     if(NOT ENET_FOUND)
         pkg_check_modules(ENET REQUIRED IMPORTED_TARGET enet)
     endif()
+    pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
     set(OpenGL_GL_PREFERENCE "GLVND")
     find_package(OpenGL REQUIRED)
 else()
@@ -100,6 +101,7 @@ else()
 endif()
 
 set(SERVER_SOURCES
+    src/PlayerTable.cpp
     src/server_main.cpp
     src/WorldServer.cpp
 )
@@ -116,4 +118,5 @@ target_include_directories(VoxPlaceServer PRIVATE
 target_link_libraries(VoxPlaceServer PRIVATE
     voxplace_core
     PkgConfig::ENET
+    PkgConfig::SQLITE3
 )

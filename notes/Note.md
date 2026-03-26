@@ -25,6 +25,7 @@ valgrind -s --leak-check=full --show-leak-kinds=all --track-origins=yes ./build/
 11. [To-Do](#11-to-do)
 12. [Liens Utiles](#12-liens-utiles)
 13. [Bonnes Pratiques OpenGL](#13-bonnes-pratiques-opengl)
+14. [Player Objet vs ECS](#14-player-objet-vs-ecs)
 
 ---
 
@@ -3320,4 +3321,312 @@ Delta `après - avant` :
 
 ---
 
-*Dernière mise à jour : 23 mars 2026*
+## 14. Player Objet vs ECS
+
+Cette section clarifie une confusion fréquente : **"si je crée une classe `Player`, est-ce que je fais déjà n'importe quoi par rapport à un ECS ?"**
+
+La réponse courte est **non**.
+
+Un `Player` en tant qu'objet est une manière **très normale** de modéliser un jeu. Un **ECS** est une autre manière d'organiser les données et les traitements, surtout utile quand :
+
+- on a **beaucoup d'entités**
+- on applique **les mêmes systèmes** à beaucoup d'objets
+- on veut optimiser fortement la **localité cache CPU**
+- on veut séparer clairement les **données** et les **traitements**
+
+### 14.1 Approche objet classique
+
+Exemple mental :
+
+```cpp
+struct Player
+{
+    Vec3 position;
+    Vec3 velocity;
+    float yaw;
+    float pitch;
+    uint32_t skinId;
+    std::string name;
+    uint64_t cooldownUntil;
+    Inventory inventory;
+    bool connected;
+};
+```
+
+Puis :
+
+```cpp
+std::vector<Player> players;
+```
+
+Chaque joueur est un **objet complet** qui contient presque tout ce qui le concerne.
+
+Avantages :
+
+- Très simple à lire.
+- Très simple à debugger.
+- Très naturel pour l'UML.
+- Très pratique quand on manipule souvent **un joueur précis**.
+- Très bien si on a peu d'entités, par exemple `1` à `64` joueurs.
+
+Inconvénients :
+
+- Si un système ne veut lire **que la position**, il traverse quand même des objets qui contiennent aussi nom, skin, inventaire, cooldown, etc.
+- Donc le CPU charge souvent en cache **plus de données que nécessaire**.
+- Si chaque `Player` est alloué séparément sur le tas avec des pointeurs, la localité mémoire devient souvent pire.
+
+### 14.2 Ce que le CPU voit réellement
+
+Le CPU ne lit pas octet par octet depuis la RAM. Il charge des **cache lines**, souvent de **64 octets**.
+
+Si ton `Player` fait par exemple `256` octets, et que ton système de mouvement ne veut que :
+
+- `position`
+- `velocity`
+
+alors à chaque joueur le CPU risque de charger une ligne de cache contenant aussi :
+
+- `name`
+- `skinId`
+- `inventory`
+- `flags`
+- d'autres champs non utiles pour ce système
+
+Donc :
+
+- tu consommes de la bande passante mémoire pour rien
+- tu pollues le cache
+- tu réduis l'efficacité des boucles massives
+
+Ce problème devient vraiment visible quand on itère sur **beaucoup** d'entités à chaque frame.
+
+### 14.3 Approche ECS
+
+Dans un ECS, on raisonne en général comme ceci :
+
+- une **entité** = un identifiant
+- un **composant** = un morceau de donnée
+- un **système** = une fonction qui traite des composants
+
+Exemple mental :
+
+```cpp
+struct Position { Vec3 value; };
+struct Velocity { Vec3 value; };
+struct Name { std::string value; };
+struct Cooldown { uint64_t untilTick; };
+struct Skin { uint32_t id; };
+```
+
+Le stockage ressemble plutôt à :
+
+```cpp
+std::vector<Position> positions;
+std::vector<Velocity> velocities;
+std::vector<Cooldown> cooldowns;
+std::vector<Skin> skins;
+```
+
+Le système de déplacement ne parcourt que :
+
+```cpp
+for (size_t i = 0; i < movingEntitiesCount; i++)
+{
+    positions[i].value += velocities[i].value * deltaTime;
+}
+```
+
+Ici le CPU voit :
+
+- un tableau dense de positions
+- un tableau dense de vitesses
+- très peu de données inutiles
+
+Donc :
+
+- meilleure localité cache
+- préfetch plus efficace
+- boucles plus faciles à vectoriser
+- moins de bande passante mémoire gaspillée
+
+### 14.4 Pourquoi ECS peut être plus rapide
+
+L'idée clé est la différence entre :
+
+- **AoS** = `Array of Structures`
+- **SoA** = `Structure of Arrays`
+
+Objet classique :
+
+```cpp
+std::vector<Player> players;
+```
+
+Ici on a un **AoS**.
+
+Version data-oriented :
+
+```cpp
+std::vector<Vec3> positions;
+std::vector<Vec3> velocities;
+std::vector<uint64_t> cooldowns;
+```
+
+Ici on est proche d'un **SoA**.
+
+Quand un système traite une seule catégorie d'information, le SoA est souvent meilleur.
+
+Exemple simplifié :
+
+- `Player` = `256 octets`
+- on veut juste lire `position` = `12 octets`
+
+Alors dans l'approche objet :
+
+- on peut charger `64 octets` de cache line
+- mais n'utiliser qu'une petite partie utile
+
+Dans l'approche SoA :
+
+- une ligne de cache contient plusieurs positions successives
+- presque tout ce qui est chargé sert vraiment
+
+### 14.5 Pourquoi ECS n'est pas gratuit
+
+Un ECS n'est pas "magiquement meilleur partout".
+
+Coûts et difficultés :
+
+- plus complexe à concevoir
+- plus complexe à debugger
+- plus complexe à sérialiser au début si l'architecture est mal pensée
+- moins naturel pour des comportements très spécifiques
+- plus difficile à expliquer dans un rapport si le projet n'en a pas vraiment besoin
+- gestion de la vie des entités plus abstraite
+- mapping `entity -> composants` à maintenir proprement
+
+Autrement dit :
+
+- si tu n'as pas beaucoup d'entités
+- si ton gameplay tourne autour de quelques objets bien identifiés
+- si tes besoins sont surtout `joueur`, `chunks`, `persistance`, `réseau`
+
+alors un ECS complet peut te faire perdre du temps sans vrai retour.
+
+### 14.6 "ECS-like" veut souvent dire "data-oriented partiel"
+
+Entre objet classique et ECS complet, il existe une voie très pratique :
+
+- garder des **objets métier simples**
+- mais organiser les données **chaudes** de manière compacte
+
+C'est souvent la meilleure solution pour un moteur voxel étudiant.
+
+Exemple hybride :
+
+- `PlayerProfile` : nom, skin, identifiant, données de sauvegarde
+- `PlayerState` : position, rotation, cooldown, état connecté
+- `Chunk` : données voxel compactes
+- `WorldPersistence` : sauvegarde des deltas de chunks
+
+Ici :
+
+- les données gameplay restent compréhensibles
+- les données voxel restent très compactes
+- on optimise là où c'est important
+- on évite d'introduire un framework ECS complet trop tôt
+
+### 14.7 Cas concret VoxPlace
+
+Pour `VoxPlace`, les données réellement "hot" sont surtout :
+
+- blocs des chunks
+- masques de sections
+- révisions
+- file de génération
+- file réseau
+- positions/cooldowns des joueurs
+
+Les données "cold" sont plutôt :
+
+- nom du joueur
+- skin
+- préférences
+- informations de profil
+
+Donc un bon design est :
+
+- ne **pas** mettre toute la logique du projet dans un ECS
+- garder un `Player` ou `PlayerState` simple
+- séparer si besoin les données hot et cold
+- rester très data-oriented pour les chunks et le serveur
+
+### 14.8 Recommandation pratique
+
+Pour un projet comme `VoxPlace`, la solution la plus raisonnable est :
+
+- `PlayerProfile`
+  - `playerId`
+  - `name`
+  - `skinId` ou chemin de texture
+  - dernière position sauvegardée
+- `PlayerState`
+  - position
+  - orientation
+  - `cooldownUntil`
+  - session réseau
+  - état connecté
+- `World`
+  - seed
+  - chunks générés
+  - deltas de chunks modifiés
+
+Cette approche donne :
+
+- une bonne lisibilité
+- une bonne base UML
+- une complexité maîtrisée
+- assez de marge pour optimiser plus tard
+
+### 14.9 Règle simple de décision
+
+Prends un objet simple si :
+
+- tu as peu d'entités
+- tu manipules souvent une entité complète
+- tu veux avancer vite
+- ton vrai coût CPU est ailleurs, par exemple dans les chunks, le meshing, le réseau
+
+Pense ECS ou SoA si :
+
+- tu as énormément d'entités
+- tu fais des boucles massives homogènes
+- tu touches toujours les mêmes petits ensembles de données
+- le profiling montre un vrai problème de cache/mémoire
+
+### 14.10 Conclusion
+
+Créer une classe `Player` n'est **pas** une erreur "moins professionnelle" qu'un ECS.
+
+La vraie question est :
+
+- **combien d'entités j'ai**
+- **quelles données sont touchées chaque frame**
+- **où est mon vrai coût CPU**
+
+Pour `VoxPlace`, un `Player` simple est totalement défendable.
+
+Le plus intelligent est probablement un design **hybride** :
+
+- `Player` / `PlayerState` simple pour la logique joueur
+- architecture très compacte et data-oriented pour les chunks
+- autorité serveur pour les actions de blocs et cooldowns
+
+Autrement dit :
+
+- **pas besoin d'un ECS complet pour être propre**
+- mais **penser layout mémoire, cache et données chaudes/froides reste essentiel**
+
+---
+
+*Dernière mise à jour : 26 mars 2026*

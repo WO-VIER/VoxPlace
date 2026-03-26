@@ -1,6 +1,7 @@
 #ifndef WORLD_CLIENT_H
 #define WORLD_CLIENT_H
 
+#include <PlayerData.h>
 #include <WorldProtocol.h>
 #include <deque>
 #include <string>
@@ -28,11 +29,13 @@ public:
 	WorldClient();
 	~WorldClient();
 
-	bool connectToServer(const std::string &hostName, uint16_t port);
+	bool connectToServer(const std::string &hostName, uint16_t port, const std::string &username);
 	void disconnect();
 	void service();
 	bool popEvent(WorldClientEvent &event);
 	bool isConnected() const;
+	const PlayerData &localPlayer() const;
+	const std::string &lastConnectionError() const;
 
 	void sendChunkRequest(int chunkX, int chunkZ);
 	void sendChunkDrop(int chunkX, int chunkZ);

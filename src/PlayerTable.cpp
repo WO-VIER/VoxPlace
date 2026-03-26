@@ -1,0 +1,315 @@
+#include <PlayerTable.h>
+
+#include <PlayerHotData.h>
+
+#include <chrono>
+#include <cstdint>
+#include <string>
+
+namespace
+{
+	uint64_t systemNowMs()
+	{
+		auto now = std::chrono::system_clock::now().time_since_epoch();
+		return static_cast<uint64_t>(
+			std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+	}
+}
+
+PlayerTable::PlayerTable()
+{
+}
+
+PlayerTable::~PlayerTable()
+{
+	close();
+}
+
+bool PlayerTable::open(const std::string &databasePath)
+{
+	close();
+	m_lastError.clear();
+
+	if (sqlite3_open(databasePath.c_str(), &m_db) != SQLITE_OK)
+	{
+		setLastErrorFromDatabase("Failed to open player database");
+		close();
+		return false;
+	}
+
+	const char *schemaSql =
+		"CREATE TABLE IF NOT EXISTS player_table ("
+		" id INTEGER PRIMARY KEY AUTOINCREMENT,"
+		" username TEXT NOT NULL UNIQUE,"
+		" skin_id INTEGER NOT NULL DEFAULT 0,"
+		" position_x REAL NOT NULL DEFAULT 0.0,"
+		" position_y REAL NOT NULL DEFAULT 35.0,"
+		" position_z REAL NOT NULL DEFAULT 0.0,"
+		" block_action_ready_at_ms INTEGER NOT NULL DEFAULT 0,"
+		" created_at_ms INTEGER NOT NULL DEFAULT 0,"
+		" updated_at_ms INTEGER NOT NULL DEFAULT 0"
+		");";
+
+	if (!executeStatement(schemaSql))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+void PlayerTable::close()
+{
+	if (m_db != nullptr)
+	{
+		sqlite3_close(m_db);
+		m_db = nullptr;
+	}
+}
+
+bool PlayerTable::isOpen() const
+{
+	return m_db != nullptr;
+}
+
+bool PlayerTable::loadPlayerByUsername(const std::string &username, PlayerData &player)
+{
+	m_lastError.clear();
+	if (!isOpen())
+	{
+		m_lastError = "Player database is not open";
+		return false;
+	}
+
+	const char *sql =
+		"SELECT id, username, skin_id, position_x, position_y, position_z, block_action_ready_at_ms "
+		"FROM player_table WHERE username = ?1;";
+
+	sqlite3_stmt *statement = nullptr;
+	if (!prepareStatement(sql, &statement))
+	{
+		return false;
+	}
+
+	if (sqlite3_bind_text(statement, 1, username.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK)
+	{
+		setLastErrorFromDatabase("Failed to bind username for player load");
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	int stepResult = sqlite3_step(statement);
+	if (stepResult == SQLITE_ROW)
+	{
+		player.cold.playerId = static_cast<uint64_t>(sqlite3_column_int64(statement, 0));
+		const unsigned char *storedUsername = sqlite3_column_text(statement, 1);
+		if (storedUsername != nullptr)
+		{
+			player.cold.username = reinterpret_cast<const char *>(storedUsername);
+		}
+		else
+		{
+			player.cold.username.clear();
+		}
+		player.cold.skinId = static_cast<uint16_t>(sqlite3_column_int(statement, 2));
+		player.hot.position.x = static_cast<float>(sqlite3_column_double(statement, 3));
+		player.hot.position.y = static_cast<float>(sqlite3_column_double(statement, 4));
+		player.hot.position.z = static_cast<float>(sqlite3_column_double(statement, 5));
+		player.hot.blockActionReadyAtMs =
+			static_cast<uint64_t>(sqlite3_column_int64(statement, 6));
+		sqlite3_finalize(statement);
+		return true;
+	}
+
+	if (stepResult == SQLITE_DONE)
+	{
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	if (stepResult != SQLITE_DONE)
+	{
+		setLastErrorFromDatabase("Failed to read player row");
+	}
+
+	sqlite3_finalize(statement);
+	return false;
+}
+
+bool PlayerTable::createPlayer(const std::string &username, PlayerData &player)
+{
+	m_lastError.clear();
+	if (!isOpen())
+	{
+		m_lastError = "Player database is not open";
+		return false;
+	}
+
+	const char *sql =
+		"INSERT INTO player_table (username, skin_id, position_x, position_y, position_z, block_action_ready_at_ms, created_at_ms, updated_at_ms) "
+		"VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
+
+	sqlite3_stmt *statement = nullptr;
+	if (!prepareStatement(sql, &statement))
+	{
+		return false;
+	}
+
+	player.cold.username = username;
+	player.cold.skinId = 0;
+	player.hot.position.x = 0.0f;
+	player.hot.position.y = 35.0f;
+	player.hot.position.z = 0.0f;
+	player.hot.blockActionReadyAtMs = 0;
+
+	uint64_t nowMs = systemNowMs();
+
+	if (sqlite3_bind_text(statement, 1, player.cold.username.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
+		|| sqlite3_bind_int(statement, 2, static_cast<int>(player.cold.skinId)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 3, static_cast<double>(player.hot.position.x)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 4, static_cast<double>(player.hot.position.y)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 5, static_cast<double>(player.hot.position.z)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 6, static_cast<sqlite3_int64>(player.hot.blockActionReadyAtMs)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 7, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 8, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK)
+	{
+		setLastErrorFromDatabase("Failed to bind player creation statement");
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	if (sqlite3_step(statement) != SQLITE_DONE)
+	{
+		setLastErrorFromDatabase("Failed to insert new player");
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	player.cold.playerId = static_cast<uint64_t>(sqlite3_last_insert_rowid(m_db));
+	sqlite3_finalize(statement);
+	return true;
+}
+
+bool PlayerTable::loadOrCreatePlayer(const std::string &username,
+									 PlayerData &player,
+									 bool &createdPlayer)
+{
+	createdPlayer = false;
+	m_lastError.clear();
+	if (loadPlayerByUsername(username, player))
+	{
+		return true;
+	}
+
+	if (!m_lastError.empty())
+	{
+		return false;
+	}
+
+	if (!createPlayer(username, player))
+	{
+		return false;
+	}
+
+	createdPlayer = true;
+	return true;
+}
+
+bool PlayerTable::savePlayer(const PlayerData &player)
+{
+	m_lastError.clear();
+	if (!isOpen())
+	{
+		m_lastError = "Player database is not open";
+		return false;
+	}
+	if (player.cold.playerId == 0)
+	{
+		m_lastError = "Cannot save player with invalid id";
+		return false;
+	}
+
+	const char *sql =
+		"UPDATE player_table "
+		"SET username = ?1, skin_id = ?2, position_x = ?3, position_y = ?4, position_z = ?5, "
+		"block_action_ready_at_ms = ?6, updated_at_ms = ?7 "
+		"WHERE id = ?8;";
+
+	sqlite3_stmt *statement = nullptr;
+	if (!prepareStatement(sql, &statement))
+	{
+		return false;
+	}
+
+	uint64_t nowMs = systemNowMs();
+
+	if (sqlite3_bind_text(statement, 1, player.cold.username.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
+		|| sqlite3_bind_int(statement, 2, static_cast<int>(player.cold.skinId)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 3, static_cast<double>(player.hot.position.x)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 4, static_cast<double>(player.hot.position.y)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 5, static_cast<double>(player.hot.position.z)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 6, static_cast<sqlite3_int64>(player.hot.blockActionReadyAtMs)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 7, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 8, static_cast<sqlite3_int64>(player.cold.playerId)) != SQLITE_OK)
+	{
+		setLastErrorFromDatabase("Failed to bind player save statement");
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	if (sqlite3_step(statement) != SQLITE_DONE)
+	{
+		setLastErrorFromDatabase("Failed to update player");
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	sqlite3_finalize(statement);
+	return true;
+}
+
+const std::string &PlayerTable::lastError() const
+{
+	return m_lastError;
+}
+
+bool PlayerTable::executeStatement(const char *sql)
+{
+	char *errorMessage = nullptr;
+	if (sqlite3_exec(m_db, sql, nullptr, nullptr, &errorMessage) != SQLITE_OK)
+	{
+		m_lastError = "Failed to execute SQL statement";
+		if (errorMessage != nullptr)
+		{
+			m_lastError += ": ";
+			m_lastError += errorMessage;
+			sqlite3_free(errorMessage);
+		}
+		return false;
+	}
+	return true;
+}
+
+bool PlayerTable::prepareStatement(const char *sql, sqlite3_stmt **statement)
+{
+	if (sqlite3_prepare_v2(m_db, sql, -1, statement, nullptr) != SQLITE_OK)
+	{
+		setLastErrorFromDatabase("Failed to prepare SQL statement");
+		return false;
+	}
+	return true;
+}
+
+void PlayerTable::setLastErrorFromDatabase(const std::string &prefix)
+{
+	m_lastError = prefix;
+	if (m_db != nullptr)
+	{
+		const char *databaseMessage = sqlite3_errmsg(m_db);
+		if (databaseMessage != nullptr && databaseMessage[0] != '\0')
+		{
+			m_lastError += ": ";
+			m_lastError += databaseMessage;
+		}
+	}
+}

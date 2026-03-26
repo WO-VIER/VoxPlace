@@ -119,6 +119,36 @@ bool decodeHello(const uint8_t *data, size_t size, HelloMessage &message)
 	return readValue(data, size, offset, message);
 }
 
+std::vector<uint8_t> encodeLoginRequest(const LoginRequestMessage &message)
+{
+	return encodeWithType(PacketType::LoginRequest, message);
+}
+
+bool decodeLoginRequest(const uint8_t *data, size_t size, LoginRequestMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::LoginRequest, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
+std::vector<uint8_t> encodeLoginResponse(const LoginResponseMessage &message)
+{
+	return encodeWithType(PacketType::LoginResponse, message);
+}
+
+bool decodeLoginResponse(const uint8_t *data, size_t size, LoginResponseMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::LoginResponse, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
 std::vector<uint8_t> encodeWorldFrontier(const WorldFrontier &frontier)
 {
 	return encodeWithType(PacketType::WorldFrontier, frontier);
@@ -353,12 +383,31 @@ bool decodeBlockUpdateBroadcast(const uint8_t *data, size_t size, BlockUpdateBro
 	return readValue(data, size, offset, message);
 }
 
+std::vector<uint8_t> encodePlayerState(const PlayerStateMessage &message)
+{
+	return encodeWithType(PacketType::PlayerState, message);
+}
+
+bool decodePlayerState(const uint8_t *data, size_t size, PlayerStateMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::PlayerState, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
 const char *packetTypeName(PacketType type)
 {
 	switch (type)
 	{
 	case PacketType::Hello:
 		return "Hello";
+	case PacketType::LoginRequest:
+		return "LoginRequest";
+	case PacketType::LoginResponse:
+		return "LoginResponse";
 	case PacketType::WorldFrontier:
 		return "WorldFrontier";
 	case PacketType::ChunkRequest:
@@ -371,6 +420,8 @@ const char *packetTypeName(PacketType type)
 		return "BlockActionRequest";
 	case PacketType::BlockUpdateBroadcast:
 		return "BlockUpdateBroadcast";
+	case PacketType::PlayerState:
+		return "PlayerState";
 	case PacketType::ChunkSnapshotRle:
 		return "ChunkSnapshotRle";
 	case PacketType::ChunkSnapshotSections:

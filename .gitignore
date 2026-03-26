@@ -4,5 +4,7 @@
 build
 build_wasm
 build_asan
+build_release/
 *.pdf
 .agents/rules/cpp-style.md
+*.sqlite3

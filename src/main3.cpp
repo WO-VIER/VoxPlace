@@ -14,6 +14,7 @@
 #include <ChunkPalette.h>
 #include <Crosshair.h>
 #include <Frustum.h>
+#include <PlayerUsername.h>
 #include <Shader.h>
 #include <WorldBounds.h>
 #include <WorldClient.h>
@@ -29,6 +30,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -42,13 +45,18 @@ namespace
 	constexpr int SCREEN_WIDTH = 1920;
 	constexpr int SCREEN_HEIGHT = 1080;
 	constexpr float PLACE_REACH = 8.0f;
-	constexpr uint16_t SERVER_PORT = 28713;
-	constexpr const char *SERVER_HOST = "127.0.0.1";
 
 	enum class TerrainRenderArchitecture
 	{
 		ChunkSsboDirect = 0,
 		BigGpuBufferIndirect = 1
+	};
+
+	struct ClientLaunchOptions
+	{
+		std::string host;
+		uint16_t port = 0;
+		std::string username;
 	};
 
 	const char *terrainRenderArchitectureName(TerrainRenderArchitecture architecture)
@@ -134,6 +142,78 @@ namespace
 		value = parsed;
 		return true;
 	}
+
+	void printUsage(const char *programName)
+	{
+		std::cout << "Usage: " << programName << " <server_host> <server_port> <username>" << std::endl;
+		std::cout << "Example: " << programName << " 127.0.0.1 28713 Alice" << std::endl;
+		std::cout << "         " << programName << " 192.168.1.42 28713 Bob_42" << std::endl;
+	}
+
+	bool parsePort(std::string_view rawPort, uint16_t &port)
+	{
+		if (rawPort.empty())
+		{
+			return false;
+		}
+
+		uint32_t parsed = 0;
+		for (char character : rawPort)
+		{
+			if (character < '0' || character > '9')
+			{
+				return false;
+			}
+			parsed *= 10;
+			parsed += static_cast<uint32_t>(character - '0');
+			if (parsed > 65535)
+			{
+				return false;
+			}
+		}
+
+		if (parsed == 0)
+		{
+			return false;
+		}
+
+		port = static_cast<uint16_t>(parsed);
+		return true;
+	}
+
+	bool parseLaunchOptions(int argc, char **argv, ClientLaunchOptions &options)
+	{
+		if (argc != 4)
+		{
+			printUsage(argv[0]);
+			return false;
+		}
+
+		options.host = std::string(argv[1]);
+		if (options.host.empty())
+		{
+			std::cerr << "Server host must not be empty" << std::endl;
+			return false;
+		}
+
+		if (!parsePort(argv[2], options.port))
+		{
+			std::cerr << "Invalid server port: " << argv[2] << std::endl;
+			return false;
+		}
+
+		options.username = trimPlayerUsername(argv[3]);
+		PlayerUsernameValidationError usernameError = validatePlayerUsername(options.username);
+		if (usernameError != PlayerUsernameValidationError::None)
+		{
+			std::cerr << "Invalid username: "
+					  << playerUsernameValidationErrorText(usernameError)
+					  << std::endl;
+			return false;
+		}
+
+		return true;
+	}
 }
 
 float fogStart = 80.0f;
@@ -165,6 +245,9 @@ bool gPlaceBlockRequested = false;
 bool gBreakBlockRequested = false;
 
 WorldClient gWorldClient;
+std::string gServerHost;
+uint16_t gServerPort = 0;
+std::string gPlayerUsername;
 WorldFrontier gWorldFrontier;
 bool gHasWorldFrontier = false;
 ClientChunkMesher gChunkMesher;
@@ -1056,8 +1139,28 @@ void processInput(GLFWwindow *window)
 	prevRightDown = rightDown;
 }
 
-int main()
+int main(int argc, char **argv)
 {
+	if (argc == 2)
+	{
+		std::string_view argument = argv[1];
+		if (argument == "--help" || argument == "-h")
+		{
+			printUsage(argv[0]);
+			return 0;
+		}
+	}
+
+	ClientLaunchOptions launchOptions;
+	if (!parseLaunchOptions(argc, argv, launchOptions))
+	{
+		return 1;
+	}
+
+	gServerHost = launchOptions.host;
+	gServerPort = launchOptions.port;
+	gPlayerUsername = launchOptions.username;
+
 	bool profileWorkersEnabled = envFlagEnabled("VOXPLACE_PROFILE_WORKERS");
 	int envRenderDistance = 0;
 	if (tryReadEnvInt("VOXPLACE_RENDER_DISTANCE", envRenderDistance))
@@ -1131,6 +1234,21 @@ int main()
 			sortVisibleChunksFrontToBack = false;
 		}
 	}
+
+	if (!gWorldClient.connectToServer(gServerHost, gServerPort, gPlayerUsername))
+	{
+		std::cerr << "Failed to connect/login to server at "
+				  << gServerHost << ":" << gServerPort << std::endl;
+		if (!gWorldClient.lastConnectionError().empty())
+		{
+			std::cerr << "Reason: " << gWorldClient.lastConnectionError() << std::endl;
+		}
+		return 1;
+	}
+
+	camera.Position = gWorldClient.localPlayer().hot.position;
+	std::cout << "Connected as " << gWorldClient.localPlayer().cold.username
+			  << " to " << gServerHost << ":" << gServerPort << std::endl;
 
 	std::cout << "INITIALISATION de GLFW" << std::endl;
 	if (!glfwInit())
@@ -1208,11 +1326,6 @@ int main()
 	if (!sortVisibleChunksFrontToBack)
 	{
 		std::cout << "Client visible chunk sorting disabled" << std::endl;
-	}
-
-	if (!gWorldClient.connectToServer(SERVER_HOST, SERVER_PORT))
-	{
-		std::cerr << "Failed to connect to server at " << SERVER_HOST << ":" << SERVER_PORT << std::endl;
 	}
 
 	auto profileWindowStart = std::chrono::steady_clock::now();
@@ -1449,7 +1562,8 @@ int main()
 		{
 			ImGui::Text("FPS: %.0f (%.1f ms)", 1.0f / deltaTime, deltaTime * 1000.0f);
 		}
-		ImGui::Text("Server: %s:%d", SERVER_HOST, SERVER_PORT);
+		ImGui::Text("Server: %s:%d", gServerHost.c_str(), static_cast<int>(gServerPort));
+		ImGui::Text("Username: %s", gWorldClient.localPlayer().cold.username.c_str());
 		ImGui::Text("Network: %s", gWorldClient.isConnected() ? "Connected" : "Disconnected");
 		if (gHasWorldFrontier)
 		{
