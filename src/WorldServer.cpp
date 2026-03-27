@@ -15,7 +15,6 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <cstdlib>
 #include <csignal>
 #include <deque>
 #include <iostream>
@@ -45,60 +44,11 @@ namespace
 	constexpr int INITIAL_PADDING_CHUNKS = 0;
 	volatile std::sig_atomic_t gWorldServerSignalStopRequested = 0;
 
-	bool envFlagEnabled(const char *name)
+	size_t computeWorkerCount(size_t requestedWorkerCount)
 	{
-		const char *value = std::getenv(name);
-		if (value == nullptr)
+		if (requestedWorkerCount > 0)
 		{
-			return false;
-		}
-		if (value[0] == '\0')
-		{
-			return false;
-		}
-		if (value[0] == '0' && value[1] == '\0')
-		{
-			return false;
-		}
-		return true;
-	}
-
-	bool tryReadEnvInt(const char *name, int &value)
-	{
-		const char *rawValue = std::getenv(name);
-		if (rawValue == nullptr)
-		{
-			return false;
-		}
-		if (rawValue[0] == '\0')
-		{
-			return false;
-		}
-
-		char *end = nullptr;
-		long parsed = std::strtol(rawValue, &end, 10);
-		if (end == rawValue)
-		{
-			return false;
-		}
-		if (end == nullptr || *end != '\0')
-		{
-			return false;
-		}
-
-		value = static_cast<int>(parsed);
-		return true;
-	}
-
-	size_t computeWorkerCount()
-	{
-		int overrideWorkers = 0;
-		if (tryReadEnvInt("VOXPLACE_SERVER_WORKERS", overrideWorkers))
-		{
-			if (overrideWorkers > 0)
-			{
-				return static_cast<size_t>(overrideWorkers);
-			}
+			return requestedWorkerCount;
 		}
 
 		unsigned int reported = std::thread::hardware_concurrency();
@@ -173,6 +123,7 @@ struct WorldServer::Impl
 
 	uint16_t port = 0;
 	std::string playerDatabasePath;
+	ServerEnvironmentOptions environmentOptions;
 	bool enetInitialized = false;
 	ENetHost *host = nullptr;
 	std::unique_ptr<IChunkGenerator> generator;
@@ -212,18 +163,20 @@ struct WorldServer::Impl
 	Impl(uint16_t listenPort,
 		 std::unique_ptr<IChunkGenerator> worldGenerator,
 		 WorldGenerationMode selectedGenerationMode,
-		 std::string selectedPlayerDatabasePath)
+		 std::string selectedPlayerDatabasePath,
+		 ServerEnvironmentOptions selectedEnvironmentOptions)
 		: port(listenPort),
 		  playerDatabasePath(std::move(selectedPlayerDatabasePath)),
+		  environmentOptions(selectedEnvironmentOptions),
 		  generator(std::move(worldGenerator)),
-		  generationMode(selectedGenerationMode)
+		  generationMode(selectedGenerationMode),
+		  profileWorkers(environmentOptions.profileWorkersEnabled)
 	{
 		frontier.playableBounds = makeSquareBounds(INITIAL_PLAYABLE_RADIUS);
 		frontier.paddingChunks = INITIAL_PADDING_CHUNKS;
 		frontier.generatedBounds = frontier.playableBounds.expanded(frontier.paddingChunks);
 		frontier.mode = generationMode;
 		updateExpansionProgress();
-		profileWorkers = envFlagEnabled("VOXPLACE_PROFILE_WORKERS");
 	}
 
 	~Impl()
@@ -256,7 +209,7 @@ struct WorldServer::Impl
 		}
 
 		running = true;
-		workerCount = computeWorkerCount();
+		workerCount = computeWorkerCount(environmentOptions.requestedWorkerCount);
 		for (size_t i = 0; i < workerCount; i++)
 		{
 			workers.emplace_back(&Impl::workerLoop, this);
@@ -1247,13 +1200,15 @@ struct WorldServer::Impl
 WorldServer::WorldServer(uint16_t port,
 						 std::unique_ptr<IChunkGenerator> generator,
 						 WorldGenerationMode generationMode,
-						 std::string playerDatabasePath)
+						 std::string playerDatabasePath,
+						 ServerEnvironmentOptions environmentOptions)
 {
 	m_impl = new Impl(
 		port,
 		std::move(generator),
 		generationMode,
-		std::move(playerDatabasePath));
+		std::move(playerDatabasePath),
+		environmentOptions);
 }
 
 WorldServer::~WorldServer()

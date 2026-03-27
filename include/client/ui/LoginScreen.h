@@ -1,7 +1,7 @@
 #ifndef LOGIN_SCREEN_H
 #define LOGIN_SCREEN_H
 
-#include <Camera.h>
+#include <client/rendering/Camera.h>
 #include <PlayerUsername.h>
 #include <WorldClient.h>
 

@@ -45,10 +45,23 @@ target_include_directories(voxplace_core PUBLIC
 )
 
 set(CLIENT_SOURCES
-    src/CooldownHud.cpp
-    src/DebugOverlay.cpp
-    src/LoginScreen.cpp
-    src/main3.cpp
+    src/client/core/ClientApp.cpp
+    src/client/core/ClientLaunch.cpp
+    src/client/core/ClientProfiler.cpp
+    src/client/core/InputSystem.cpp
+    src/client/gameplay/CameraBoundsSystem.cpp
+    src/client/rendering/ClientFrameRenderer.cpp
+    src/client/rendering/WorldRenderer.cpp
+    src/client/ui/CooldownHud.cpp
+    src/client/ui/DebugOverlayBuilder.cpp
+    src/client/ui/DebugOverlay.cpp
+    src/client/ui/LoginScreen.cpp
+    src/client/gameplay/BlockInteractionSystem.cpp
+    src/client/gameplay/ClientWorldSystem.cpp
+    src/client/gameplay/ChunkStreamingSystem.cpp
+    src/client/gameplay/MeshBuildSystem.cpp
+    src/client/gameplay/PlayerSyncSystem.cpp
+    src/client/main.cpp
     src/WorldClient.cpp
     src/profiler.cpp
     thirdparty/imgui/imgui.cpp
@@ -107,7 +120,8 @@ endif()
 set(SERVER_SOURCES
     src/PasswordHasher.cpp
     src/PlayerTable.cpp
-    src/server_main.cpp
+    src/server/core/ServerLaunch.cpp
+    src/server/main.cpp
     src/WorldServer.cpp
 )
 

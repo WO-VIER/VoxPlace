@@ -1,4 +1,4 @@
-#include <DebugOverlay.h>
+#include <client/ui/DebugOverlay.h>
 
 void updateDebugOverlayToggle(GLFWwindow *window, bool inGame, bool &visible)
 {
