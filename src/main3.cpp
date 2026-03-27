@@ -12,8 +12,11 @@
 #include <Chunk2.h>
 #include <ChunkIndirectRenderer.h>
 #include <ChunkPalette.h>
+#include <CooldownHud.h>
 #include <Crosshair.h>
+#include <DebugOverlay.h>
 #include <Frustum.h>
+#include <LoginScreen.h>
 #include <PlayerUsername.h>
 #include <Shader.h>
 #include <WorldBounds.h>
@@ -45,6 +48,12 @@ namespace
 	constexpr int SCREEN_WIDTH = 1920;
 	constexpr int SCREEN_HEIGHT = 1080;
 	constexpr float PLACE_REACH = 8.0f;
+	constexpr uint16_t DEFAULT_SERVER_PORT = 28713;
+	constexpr const char *DEFAULT_SERVER_HOST = "127.0.0.1";
+	constexpr uint64_t PLAYER_MOVE_SYNC_MIN_INTERVAL_MS = 100;
+	constexpr uint64_t PLAYER_MOVE_SYNC_MAX_IDLE_INTERVAL_MS = 250;
+	constexpr float PLAYER_MOVE_SYNC_POSITION_THRESHOLD = 0.15f;
+	constexpr float PLAYER_MOVE_SYNC_LOOK_DOT_THRESHOLD = 0.9993f;
 
 	enum class TerrainRenderArchitecture
 	{
@@ -54,9 +63,17 @@ namespace
 
 	struct ClientLaunchOptions
 	{
-		std::string host;
-		uint16_t port = 0;
+		std::string host = DEFAULT_SERVER_HOST;
+		uint16_t port = DEFAULT_SERVER_PORT;
 		std::string username;
+		bool autoConnect = false;
+	};
+
+	enum class AppState
+	{
+		Login = 0,
+		Connecting = 1,
+		InGame = 2
 	};
 
 	const char *terrainRenderArchitectureName(TerrainRenderArchitecture architecture)
@@ -145,7 +162,7 @@ namespace
 
 	void printUsage(const char *programName)
 	{
-		std::cout << "Usage: " << programName << " <server_host> <server_port> <username>" << std::endl;
+		std::cout << "Usage: " << programName << " [server_host server_port username]" << std::endl;
 		std::cout << "Example: " << programName << " 127.0.0.1 28713 Alice" << std::endl;
 		std::cout << "         " << programName << " 192.168.1.42 28713 Bob_42" << std::endl;
 	}
@@ -183,6 +200,11 @@ namespace
 
 	bool parseLaunchOptions(int argc, char **argv, ClientLaunchOptions &options)
 	{
+		if (argc == 1)
+		{
+			return true;
+		}
+
 		if (argc != 4)
 		{
 			printUsage(argv[0]);
@@ -212,8 +234,17 @@ namespace
 			return false;
 		}
 
+		options.autoConnect = true;
 		return true;
 	}
+
+	uint64_t systemNowMs()
+	{
+		auto now = std::chrono::system_clock::now().time_since_epoch();
+		return static_cast<uint64_t>(
+			std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+	}
+
 }
 
 float fogStart = 80.0f;
@@ -252,6 +283,10 @@ WorldFrontier gWorldFrontier;
 bool gHasWorldFrontier = false;
 ClientChunkMesher gChunkMesher;
 ChunkIndirectRenderer gChunkIndirectRenderer;
+AppState gAppState = AppState::Login;
+LoginScreen gLoginScreen;
+bool gDebugOverlayVisible = false;
+CooldownHud gCooldownHud;
 
 std::unordered_map<int64_t, Chunk2 *> chunkMap;
 std::unordered_set<int64_t> streamedChunkKeys;
@@ -263,8 +298,90 @@ size_t gProfileMeshedChunkCountWindow = 0;
 size_t gProfileMeshedSectionCountWindow = 0;
 size_t gClassicMaxInflightChunkRequests = 192;
 size_t gClassicMaxChunkRequestsPerFrame = 16;
+glm::vec3 gLastMovementSyncPosition = glm::vec3(0.0f, 35.0f, 0.0f);
+glm::vec3 gLastMovementSyncLookDirection = glm::vec3(0.0f, 0.0f, -1.0f);
+uint64_t gLastMovementSyncSentAtMs = 0;
 
 void markChunkNeighborhoodDirty(int cx, int cz);
+
+void clearClientWorldState()
+{
+	gHasWorldFrontier = false;
+	gWorldFrontier = WorldFrontier{};
+	gPendingMeshRevisions.clear();
+	gProfileChunkRequestsWindow = 0;
+	gProfileChunkDropsWindow = 0;
+	gProfileChunkReceivesWindow = 0;
+	gProfileMeshedChunkCountWindow = 0;
+	gProfileMeshedSectionCountWindow = 0;
+
+	for (auto &[key, chunk] : chunkMap)
+	{
+		delete chunk;
+	}
+	chunkMap.clear();
+	streamedChunkKeys.clear();
+
+	gChunkIndirectRenderer.cleanup();
+	gChunkIndirectRenderer.init();
+}
+
+void resetPlayerMovementSyncState()
+{
+	gLastMovementSyncPosition = camera.Position;
+	gLastMovementSyncLookDirection = glm::normalize(camera.Front);
+	gLastMovementSyncSentAtMs = 0;
+	gWorldClient.updateLocalPlayerTransform(
+		gLastMovementSyncPosition,
+		gLastMovementSyncLookDirection);
+}
+
+void maybeSendPlayerMovementSync()
+{
+	if (!gWorldClient.isConnected())
+	{
+		return;
+	}
+
+	glm::vec3 currentPosition = camera.Position;
+	glm::vec3 currentLookDirection = glm::normalize(camera.Front);
+	uint64_t nowMs = systemNowMs();
+
+	float positionDeltaSq = glm::dot(
+		currentPosition - gLastMovementSyncPosition,
+		currentPosition - gLastMovementSyncPosition);
+	float lookDot = glm::dot(currentLookDirection, gLastMovementSyncLookDirection);
+	if (lookDot < -1.0f)
+	{
+		lookDot = -1.0f;
+	}
+	if (lookDot > 1.0f)
+	{
+		lookDot = 1.0f;
+	}
+
+	bool neverSent = gLastMovementSyncSentAtMs == 0;
+	bool minIntervalElapsed =
+		neverSent || (nowMs - gLastMovementSyncSentAtMs) >= PLAYER_MOVE_SYNC_MIN_INTERVAL_MS;
+	bool idleIntervalElapsed =
+		neverSent || (nowMs - gLastMovementSyncSentAtMs) >= PLAYER_MOVE_SYNC_MAX_IDLE_INTERVAL_MS;
+	bool movedEnough =
+		positionDeltaSq >=
+		(PLAYER_MOVE_SYNC_POSITION_THRESHOLD * PLAYER_MOVE_SYNC_POSITION_THRESHOLD);
+	bool rotatedEnough = lookDot <= PLAYER_MOVE_SYNC_LOOK_DOT_THRESHOLD;
+
+	if (!neverSent &&
+		!(idleIntervalElapsed || (minIntervalElapsed && (movedEnough || rotatedEnough))))
+	{
+		return;
+	}
+
+	gWorldClient.updateLocalPlayerTransform(currentPosition, currentLookDirection);
+	gWorldClient.sendPlayerMoveUpdate(currentPosition, currentLookDirection);
+	gLastMovementSyncPosition = currentPosition;
+	gLastMovementSyncLookDirection = currentLookDirection;
+	gLastMovementSyncSentAtMs = nowMs;
+}
 
 bool usesIndirectRendering()
 {
@@ -892,6 +1009,16 @@ void handleWorldClientEvents()
 	WorldClientEvent event;
 	while (gWorldClient.popEvent(event))
 	{
+		if (event.type == WorldClientEvent::Type::Disconnected)
+		{
+			gLoginScreen.handleDisconnected(
+				clearClientWorldState,
+				g_window,
+				"Disconnected from server");
+			resetPlayerMovementSyncState();
+			gAppState = AppState::Login;
+			continue;
+		}
 		if (event.type == WorldClientEvent::Type::FrontierUpdated)
 		{
 			gWorldFrontier = event.frontier;
@@ -1079,6 +1206,11 @@ void mouse_callback(GLFWwindow *window, double xposIn, double yposIn)
 
 void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
 {
+	if (gAppState != AppState::InGame)
+	{
+		return;
+	}
+
 	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
 	{
 		if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL)
@@ -1157,6 +1289,12 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	LoginLaunchData loginLaunchData;
+	loginLaunchData.host = launchOptions.host;
+	loginLaunchData.port = launchOptions.port;
+	loginLaunchData.username = launchOptions.username;
+	loginLaunchData.autoConnect = launchOptions.autoConnect;
+	gLoginScreen.initialize(loginLaunchData);
 	gServerHost = launchOptions.host;
 	gServerPort = launchOptions.port;
 	gPlayerUsername = launchOptions.username;
@@ -1235,21 +1373,6 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (!gWorldClient.connectToServer(gServerHost, gServerPort, gPlayerUsername))
-	{
-		std::cerr << "Failed to connect/login to server at "
-				  << gServerHost << ":" << gServerPort << std::endl;
-		if (!gWorldClient.lastConnectionError().empty())
-		{
-			std::cerr << "Reason: " << gWorldClient.lastConnectionError() << std::endl;
-		}
-		return 1;
-	}
-
-	camera.Position = gWorldClient.localPlayer().hot.position;
-	std::cout << "Connected as " << gWorldClient.localPlayer().cold.username
-			  << " to " << gServerHost << ":" << gServerPort << std::endl;
-
 	std::cout << "INITIALISATION de GLFW" << std::endl;
 	if (!glfwInit())
 	{
@@ -1274,6 +1397,7 @@ int main(int argc, char **argv)
 	glfwSetCursorPosCallback(g_window, mouse_callback);
 	glfwSetMouseButtonCallback(g_window, mouse_button_callback);
 	glfwSetScrollCallback(g_window, scroll_callback);
+	glfwSetInputMode(g_window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
 #ifndef __EMSCRIPTEN__
 	if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
@@ -1296,6 +1420,8 @@ int main(int argc, char **argv)
 	ImGuiIO &io = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	ImGui::StyleColorsDark();
+	gLoginScreen.loadAssets();
+	gCooldownHud.loadAssets();
 	ImGui_ImplGlfw_InitForOpenGL(g_window, true);
 	ImGui_ImplOpenGL3_Init("#version 460");
 
@@ -1357,6 +1483,75 @@ int main(int argc, char **argv)
 		deltaTime = currentFrame - lastFrame;
 		lastFrame = currentFrame;
 
+		if (gAppState == AppState::Login)
+		{
+			if (gLoginScreen.maybeStartAutoConnect(
+					gWorldClient,
+					clearClientWorldState,
+					gServerHost,
+					gServerPort,
+					gPlayerUsername))
+			{
+				gAppState = AppState::Connecting;
+			}
+		}
+
+		LoginScreenPollResult pollResult = gLoginScreen.pollConnection(
+			gWorldClient,
+			g_window,
+			camera);
+		if (pollResult == LoginScreenPollResult::Failed)
+		{
+			gAppState = AppState::Login;
+		}
+		else if (pollResult == LoginScreenPollResult::Connected)
+		{
+			gAppState = AppState::InGame;
+			resetPlayerMovementSyncState();
+			std::cout << "Connected as " << gWorldClient.localPlayer().cold.username
+					  << " to " << gServerHost << ":" << gServerPort << std::endl;
+		}
+		else if (gLoginScreen.isConnecting())
+		{
+			gAppState = AppState::Connecting;
+		}
+		else if (gAppState != AppState::InGame)
+		{
+			gAppState = AppState::Login;
+		}
+
+		if (gAppState != AppState::InGame)
+		{
+			int currentFbW = 0;
+			int currentFbH = 0;
+			getCurrentFramebufferSize(currentFbW, currentFbH);
+			glBindFramebuffer(GL_FRAMEBUFFER, 0);
+			glViewport(0, 0, currentFbW, currentFbH);
+			glDisable(GL_DEPTH_TEST);
+			glClear(GL_COLOR_BUFFER_BIT);
+
+			ImGui_ImplOpenGL3_NewFrame();
+			ImGui_ImplGlfw_NewFrame();
+			ImGui::NewFrame();
+			gLoginScreen.renderAndMaybeStartConnect(
+				gWorldClient,
+				clearClientWorldState,
+				gServerHost,
+				gServerPort,
+				gPlayerUsername);
+			if (gLoginScreen.isConnecting())
+			{
+				gAppState = AppState::Connecting;
+			}
+			ImGui::Render();
+			ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+			glfwSwapBuffers(g_window);
+			glfwPollEvents();
+			continue;
+		}
+
+		updateDebugOverlayToggle(g_window, true, gDebugOverlayVisible);
 		processInput(g_window);
 		if (benchFlyEnabled)
 		{
@@ -1365,6 +1560,7 @@ int main(int argc, char **argv)
 		handleWorldClientEvents();
 		drainCompletedMeshBuilds();
 		clampCameraToPlayableWorld();
+		maybeSendPlayerMovementSync();
 		syncChunkStreaming();
 
 		if (gBreakBlockRequested)
@@ -1557,116 +1753,76 @@ int main(int argc, char **argv)
 			totalFaces += chunk->faceCount;
 		}
 
-		ImGui::Begin("VoxPlace");
-		if (deltaTime > 0.0f)
-		{
-			ImGui::Text("FPS: %.0f (%.1f ms)", 1.0f / deltaTime, deltaTime * 1000.0f);
-		}
-		ImGui::Text("Server: %s:%d", gServerHost.c_str(), static_cast<int>(gServerPort));
-		ImGui::Text("Username: %s", gWorldClient.localPlayer().cold.username.c_str());
-		ImGui::Text("Network: %s", gWorldClient.isConnected() ? "Connected" : "Disconnected");
-		if (gHasWorldFrontier)
-		{
-			ImGui::Text("World mode: %s", worldGenerationModeName(gWorldFrontier.mode));
-		}
-		ImGui::Separator();
-		ImGui::Text("Chunks: %d / %zu visible", visibleChunks, chunkMap.size());
-		ImGui::Text("Streamed chunks: %zu", streamedChunkKeys.size());
-		ImGui::Text("Chunk render CPU: %.3f ms", chunkRenderCpuMs);
-		if (usesIndirectRendering())
-		{
-			int cpuDrawCalls = 0;
-			if (gChunkIndirectRenderer.drawCount > 0)
-			{
-				cpuDrawCalls = 1;
-			}
-			ImGui::Text("Draw mode: Indirect");
-			ImGui::Text("CPU draw calls: %d", cpuDrawCalls);
-			ImGui::Text("Indirect commands: %zu", gChunkIndirectRenderer.drawCount);
-			ImGui::Text("Indirect faces: %zu", gChunkIndirectRenderer.faceCount);
-			ImGui::Text("Indirect draw data: %s (%llu rebuilds)",
-						gChunkIndirectRenderer.lastBuildReused ? "reused" : "rebuilt",
-						static_cast<unsigned long long>(gChunkIndirectRenderer.drawDataBuildCount));
-			ImGui::Text("Arena usage: %.2f / %.2f MB",
-						static_cast<float>(gChunkIndirectRenderer.arenaReservedFaces * sizeof(ChunkFaceInstanceGpu)) / (1024.0f * 1024.0f),
-						static_cast<float>(gChunkIndirectRenderer.arenaFaceCapacity * sizeof(ChunkFaceInstanceGpu)) / (1024.0f * 1024.0f));
-			ImGui::Text("Arena used faces: %zu", gChunkIndirectRenderer.arenaUsedFaces);
-			ImGui::Text("Largest free span: %zu faces", gChunkIndirectRenderer.largestFreeFaceSpan);
-			if (ImGui::Button("Compact Arena"))
-			{
-				gChunkIndirectRenderer.compact();
-			}
-		}
-		else
-		{
-			ImGui::Text("Draw mode: Direct");
-			ImGui::Text("CPU draw calls: %d", visibleChunks);
-		}
-		ImGui::Text("Mesh workers: %zu", gChunkMesher.workerCount());
-		ImGui::Text("Mesh jobs: %zu tracked / %zu queued / %zu ready",
-					gPendingMeshRevisions.size(),
-					gChunkMesher.pendingJobCount(),
-					gChunkMesher.completedJobCount());
-		ImGui::Text("Total faces: %llu", totalFaces);
-		ImGui::Text("Total vertices: %llu", totalFaces * 6);
-		ImGui::SliderInt("Render Dist (chunks)", &renderDistanceChunks, 2, 32);
-		ImGui::Text("Far Plane: %.1f", farPlane);
-		if (gHasWorldFrontier)
-		{
-			if (usesClassicStreaming())
-			{
-				ImGui::Text("Classic streaming enabled");
-				ImGui::Text("Playable bounds clamp disabled in this mode");
-				ImGui::SliderInt("Classic Stream Pad", &classicStreamingPaddingChunks, 0, 8);
-			}
-			else
-			{
-				ImGui::Checkbox("Limit to playable world", &limitToPlayableWorld);
-				ImGui::Text("Playable chunks: %d x %d",
-							gWorldFrontier.playableBounds.widthChunks(),
-							gWorldFrontier.playableBounds.depthChunks());
-				ImGui::Text("Generated chunks: %d x %d",
-							gWorldFrontier.generatedBounds.widthChunks(),
-							gWorldFrontier.generatedBounds.depthChunks());
-				ImGui::Text("Padding chunks: %d", gWorldFrontier.paddingChunks);
-				ImGui::Text("Expansion progress: %d / %d",
-							gWorldFrontier.activePlayableChunkCount,
-							gWorldFrontier.requiredActiveChunkCount);
-			}
-		}
-		else
-		{
-			ImGui::Checkbox("Limit to playable world", &limitToPlayableWorld);
-		}
-		ImGui::Separator();
-		ImGui::Text("Camera: (%.1f, %.1f, %.1f)", camera.Position.x, camera.Position.y, camera.Position.z);
-		ImGui::Text("Heading: %s", cameraHeadingCardinal(camera.Front));
-		ImGui::SliderFloat("Speed", &camera.MovementSpeed, 1.0f, 100.0f);
-		ImGui::Separator();
-		ImGui::Text("Fog");
-		ImGui::Checkbox("Minecraft Fog (Render Dist)", &minecraftFogByRenderDistance);
-		if (minecraftFogByRenderDistance)
-		{
-			ImGui::SliderFloat("Fog Start %%", &minecraftFogStartPercent, 0.55f, 0.98f);
-			ImGui::Text("Fog End = Far Plane");
-		}
-		else
-		{
-			float fogSliderMax = farPlane;
-			if (fogSliderMax < 500.0f)
-			{
-				fogSliderMax = 500.0f;
-			}
-			ImGui::SliderFloat("Fog Start", &fogStart, 0.0f, fogSliderMax);
-			ImGui::SliderFloat("Fog End", &fogEnd, 0.0f, fogSliderMax);
-		}
-		ImGui::Text("Fog active: %.1f -> %.1f", fogStartFrame, fogEndFrame);
-		ImGui::Separator();
-		ImGui::Checkbox("Ambient Occlusion", &useAO);
-		ImGui::Checkbox("Sunblock debug", &debugSunblockOnly);
-		ImGui::Text("Terrain Architecture: %s", terrainRenderArchitectureName(gTerrainRenderArchitecture));
+		bool compactArenaRequested = false;
 		int terrainArchitectureIndex = static_cast<int>(gTerrainRenderArchitecture);
-		ImGui::SliderInt("Terrain Arch", &terrainArchitectureIndex, 0, 1);
+		uint32_t selectedColor = playerPaletteColor(static_cast<uint8_t>(selectedPaletteIndex - 1));
+		ImVec4 previewColor(
+			static_cast<float>(VoxelChunkData::colorR(selectedColor)) / 255.0f,
+			static_cast<float>(VoxelChunkData::colorG(selectedColor)) / 255.0f,
+			static_cast<float>(VoxelChunkData::colorB(selectedColor)) / 255.0f,
+			1.0f);
+		DebugOverlayData debugOverlayData;
+		debugOverlayData.deltaTime = deltaTime;
+		debugOverlayData.serverHost = gServerHost.c_str();
+		debugOverlayData.serverPort = static_cast<int>(gServerPort);
+		debugOverlayData.username = gWorldClient.localPlayer().cold.username.c_str();
+		debugOverlayData.connected = gWorldClient.isConnected();
+		debugOverlayData.hasWorldFrontier = gHasWorldFrontier;
+		debugOverlayData.frontier = &gWorldFrontier;
+		debugOverlayData.visibleChunks = visibleChunks;
+		debugOverlayData.loadedChunkCount = chunkMap.size();
+		debugOverlayData.chunkRenderCpuMs = chunkRenderCpuMs;
+		debugOverlayData.usesIndirectRendering = usesIndirectRendering();
+		debugOverlayData.cpuDrawCalls = usesIndirectRendering()
+											? (gChunkIndirectRenderer.drawCount > 0 ? 1 : 0)
+											: visibleChunks;
+		debugOverlayData.indirectDrawCount = gChunkIndirectRenderer.drawCount;
+		debugOverlayData.indirectFaceCount = gChunkIndirectRenderer.faceCount;
+		debugOverlayData.indirectReused = gChunkIndirectRenderer.lastBuildReused;
+		debugOverlayData.indirectBuildCount = gChunkIndirectRenderer.drawDataBuildCount;
+		debugOverlayData.indirectArenaReservedMb =
+			static_cast<float>(gChunkIndirectRenderer.arenaReservedFaces * sizeof(ChunkFaceInstanceGpu)) / (1024.0f * 1024.0f);
+		debugOverlayData.indirectArenaCapacityMb =
+			static_cast<float>(gChunkIndirectRenderer.arenaFaceCapacity * sizeof(ChunkFaceInstanceGpu)) / (1024.0f * 1024.0f);
+		debugOverlayData.indirectArenaUsedFaces = gChunkIndirectRenderer.arenaUsedFaces;
+		debugOverlayData.indirectLargestFreeSpan = gChunkIndirectRenderer.largestFreeFaceSpan;
+		debugOverlayData.compactArenaRequested = &compactArenaRequested;
+		debugOverlayData.meshWorkerCount = gChunkMesher.workerCount();
+		debugOverlayData.trackedJobs = gPendingMeshRevisions.size();
+		debugOverlayData.queuedJobs = gChunkMesher.pendingJobCount();
+		debugOverlayData.readyJobs = gChunkMesher.completedJobCount();
+		debugOverlayData.totalFaces = totalFaces;
+		debugOverlayData.renderDistanceChunks = &renderDistanceChunks;
+		debugOverlayData.farPlane = farPlane;
+		debugOverlayData.limitToPlayableWorld = &limitToPlayableWorld;
+		debugOverlayData.usesClassicStreaming = usesClassicStreaming();
+		debugOverlayData.classicStreamingPaddingChunks = &classicStreamingPaddingChunks;
+		debugOverlayData.cameraX = camera.Position.x;
+		debugOverlayData.cameraY = camera.Position.y;
+		debugOverlayData.cameraZ = camera.Position.z;
+		debugOverlayData.headingText = cameraHeadingCardinal(camera.Front);
+		debugOverlayData.cameraSpeed = &camera.MovementSpeed;
+		debugOverlayData.minecraftFogByRenderDistance = &minecraftFogByRenderDistance;
+		debugOverlayData.minecraftFogStartPercent = &minecraftFogStartPercent;
+		debugOverlayData.fogStart = &fogStart;
+		debugOverlayData.fogEnd = &fogEnd;
+		debugOverlayData.fogStartFrame = fogStartFrame;
+		debugOverlayData.fogEndFrame = fogEndFrame;
+		debugOverlayData.useAO = &useAO;
+		debugOverlayData.debugSunblockOnly = &debugSunblockOnly;
+		debugOverlayData.terrainArchitectureName = terrainRenderArchitectureName(gTerrainRenderArchitecture);
+		debugOverlayData.terrainArchitectureIndex = &terrainArchitectureIndex;
+		debugOverlayData.terrainArchitectureMin = 0;
+		debugOverlayData.terrainArchitectureMax = 1;
+		debugOverlayData.selectedPaletteIndex = &selectedPaletteIndex;
+		debugOverlayData.paletteMax = static_cast<int>(PLAYER_COLOR_PALETTE_SIZE);
+		debugOverlayData.previewColor = previewColor;
+		debugOverlayData.crosshairVisible = &crosshair.visible;
+		renderDebugOverlay(gDebugOverlayVisible, debugOverlayData);
+		gCooldownHud.render(
+			gAppState == AppState::InGame,
+			gWorldClient.remainingBlockActionCooldownMs());
+
 		gTerrainRenderArchitecture = static_cast<TerrainRenderArchitecture>(terrainArchitectureIndex);
 		if (gTerrainRenderArchitecture != gPreviousTerrainRenderArchitecture)
 		{
@@ -1676,18 +1832,10 @@ int main(int argc, char **argv)
 			}
 			gPreviousTerrainRenderArchitecture = gTerrainRenderArchitecture;
 		}
-		ImGui::SliderInt("Palette index", &selectedPaletteIndex, 1, static_cast<int>(PLAYER_COLOR_PALETTE_SIZE));
-		uint32_t selectedColor = playerPaletteColor(static_cast<uint8_t>(selectedPaletteIndex - 1));
-		ImVec4 previewColor(
-			static_cast<float>(VoxelChunkData::colorR(selectedColor)) / 255.0f,
-			static_cast<float>(VoxelChunkData::colorG(selectedColor)) / 255.0f,
-			static_cast<float>(VoxelChunkData::colorB(selectedColor)) / 255.0f,
-			1.0f);
-		ImGui::ColorButton("Palette preview", previewColor);
-		ImGui::Checkbox("Crosshair", &crosshair.visible);
-		ImGui::Text("Left click: break block");
-		ImGui::Text("Right click: place block");
-		ImGui::End();
+		if (compactArenaRequested)
+		{
+			gChunkIndirectRenderer.compact();
+		}
 
 		crosshair.render(g_window);
 
@@ -1866,9 +2014,11 @@ int main(int argc, char **argv)
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
 
+	gLoginScreen.waitForTask();
 	gWorldClient.disconnect();
 	gChunkMesher.stop();
 	gChunkIndirectRenderer.cleanup();
+	gLoginScreen.cleanup();
 	gPendingMeshRevisions.clear();
 	for (auto &[key, chunk] : chunkMap)
 	{

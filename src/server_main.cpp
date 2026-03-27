@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <csignal>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -51,13 +52,23 @@ namespace
 		port = static_cast<uint16_t>(parsed);
 		return true;
 	}
+
+	void handleStopSignal(int)
+	{
+		requestWorldServerSignalStop();
+	}
 }
 
 int main(int argc, char **argv)
 {
+	resetWorldServerSignalStop();
+	std::signal(SIGINT, handleStopSignal);
+	std::signal(SIGTERM, handleStopSignal);
+
 	WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier;
 	uint16_t port = DEFAULT_SERVER_PORT;
 	std::string playerDatabasePath = "voxplace_players.sqlite3";
+	bool playerDatabasePathOverridden = false;
 
 	for (int argumentIndex = 1; argumentIndex < argc; argumentIndex++)
 	{
@@ -99,12 +110,25 @@ int main(int argc, char **argv)
 				return 1;
 			}
 			playerDatabasePath = argv[argumentIndex];
+			playerDatabasePathOverridden = true;
 			continue;
 		}
 
 		std::cerr << "Unknown argument: " << argument << std::endl;
 		printUsage(argv[0]);
 		return 1;
+	}
+
+	if (!playerDatabasePathOverridden)
+	{
+		if (generationMode == WorldGenerationMode::ClassicStreaming)
+		{
+			playerDatabasePath = "voxplace_players_classic_gen.sqlite3";
+		}
+		else
+		{
+			playerDatabasePath = "voxplace_players_classic_voxplace.sqlite3";
+		}
 	}
 
 	std::cout << "World generation mode: "

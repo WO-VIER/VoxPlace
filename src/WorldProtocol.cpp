@@ -398,6 +398,21 @@ bool decodePlayerState(const uint8_t *data, size_t size, PlayerStateMessage &mes
 	return readValue(data, size, offset, message);
 }
 
+std::vector<uint8_t> encodePlayerMoveUpdate(const PlayerMoveUpdateMessage &message)
+{
+	return encodeWithType(PacketType::PlayerMoveUpdate, message);
+}
+
+bool decodePlayerMoveUpdate(const uint8_t *data, size_t size, PlayerMoveUpdateMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::PlayerMoveUpdate, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
 const char *packetTypeName(PacketType type)
 {
 	switch (type)
@@ -422,6 +437,8 @@ const char *packetTypeName(PacketType type)
 		return "BlockUpdateBroadcast";
 	case PacketType::PlayerState:
 		return "PlayerState";
+	case PacketType::PlayerMoveUpdate:
+		return "PlayerMoveUpdate";
 	case PacketType::ChunkSnapshotRle:
 		return "ChunkSnapshotRle";
 	case PacketType::ChunkSnapshotSections:

@@ -46,6 +46,7 @@ bool PlayerTable::open(const std::string &databasePath)
 		" position_y REAL NOT NULL DEFAULT 35.0,"
 		" position_z REAL NOT NULL DEFAULT 0.0,"
 		" block_action_ready_at_ms INTEGER NOT NULL DEFAULT 0,"
+		" password_hash TEXT NOT NULL DEFAULT '',"
 		" created_at_ms INTEGER NOT NULL DEFAULT 0,"
 		" updated_at_ms INTEGER NOT NULL DEFAULT 0"
 		");";
@@ -53,6 +54,21 @@ bool PlayerTable::open(const std::string &databasePath)
 	if (!executeStatement(schemaSql))
 	{
 		return false;
+	}
+
+	const char *passwordColumnSql =
+		"ALTER TABLE player_table ADD COLUMN password_hash TEXT NOT NULL DEFAULT '';";
+	char *errorMessage = nullptr;
+	int alterResult = sqlite3_exec(m_db, passwordColumnSql, nullptr, nullptr, &errorMessage);
+	if (alterResult != SQLITE_OK && errorMessage != nullptr)
+	{
+		std::string errorText = errorMessage;
+		sqlite3_free(errorMessage);
+		if (errorText.find("duplicate column name") == std::string::npos)
+		{
+			m_lastError = "Failed to ensure password_hash column: " + errorText;
+			return false;
+		}
 	}
 
 	return true;
@@ -74,6 +90,14 @@ bool PlayerTable::isOpen() const
 
 bool PlayerTable::loadPlayerByUsername(const std::string &username, PlayerData &player)
 {
+	std::string ignoredPasswordHash;
+	return loadPlayerAuthByUsername(username, player, ignoredPasswordHash);
+}
+
+bool PlayerTable::loadPlayerAuthByUsername(const std::string &username,
+										   PlayerData &player,
+										   std::string &passwordHash)
+{
 	m_lastError.clear();
 	if (!isOpen())
 	{
@@ -82,7 +106,7 @@ bool PlayerTable::loadPlayerByUsername(const std::string &username, PlayerData &
 	}
 
 	const char *sql =
-		"SELECT id, username, skin_id, position_x, position_y, position_z, block_action_ready_at_ms "
+		"SELECT id, username, skin_id, position_x, position_y, position_z, block_action_ready_at_ms, password_hash "
 		"FROM player_table WHERE username = ?1;";
 
 	sqlite3_stmt *statement = nullptr;
@@ -117,6 +141,15 @@ bool PlayerTable::loadPlayerByUsername(const std::string &username, PlayerData &
 		player.hot.position.z = static_cast<float>(sqlite3_column_double(statement, 5));
 		player.hot.blockActionReadyAtMs =
 			static_cast<uint64_t>(sqlite3_column_int64(statement, 6));
+		const unsigned char *storedHash = sqlite3_column_text(statement, 7);
+		if (storedHash != nullptr)
+		{
+			passwordHash = reinterpret_cast<const char *>(storedHash);
+		}
+		else
+		{
+			passwordHash.clear();
+		}
 		sqlite3_finalize(statement);
 		return true;
 	}
@@ -136,7 +169,9 @@ bool PlayerTable::loadPlayerByUsername(const std::string &username, PlayerData &
 	return false;
 }
 
-bool PlayerTable::createPlayer(const std::string &username, PlayerData &player)
+bool PlayerTable::createPlayer(const std::string &username,
+							   const std::string &passwordHash,
+							   PlayerData &player)
 {
 	m_lastError.clear();
 	if (!isOpen())
@@ -146,8 +181,8 @@ bool PlayerTable::createPlayer(const std::string &username, PlayerData &player)
 	}
 
 	const char *sql =
-		"INSERT INTO player_table (username, skin_id, position_x, position_y, position_z, block_action_ready_at_ms, created_at_ms, updated_at_ms) "
-		"VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
+		"INSERT INTO player_table (username, skin_id, position_x, position_y, position_z, block_action_ready_at_ms, password_hash, created_at_ms, updated_at_ms) "
+		"VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);";
 
 	sqlite3_stmt *statement = nullptr;
 	if (!prepareStatement(sql, &statement))
@@ -170,8 +205,9 @@ bool PlayerTable::createPlayer(const std::string &username, PlayerData &player)
 		|| sqlite3_bind_double(statement, 4, static_cast<double>(player.hot.position.y)) != SQLITE_OK
 		|| sqlite3_bind_double(statement, 5, static_cast<double>(player.hot.position.z)) != SQLITE_OK
 		|| sqlite3_bind_int64(statement, 6, static_cast<sqlite3_int64>(player.hot.blockActionReadyAtMs)) != SQLITE_OK
-		|| sqlite3_bind_int64(statement, 7, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK
-		|| sqlite3_bind_int64(statement, 8, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK)
+		|| sqlite3_bind_text(statement, 7, passwordHash.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 8, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 9, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK)
 	{
 		setLastErrorFromDatabase("Failed to bind player creation statement");
 		sqlite3_finalize(statement);
@@ -191,12 +227,14 @@ bool PlayerTable::createPlayer(const std::string &username, PlayerData &player)
 }
 
 bool PlayerTable::loadOrCreatePlayer(const std::string &username,
+									 const std::string &passwordHashForNewPlayer,
 									 PlayerData &player,
+									 std::string &storedPasswordHash,
 									 bool &createdPlayer)
 {
 	createdPlayer = false;
 	m_lastError.clear();
-	if (loadPlayerByUsername(username, player))
+	if (loadPlayerAuthByUsername(username, player, storedPasswordHash))
 	{
 		return true;
 	}
@@ -206,12 +244,52 @@ bool PlayerTable::loadOrCreatePlayer(const std::string &username,
 		return false;
 	}
 
-	if (!createPlayer(username, player))
+	if (!createPlayer(username, passwordHashForNewPlayer, player))
 	{
 		return false;
 	}
 
+	storedPasswordHash = passwordHashForNewPlayer;
 	createdPlayer = true;
+	return true;
+}
+
+bool PlayerTable::updatePasswordHash(uint64_t playerId, const std::string &passwordHash)
+{
+	m_lastError.clear();
+	if (!isOpen())
+	{
+		m_lastError = "Player database is not open";
+		return false;
+	}
+
+	const char *sql =
+		"UPDATE player_table SET password_hash = ?1, updated_at_ms = ?2 WHERE id = ?3;";
+
+	sqlite3_stmt *statement = nullptr;
+	if (!prepareStatement(sql, &statement))
+	{
+		return false;
+	}
+
+	uint64_t nowMs = systemNowMs();
+	if (sqlite3_bind_text(statement, 1, passwordHash.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 2, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 3, static_cast<sqlite3_int64>(playerId)) != SQLITE_OK)
+	{
+		setLastErrorFromDatabase("Failed to bind password hash update");
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	if (sqlite3_step(statement) != SQLITE_DONE)
+	{
+		setLastErrorFromDatabase("Failed to update password hash");
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	sqlite3_finalize(statement);
 	return true;
 }
 

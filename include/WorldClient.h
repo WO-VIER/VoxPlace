@@ -3,6 +3,7 @@
 
 #include <PlayerData.h>
 #include <WorldProtocol.h>
+#include <glm/vec3.hpp>
 #include <deque>
 #include <string>
 
@@ -29,18 +30,24 @@ public:
 	WorldClient();
 	~WorldClient();
 
-	bool connectToServer(const std::string &hostName, uint16_t port, const std::string &username);
+	bool connectToServer(const std::string &hostName,
+						 uint16_t port,
+						 const std::string &username,
+						 const std::string &password);
 	void disconnect();
 	void service();
 	bool popEvent(WorldClientEvent &event);
 	bool isConnected() const;
 	const PlayerData &localPlayer() const;
+	uint64_t remainingBlockActionCooldownMs() const;
 	const std::string &lastConnectionError() const;
 
 	void sendChunkRequest(int chunkX, int chunkZ);
 	void sendChunkDrop(int chunkX, int chunkZ);
 	void sendPlaceBlock(int worldX, int worldY, int worldZ, uint8_t paletteIndex);
 	void sendBreakBlock(int worldX, int worldY, int worldZ);
+	void sendPlayerMoveUpdate(const glm::vec3 &position, const glm::vec3 &lookDirection);
+	void updateLocalPlayerTransform(const glm::vec3 &position, const glm::vec3 &lookDirection);
 
 private:
 	struct Impl;

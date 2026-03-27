@@ -26,4 +26,8 @@ private:
 	Impl *m_impl;
 };
 
+void requestWorldServerSignalStop();
+void resetWorldServerSignalStop();
+bool isWorldServerSignalStopRequested();
+
 #endif

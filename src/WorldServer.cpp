@@ -1,6 +1,7 @@
 #include <WorldServer.h>
 
 #include <ChunkPalette.h>
+#include <PasswordHasher.h>
 #include <PlayerData.h>
 #include <PlayerHotData.h>
 #include <PlayerSessionData.h>
@@ -11,9 +12,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <csignal>
 #include <deque>
 #include <iostream>
 #include <memory>
@@ -40,6 +43,7 @@ namespace
 	constexpr size_t CLASSIC_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 24;
 	constexpr int INITIAL_PLAYABLE_RADIUS = 1;
 	constexpr int INITIAL_PADDING_CHUNKS = 0;
+	volatile std::sig_atomic_t gWorldServerSignalStopRequested = 0;
 
 	bool envFlagEnabled(const char *name)
 	{
@@ -174,6 +178,7 @@ struct WorldServer::Impl
 	std::unique_ptr<IChunkGenerator> generator;
 	WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier;
 	PlayerTable playerTable;
+	PasswordHasher passwordHasher;
 
 	WorldFrontier frontier;
 	std::unordered_map<int64_t, VoxelChunkData> worldChunks;
@@ -315,6 +320,13 @@ struct WorldServer::Impl
 
 		while (running)
 		{
+			if (isWorldServerSignalStopRequested())
+			{
+				std::cout << "Stop signal received, shutting down server cleanly" << std::endl;
+				stop();
+				break;
+			}
+
 			serviceNetwork(1);
 			auto now = clock::now();
 			if (now >= nextTick)
@@ -723,9 +735,30 @@ struct WorldServer::Impl
 			return;
 		}
 
+		std::string password = std::string(request.password);
+		std::string passwordHashForNewPlayer;
+		if (!password.empty())
+		{
+			if (!passwordHasher.hashPassword(password, passwordHashForNewPlayer))
+			{
+				std::cerr << "Failed to hash password for "
+						  << trimmedUsername
+						  << ": " << passwordHasher.lastError() << std::endl;
+				response.status = LoginStatus::InvalidCredentials;
+				sendReliable(peer, encodeLoginResponse(response));
+				return;
+			}
+		}
+
 		bool createdPlayer = false;
 		PlayerData loadedPlayer;
-		if (!playerTable.loadOrCreatePlayer(trimmedUsername, loadedPlayer, createdPlayer))
+		std::string storedPasswordHash;
+		if (!playerTable.loadOrCreatePlayer(
+				trimmedUsername,
+				passwordHashForNewPlayer,
+				loadedPlayer,
+				storedPasswordHash,
+				createdPlayer))
 		{
 			std::cerr << "Failed to load/create player "
 					  << trimmedUsername
@@ -736,6 +769,34 @@ struct WorldServer::Impl
 		}
 
 		session.player = loadedPlayer;
+		if (!createdPlayer)
+		{
+			if (!storedPasswordHash.empty())
+			{
+				if (password.empty() ||
+					!passwordHasher.verifyPassword(password, storedPasswordHash))
+				{
+					response.status = LoginStatus::InvalidCredentials;
+					sendReliable(peer, encodeLoginResponse(response));
+					return;
+				}
+			}
+			else if (!password.empty())
+			{
+				if (!playerTable.updatePasswordHash(
+						session.player.cold.playerId,
+						passwordHashForNewPlayer))
+				{
+					std::cerr << "Failed to set password hash for "
+							  << trimmedUsername
+							  << ": " << playerTable.lastError() << std::endl;
+					response.status = LoginStatus::InvalidCredentials;
+					sendReliable(peer, encodeLoginResponse(response));
+					return;
+				}
+			}
+		}
+
 		session.playerSession.playerId = session.player.cold.playerId;
 		session.playerSession.authenticated = true;
 		session.usernameKey = trimmedUsername;
@@ -837,6 +898,17 @@ struct WorldServer::Impl
 				return;
 			}
 			handleBlockAction(peer, request);
+			return;
+		}
+
+		if (type == PacketType::PlayerMoveUpdate)
+		{
+			PlayerMoveUpdateMessage movement;
+			if (!decodePlayerMoveUpdate(data, size, movement))
+			{
+				return;
+			}
+			handlePlayerMoveUpdate(peer, movement);
 		}
 	}
 
@@ -971,6 +1043,35 @@ struct WorldServer::Impl
 		{
 			expandWorldOneRing();
 		}
+	}
+
+	void handlePlayerMoveUpdate(ENetPeer *peer, const PlayerMoveUpdateMessage &movement)
+	{
+		auto sessionIt = clients.find(peer);
+		if (sessionIt == clients.end())
+		{
+			return;
+		}
+
+		ClientSession &session = sessionIt->second;
+		if (!std::isfinite(movement.positionX) ||
+			!std::isfinite(movement.positionY) ||
+			!std::isfinite(movement.positionZ) ||
+			!std::isfinite(movement.lookX) ||
+			!std::isfinite(movement.lookY) ||
+			!std::isfinite(movement.lookZ))
+		{
+			return;
+		}
+
+		session.player.hot.position = glm::vec3(
+			movement.positionX,
+			movement.positionY,
+			movement.positionZ);
+		session.player.hot.lookDirection = glm::vec3(
+			movement.lookX,
+			movement.lookY,
+			movement.lookZ);
 	}
 
 	bool shouldExpandPlayableBounds() const
@@ -1173,4 +1274,19 @@ int WorldServer::run()
 void WorldServer::stop()
 {
 	m_impl->stop();
+}
+
+void requestWorldServerSignalStop()
+{
+	gWorldServerSignalStopRequested = 1;
+}
+
+void resetWorldServerSignalStop()
+{
+	gWorldServerSignalStopRequested = 0;
+}
+
+bool isWorldServerSignalStopRequested()
+{
+	return gWorldServerSignalStopRequested != 0;
 }

@@ -18,8 +18,14 @@ public:
 	bool isOpen() const;
 
 	bool loadPlayerByUsername(const std::string &username, PlayerData &player);
-	bool createPlayer(const std::string &username, PlayerData &player);
-	bool loadOrCreatePlayer(const std::string &username, PlayerData &player, bool &createdPlayer);
+	bool loadPlayerAuthByUsername(const std::string &username, PlayerData &player, std::string &passwordHash);
+	bool createPlayer(const std::string &username, const std::string &passwordHash, PlayerData &player);
+	bool loadOrCreatePlayer(const std::string &username,
+							const std::string &passwordHashForNewPlayer,
+							PlayerData &player,
+							std::string &storedPasswordHash,
+							bool &createdPlayer);
+	bool updatePasswordHash(uint64_t playerId, const std::string &passwordHash);
 	bool savePlayer(const PlayerData &player);
 
 	const std::string &lastError() const;

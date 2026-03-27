@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+constexpr size_t PLAYER_PASSWORD_MAX_LENGTH = 128;
+
 enum class PacketType : uint8_t
 {
 	Hello = 1,
@@ -23,7 +25,8 @@ enum class PacketType : uint8_t
 	ChunkSnapshotSections = 9,
 	LoginRequest = 10,
 	LoginResponse = 11,
-	PlayerState = 12
+	PlayerState = 12,
+	PlayerMoveUpdate = 13
 };
 
 enum class BlockActionType : uint8_t
@@ -36,7 +39,8 @@ enum class LoginStatus : uint8_t
 {
 	Accepted = 1,
 	InvalidUsername = 2,
-	UsernameAlreadyInUse = 3
+	UsernameAlreadyInUse = 3,
+	InvalidCredentials = 4
 };
 
 struct HelloMessage
@@ -48,6 +52,7 @@ struct HelloMessage
 struct LoginRequestMessage
 {
 	char username[PLAYER_USERNAME_MAX_LENGTH + 1] = {};
+	char password[PLAYER_PASSWORD_MAX_LENGTH + 1] = {};
 };
 
 struct LoginResponseMessage
@@ -103,6 +108,16 @@ struct PlayerStateMessage
 	uint64_t serverNowMs = 0;
 };
 
+struct PlayerMoveUpdateMessage
+{
+	float positionX = 0.0f;
+	float positionY = 35.0f;
+	float positionZ = 0.0f;
+	float lookX = 0.0f;
+	float lookY = 0.0f;
+	float lookZ = -1.0f;
+};
+
 struct DecodedChunkSnapshot
 {
 	VoxelChunkData chunk;
@@ -137,6 +152,9 @@ bool decodeBlockUpdateBroadcast(const uint8_t *data, size_t size, BlockUpdateBro
 
 std::vector<uint8_t> encodePlayerState(const PlayerStateMessage &message);
 bool decodePlayerState(const uint8_t *data, size_t size, PlayerStateMessage &message);
+
+std::vector<uint8_t> encodePlayerMoveUpdate(const PlayerMoveUpdateMessage &message);
+bool decodePlayerMoveUpdate(const uint8_t *data, size_t size, PlayerMoveUpdateMessage &message);
 
 const char *packetTypeName(PacketType type);
 

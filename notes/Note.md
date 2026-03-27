@@ -26,6 +26,7 @@ valgrind -s --leak-check=full --show-leak-kinds=all --track-origins=yes ./build/
 12. [Liens Utiles](#12-liens-utiles)
 13. [Bonnes Pratiques OpenGL](#13-bonnes-pratiques-opengl)
 14. [Player Objet vs ECS](#14-player-objet-vs-ecs)
+15. [Auth Joueur & Login Screen](#15-auth-joueur--login-screen)
 
 ---
 
@@ -890,8 +891,8 @@ Main Thread                    Thread Pool                    GPU
 ---
 
 ## 7. Architecture Serveur & Réseau
-
-Le serveur doit être pensé comme un OS gérant des ressources limitées : **budget de 50ms** par boucle pour tenir les **20 Ticks Par Seconde (TPS)**.
+  
+  Le serveur doit être pensé comme un OS gérant des ressources limitées : **budget de 50ms** par boucle pour tenir les **20 Ticks Par Seconde (TPS)**.
 
 ### Time Slicing & Throttling
 
@@ -3626,6 +3627,204 @@ Autrement dit :
 
 - **pas besoin d'un ECS complet pour être propre**
 - mais **penser layout mémoire, cache et données chaudes/froides reste essentiel**
+
+---
+
+## 15. Auth Joueur & Login Screen
+
+Cette section résume les choix retenus pour l'authentification joueur, la persistance minimale côté serveur, et l'écran de login inspiré de Minecraft classique.
+
+### 15.1 Auth joueur
+
+Le flux retenu est :
+
+1. Le client démarre.
+2. Il affiche un écran de login avec :
+   - `host`
+   - `port`
+   - `username`
+3. Le client envoie ensuite un `Hello`, puis un `LoginRequest`.
+4. Le serveur valide le `username`.
+5. Le serveur charge ou crée le joueur.
+6. Le serveur renvoie un `LoginResponse`.
+7. Le client ne passe en jeu que si la réponse est acceptée.
+
+### 15.2 Règle d'unicité du `username`
+
+Le comportement retenu est :
+
+- si le `username` existe déjà en base mais n'est **pas connecté**, on recharge le joueur
+- si le `username` est **déjà connecté en live**, on refuse la connexion
+
+Autrement dit :
+
+- **persisté != connecté**
+- l'unicité stricte s'applique seulement aux sessions simultanées
+
+### 15.3 Persistance SQLite
+
+Pour les joueurs, on a retenu une base SQLite légère côté serveur.
+
+Abstraction C++ :
+
+- `PlayerTable`
+
+Table SQL :
+
+- `player_table`
+
+Champs principaux stockés :
+
+- `id`
+- `username`
+- `skin_id`
+- `position_x`
+- `position_y`
+- `position_z`
+- `block_action_ready_at_ms`
+- `created_at_ms`
+- `updated_at_ms`
+
+Pourquoi SQLite :
+
+- très simple à embarquer
+- pas besoin de serveur DB externe
+- robuste pour un projet étudiant
+- facile à faire évoluer plus tard
+
+### 15.4 Cooldown autoritaire
+
+Le cooldown n'est pas stocké comme `lastTime`, mais comme :
+
+- `blockActionReadyAtMs`
+
+La règle devient :
+
+- si `now >= blockActionReadyAtMs` : action autorisée
+- sinon : action refusée
+
+Le client fait une pré-vérification locale pour éviter de spammer le serveur, mais :
+
+- **le serveur reste l'autorité**
+
+Donc :
+
+- le client améliore l'UX
+- le serveur empêche la triche
+
+### 15.5 Arrêt propre du serveur
+
+Le serveur gère maintenant :
+
+- `SIGINT` (`Ctrl+C`)
+- `SIGTERM`
+
+Au lieu de mourir brutalement, il :
+
+- lève un drapeau de stop
+- sort proprement de la boucle serveur
+- sauvegarde les joueurs connectés
+- ferme ensuite le réseau
+
+Ce point est important :
+
+- sans arrêt propre, un dernier état joueur pouvait être perdu
+
+Limite actuelle :
+
+- un `kill -9` ne pourra jamais être rattrapé
+
+Donc à terme, un **autosave périodique** restera utile.
+
+### 15.6 Écran de login style Minecraft classique
+
+Le client possède maintenant un écran de login dédié, séparé du jeu.
+
+Inspirations retenues :
+
+- fond dirt tileable
+- police `Mojangles`
+- gros titre centré
+- splash text jaune
+- boutons type menu Minecraft
+
+Assets importés depuis le dépôt `minecraft` :
+
+- `Mojangles.ttf`
+- `Dirt_Tile.png`
+- `MainMenuButton_Norm.png`
+- `MainMenuButton_Over.png`
+
+### 15.7 Séparation de code
+
+La logique login a été sortie du gros `main3.cpp` dans un module dédié :
+
+- `LoginScreen.h`
+- `LoginScreen.cpp`
+
+Ce module gère :
+
+- le rendu de l'écran
+- l'état du formulaire
+- la tentative de connexion
+- le polling du résultat
+- le retour au login après déconnexion
+
+Bénéfices :
+
+- `main3.cpp` reste plus lisible
+- le code UI login est isolé
+- les ajustements visuels deviennent plus simples
+
+### 15.8 Détail important sur les polices
+
+Le rendu "pixel" du login utilise `Mojangles`, mais il ne faut pas imposer cette police à toute l'UI ImGui du jeu.
+
+Donc :
+
+- police par défaut ImGui pour les panneaux debug / outils
+- police `Mojangles` uniquement pour l'écran de login
+
+Sinon les fenêtres debug deviennent trop grosses et trop agressives visuellement.
+
+### 15.8b HUD de cooldown
+
+Le client affiche aussi maintenant un petit HUD gameplay en bas à gauche avec la police Minecraft.
+
+But :
+
+- rendre visible le cooldown d'action bloc
+- garder un feedback immédiat sans ouvrir l'overlay debug
+
+Choix retenu :
+
+- texte en bas à gauche
+- police `Mojangles`
+- ombre portée simple
+- couleur verte si prêt
+- couleur jaune si cooldown actif
+
+Le cooldown affiché reste basé sur la valeur autoritaire synchronisée par le serveur :
+
+- `blockActionReadyAtMs`
+
+Donc le HUD ne montre pas une estimation arbitraire locale, mais une valeur alignée sur l'état reçu du serveur.
+
+### 15.9 Résultat architectural
+
+On obtient une séparation claire :
+
+- `WorldClient` : réseau client
+- `WorldServer` : autorité serveur
+- `PlayerTable` : persistance SQLite
+- `LoginScreen` : UI d'entrée
+
+Cette structure prépare bien la suite :
+
+- synchronisation position joueur
+- autosave périodique
+- écran titre encore plus travaillé
+- persistance du monde plus tard
 
 ---
 

@@ -108,7 +108,8 @@ WorldClient::~WorldClient()
 
 bool WorldClient::connectToServer(const std::string &hostName,
 								  uint16_t port,
-								  const std::string &username)
+								  const std::string &username,
+								  const std::string &password)
 {
 	m_impl->lastConnectionError.clear();
 
@@ -164,6 +165,16 @@ bool WorldClient::connectToServer(const std::string &hostName,
 
 		LoginRequestMessage login;
 		(void)copyPlayerUsernameToBuffer(trimmedUsername, login.username);
+		std::string trimmedPassword = password;
+		if (trimmedPassword.size() > PLAYER_PASSWORD_MAX_LENGTH)
+		{
+			trimmedPassword.resize(PLAYER_PASSWORD_MAX_LENGTH);
+		}
+		std::fill(std::begin(login.password), std::end(login.password), '\0');
+		for (size_t index = 0; index < trimmedPassword.size(); index++)
+		{
+			login.password[index] = trimmedPassword[index];
+		}
 		std::vector<uint8_t> loginPayload = encodeLoginRequest(login);
 		ENetPacket *loginPacket = enet_packet_create(
 			loginPayload.data(),
@@ -222,6 +233,10 @@ bool WorldClient::connectToServer(const std::string &hostName,
 							else if (response.status == LoginStatus::UsernameAlreadyInUse)
 							{
 								m_impl->lastConnectionError = "Username already in use";
+							}
+							else if (response.status == LoginStatus::InvalidCredentials)
+							{
+								m_impl->lastConnectionError = "Invalid username/password";
 							}
 							else
 							{
@@ -334,6 +349,16 @@ const PlayerData &WorldClient::localPlayer() const
 	return m_impl->localPlayer;
 }
 
+uint64_t WorldClient::remainingBlockActionCooldownMs() const
+{
+	uint64_t nowMs = m_impl->estimatedServerNowMs();
+	if (m_impl->localPlayer.hot.blockActionReadyAtMs <= nowMs)
+	{
+		return 0;
+	}
+	return m_impl->localPlayer.hot.blockActionReadyAtMs - nowMs;
+}
+
 const std::string &WorldClient::lastConnectionError() const
 {
 	return m_impl->lastConnectionError;
@@ -417,6 +442,32 @@ void WorldClient::sendBreakBlock(int worldX, int worldY, int worldZ)
 	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
 	m_impl->localPlayer.hot.blockActionReadyAtMs =
 		m_impl->estimatedServerNowMs() + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
+}
+
+void WorldClient::sendPlayerMoveUpdate(const glm::vec3 &position, const glm::vec3 &lookDirection)
+{
+	if (!m_impl->connected || m_impl->peer == nullptr)
+	{
+		return;
+	}
+
+	PlayerMoveUpdateMessage message;
+	message.positionX = position.x;
+	message.positionY = position.y;
+	message.positionZ = position.z;
+	message.lookX = lookDirection.x;
+	message.lookY = lookDirection.y;
+	message.lookZ = lookDirection.z;
+
+	std::vector<uint8_t> payload = encodePlayerMoveUpdate(message);
+	ENetPacket *packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
+	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
+}
+
+void WorldClient::updateLocalPlayerTransform(const glm::vec3 &position, const glm::vec3 &lookDirection)
+{
+	m_impl->localPlayer.hot.position = position;
+	m_impl->localPlayer.hot.lookDirection = lookDirection;
 }
 
 void WorldClient::pushEvent(const WorldClientEvent &event)
