@@ -11,3 +11,4 @@ build_minsizerel/
 *.pdf
 *.sqlite3*
 valgrind*.txt
+build_tracy_profiler/

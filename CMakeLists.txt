@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(ENABLE_GL_DEBUG "Enable OpenGL debug output for native builds" ON)
 option(ENABLE_ASAN "Enable Address Sanitizer for debugging" OFF)
+option(ENABLE_TRACY "Enable Tracy Profiler" ON)
 
 add_compile_options(-w)
 
@@ -13,6 +14,11 @@ add_compile_options(-w)
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     message(STATUS "Configuring Release build with optimizations")
     add_compile_options(-O3 -march=native -flto -fno-plt)
+    add_link_options(-flto)
+    add_definitions(-DNDEBUG)
+elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    message(STATUS "Configuring RelWithDebInfo build (optimizations + debug info)")
+    add_compile_options(-O3 -march=native -flto -fno-plt -g3)
     add_link_options(-flto)
     add_definitions(-DNDEBUG)
 else()
@@ -109,6 +115,11 @@ target_link_libraries(VoxPlace PRIVATE
     ${OPENGL_gl_LIBRARY}
 )
 
+if(ENABLE_TRACY)
+    message(STATUS "Integrating Tracy Profiler...")
+    add_subdirectory(dependencies/tracy)
+endif()
+
 set(SERVER_SOURCES
     src/PasswordHasher.cpp
     src/PlayerTable.cpp
@@ -134,3 +145,8 @@ target_link_libraries(VoxPlaceServer PRIVATE
     PkgConfig::SQLITE3
     PkgConfig::ZSTD
 )
+
+if(ENABLE_TRACY)
+    target_link_libraries(VoxPlaceServer PRIVATE Tracy::TracyClient)
+    target_compile_definitions(VoxPlaceServer PRIVATE TRACY_ENABLE)
+endif()

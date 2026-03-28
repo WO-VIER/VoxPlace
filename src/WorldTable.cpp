@@ -17,6 +17,16 @@ namespace
 	constexpr const char *WORLD_STORAGE_ENCODING = "chunk_snapshot_sections_zstd_v1";
 	constexpr int WORLD_STORAGE_ZSTD_LEVEL = 3;
 
+	struct PreparedChunkPayload
+	{
+		int64_t key = 0;
+		int chunkX = 0;
+		int chunkZ = 0;
+		uint64_t revision = 0;
+		uint64_t nowMs = 0;
+		std::vector<uint8_t> payload;
+	};
+
 	uint64_t systemNowMs()
 	{
 		auto now = std::chrono::system_clock::now().time_since_epoch();
@@ -63,6 +73,35 @@ namespace
 			decompressedBuffer.data(),
 			decompressedBuffer.size(),
 			decoded);
+	}
+
+	bool prepareChunkPayload(
+		const VoxelChunkData &chunk,
+		PreparedChunkPayload &prepared,
+		std::string &error)
+	{
+		std::vector<uint8_t> encodedChunk = encodeChunkSnapshot(chunk);
+		size_t maxCompressedSize = ZSTD_compressBound(encodedChunk.size());
+		prepared.payload.resize(maxCompressedSize);
+		size_t compressedSize = ZSTD_compress(
+			prepared.payload.data(),
+			prepared.payload.size(),
+			encodedChunk.data(),
+			encodedChunk.size(),
+			WORLD_STORAGE_ZSTD_LEVEL);
+		if (ZSTD_isError(compressedSize))
+		{
+			error = "Failed to compress world chunk payload: ";
+			error += ZSTD_getErrorName(compressedSize);
+			return false;
+		}
+		prepared.payload.resize(compressedSize);
+		prepared.key = chunkKey(chunk.chunkX, chunk.chunkZ);
+		prepared.chunkX = chunk.chunkX;
+		prepared.chunkZ = chunk.chunkZ;
+		prepared.revision = chunk.revision;
+		prepared.nowMs = systemNowMs();
+		return true;
 	}
 }
 
@@ -126,6 +165,11 @@ bool WorldTable::open(const std::string &databasePath, const std::string &genera
 
 	executeStatementNoLock("PRAGMA journal_mode=WAL;");
 	executeStatementNoLock("PRAGMA synchronous=NORMAL;");
+	if (!preparePersistentStatementsNoLock())
+	{
+		closeNoLock();
+		return false;
+	}
 
 	return true;
 }
@@ -140,6 +184,16 @@ void WorldTable::closeNoLock()
 {
 	if (m_db != nullptr)
 	{
+		if (m_loadChunkStatement != nullptr)
+		{
+			sqlite3_finalize(m_loadChunkStatement);
+			m_loadChunkStatement = nullptr;
+		}
+		if (m_saveChunkStatement != nullptr)
+		{
+			sqlite3_finalize(m_saveChunkStatement);
+			m_saveChunkStatement = nullptr;
+		}
 		sqlite3_close(m_db);
 		m_db = nullptr;
 	}
@@ -161,34 +215,37 @@ bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
 		return false;
 	}
 
-	const char *sql =
-		"SELECT payload FROM world_chunk_table WHERE chunk_key = ?1;";
-
-	sqlite3_stmt *statement = nullptr;
-	if (!prepareStatementNoLock(sql, &statement))
+	if (m_loadChunkStatement == nullptr)
 	{
+		m_lastError = "World load statement is not prepared";
 		return false;
 	}
+	sqlite3_stmt *statement = m_loadChunkStatement;
+	sqlite3_reset(statement);
+	sqlite3_clear_bindings(statement);
 
 	int64_t key = chunkKey(cx, cz);
 	if (sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(key)) != SQLITE_OK)
 	{
 		setLastErrorFromDatabaseNoLock("Failed to bind chunk key for world load");
-		sqlite3_finalize(statement);
+		sqlite3_reset(statement);
+		sqlite3_clear_bindings(statement);
 		return false;
 	}
 
 	int stepResult = sqlite3_step(statement);
 	if (stepResult == SQLITE_DONE)
 	{
-		sqlite3_finalize(statement);
+		sqlite3_reset(statement);
+		sqlite3_clear_bindings(statement);
 		return false;
 	}
 
 	if (stepResult != SQLITE_ROW)
 	{
 		setLastErrorFromDatabaseNoLock("Failed to read world chunk row");
-		sqlite3_finalize(statement);
+		sqlite3_reset(statement);
+		sqlite3_clear_bindings(statement);
 		return false;
 	}
 
@@ -197,7 +254,8 @@ bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
 	if (blob == nullptr || blobSize <= 0)
 	{
 		m_lastError = "World chunk payload is empty";
-		sqlite3_finalize(statement);
+		sqlite3_reset(statement);
+		sqlite3_clear_bindings(statement);
 		return false;
 	}
 
@@ -205,11 +263,12 @@ bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
 	if (!tryDecodeChunkPayload(blob, static_cast<size_t>(blobSize), decoded))
 	{
 		m_lastError = "Failed to decode stored world chunk payload";
-		sqlite3_finalize(statement);
+		sqlite3_reset(statement);
+		sqlite3_clear_bindings(statement);
 		return false;
 	}
-
-	sqlite3_finalize(statement);
+	sqlite3_reset(statement);
+	sqlite3_clear_bindings(statement);
 
 	if (decoded.chunk.chunkX != cx || decoded.chunk.chunkZ != cz)
 	{
@@ -223,6 +282,33 @@ bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
 
 bool WorldTable::saveChunk(const VoxelChunkData &chunk)
 {
+	std::vector<VoxelChunkData> chunks;
+	chunks.push_back(chunk);
+	return saveChunksBatch(chunks);
+}
+
+bool WorldTable::saveChunksBatch(const std::vector<VoxelChunkData> &chunks)
+{
+	if (chunks.empty())
+	{
+		return true;
+	}
+
+	std::vector<PreparedChunkPayload> preparedChunks;
+	preparedChunks.reserve(chunks.size());
+	for (const VoxelChunkData &chunk : chunks)
+	{
+		PreparedChunkPayload prepared;
+		std::string prepareError;
+		if (!prepareChunkPayload(chunk, prepared, prepareError))
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			m_lastError = std::move(prepareError);
+			return false;
+		}
+		preparedChunks.push_back(std::move(prepared));
+	}
+
 	std::lock_guard<std::mutex> lock(m_mutex);
 	m_lastError.clear();
 	if (m_db == nullptr)
@@ -230,57 +316,111 @@ bool WorldTable::saveChunk(const VoxelChunkData &chunk)
 		m_lastError = "World database is not open";
 		return false;
 	}
-
-	std::vector<uint8_t> encodedChunk = encodeChunkSnapshot(chunk);
-	size_t maxCompressedSize = ZSTD_compressBound(encodedChunk.size());
-	std::vector<uint8_t> payload(maxCompressedSize);
-	size_t compressedSize = ZSTD_compress(
-		payload.data(),
-		payload.size(),
-		encodedChunk.data(),
-		encodedChunk.size(),
-		WORLD_STORAGE_ZSTD_LEVEL);
-	if (ZSTD_isError(compressedSize))
+	if (!beginTransactionNoLock())
 	{
-		m_lastError = "Failed to compress world chunk payload: ";
-		m_lastError += ZSTD_getErrorName(compressedSize);
 		return false;
 	}
-	payload.resize(compressedSize);
-	uint64_t nowMs = systemNowMs();
+	for (const PreparedChunkPayload &prepared : preparedChunks)
+	{
+		if (!saveChunkUsingPreparedStatementNoLock(
+				prepared.key,
+				prepared.chunkX,
+				prepared.chunkZ,
+				prepared.revision,
+				prepared.payload.data(),
+				prepared.payload.size(),
+				prepared.nowMs))
+		{
+			rollbackTransactionNoLock();
+			return false;
+		}
+	}
+	if (!commitTransactionNoLock())
+	{
+		rollbackTransactionNoLock();
+		return false;
+	}
+	return true;
+}
 
-	const char *sql =
+bool WorldTable::preparePersistentStatementsNoLock()
+{
+	const char *loadSql =
+		"SELECT payload FROM world_chunk_table WHERE chunk_key = ?1;";
+	if (!prepareStatementNoLock(loadSql, &m_loadChunkStatement))
+	{
+		return false;
+	}
+
+	const char *saveSql =
 		"REPLACE INTO world_chunk_table "
 		"(chunk_key, chunk_x, chunk_z, revision, payload, updated_at_ms) "
 		"VALUES (?1, ?2, ?3, ?4, ?5, ?6);";
-
-	sqlite3_stmt *statement = nullptr;
-	if (!prepareStatementNoLock(sql, &statement))
+	if (!prepareStatementNoLock(saveSql, &m_saveChunkStatement))
 	{
 		return false;
 	}
 
-	int64_t key = chunkKey(chunk.chunkX, chunk.chunkZ);
+	return true;
+}
+
+bool WorldTable::beginTransactionNoLock()
+{
+	return executeStatementNoLock("BEGIN IMMEDIATE TRANSACTION;");
+}
+
+bool WorldTable::commitTransactionNoLock()
+{
+	return executeStatementNoLock("COMMIT;");
+}
+
+void WorldTable::rollbackTransactionNoLock()
+{
+	(void)executeStatementNoLock("ROLLBACK;");
+}
+
+bool WorldTable::saveChunkUsingPreparedStatementNoLock(
+	int64_t key,
+	int chunkX,
+	int chunkZ,
+	uint64_t revision,
+	const void *payloadData,
+	size_t payloadSize,
+	uint64_t nowMs)
+{
+	if (m_saveChunkStatement == nullptr)
+	{
+		m_lastError = "World save statement is not prepared";
+		return false;
+	}
+
+	sqlite3_stmt *statement = m_saveChunkStatement;
+	sqlite3_reset(statement);
+	sqlite3_clear_bindings(statement);
+
 	if (sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(key)) != SQLITE_OK ||
-		sqlite3_bind_int(statement, 2, chunk.chunkX) != SQLITE_OK ||
-		sqlite3_bind_int(statement, 3, chunk.chunkZ) != SQLITE_OK ||
-		sqlite3_bind_int64(statement, 4, static_cast<sqlite3_int64>(chunk.revision)) != SQLITE_OK ||
-		sqlite3_bind_blob(statement, 5, payload.data(), static_cast<int>(payload.size()), SQLITE_TRANSIENT) != SQLITE_OK ||
+		sqlite3_bind_int(statement, 2, chunkX) != SQLITE_OK ||
+		sqlite3_bind_int(statement, 3, chunkZ) != SQLITE_OK ||
+		sqlite3_bind_int64(statement, 4, static_cast<sqlite3_int64>(revision)) != SQLITE_OK ||
+		sqlite3_bind_blob(statement, 5, payloadData, static_cast<int>(payloadSize), SQLITE_TRANSIENT) != SQLITE_OK ||
 		sqlite3_bind_int64(statement, 6, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK)
 	{
 		setLastErrorFromDatabaseNoLock("Failed to bind world chunk save statement");
-		sqlite3_finalize(statement);
+		sqlite3_reset(statement);
+		sqlite3_clear_bindings(statement);
 		return false;
 	}
 
 	if (sqlite3_step(statement) != SQLITE_DONE)
 	{
 		setLastErrorFromDatabaseNoLock("Failed to save world chunk");
-		sqlite3_finalize(statement);
+		sqlite3_reset(statement);
+		sqlite3_clear_bindings(statement);
 		return false;
 	}
 
-	sqlite3_finalize(statement);
+	sqlite3_reset(statement);
+	sqlite3_clear_bindings(statement);
 	return true;
 }
 
