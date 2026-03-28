@@ -117,7 +117,7 @@ target_link_libraries(VoxPlace PRIVATE
 
 if(ENABLE_TRACY)
     message(STATUS "Integrating Tracy Profiler...")
-    add_subdirectory(dependencies/tracy)
+    add_subdirectory(thirdparty/tracy)
 endif()
 
 set(SERVER_SOURCES
