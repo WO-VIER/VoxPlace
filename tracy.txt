@@ -1,0 +1,1 @@
+ cmake -B build_tracy_profiler -S dependencies/tracy/profiler -DCMAKE_BUILD_TYPE=Release -DLEGACY=ON && cmake --build build_tracy_profiler -j$(nproc)
