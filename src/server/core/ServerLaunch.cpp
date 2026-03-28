@@ -90,20 +90,32 @@ namespace
 		}
 		return "voxplace_players_classic_voxplace.sqlite3";
 	}
+
+	std::string defaultWorldDatabasePath(WorldGenerationMode generationMode)
+	{
+		if (generationMode == WorldGenerationMode::ClassicStreaming)
+		{
+			return "voxplace_world_classic_gen.sqlite3";
+		}
+		return "voxplace_world_classic_voxplace.sqlite3";
+	}
+
 }
 
 void printServerUsage(const char *programName)
 {
-	std::cout << "Usage: " << programName << " [--classic-gen] [--port <port>] [--db <path>] [--help]" << std::endl;
+	std::cout << "Usage: " << programName << " [--classic-gen] [--port <port>] [--db <path>] [--world-db <path>] [--help]" << std::endl;
 	std::cout << "  --classic-gen  Enable classic streaming generation around player movement" << std::endl;
 	std::cout << "  --port <port>  Override server listen port (default: " << DEFAULT_SERVER_PORT << ")" << std::endl;
 	std::cout << "  --db <path>    SQLite file for player persistence" << std::endl;
+	std::cout << "  --world-db <path> SQLite file for world chunk persistence" << std::endl;
 	std::cout << "  --help         Show this help message" << std::endl;
 }
 
 ServerLaunchParseResult parseServerLaunchOptions(int argc, char **argv, ServerLaunchOptions &options)
 {
 	bool playerDatabasePathOverridden = false;
+	bool worldDatabasePathOverridden = false;
 
 	for (int argumentIndex = 1; argumentIndex < argc; argumentIndex++)
 	{
@@ -148,7 +160,19 @@ ServerLaunchParseResult parseServerLaunchOptions(int argc, char **argv, ServerLa
 			playerDatabasePathOverridden = true;
 			continue;
 		}
-
+		if (argument == "--world-db")
+		{
+			argumentIndex++;
+			if (argumentIndex >= argc)
+			{
+				std::cerr << "Missing value after --world-db" << std::endl;
+				printServerUsage(argv[0]);
+				return ServerLaunchParseResult::Error;
+			}
+			options.worldDatabasePath = argv[argumentIndex];
+			worldDatabasePathOverridden = true;
+			continue;
+		}
 		std::cerr << "Unknown argument: " << argument << std::endl;
 		printServerUsage(argv[0]);
 		return ServerLaunchParseResult::Error;
@@ -157,6 +181,10 @@ ServerLaunchParseResult parseServerLaunchOptions(int argc, char **argv, ServerLa
 	if (!playerDatabasePathOverridden)
 	{
 		options.playerDatabasePath = defaultPlayerDatabasePath(options.generationMode);
+	}
+	if (!worldDatabasePathOverridden)
+	{
+		options.worldDatabasePath = defaultWorldDatabasePath(options.generationMode);
 	}
 
 	return ServerLaunchParseResult::Success;

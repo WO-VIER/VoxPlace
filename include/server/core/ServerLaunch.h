@@ -14,6 +14,7 @@ struct ServerLaunchOptions
 	WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier;
 	uint16_t port = DEFAULT_SERVER_PORT;
 	std::string playerDatabasePath = "voxplace_players.sqlite3";
+	std::string worldDatabasePath = "voxplace_world.sqlite3";
 };
 
 struct ServerEnvironmentOptions

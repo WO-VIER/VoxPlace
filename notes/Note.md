@@ -27,6 +27,7 @@ valgrind -s --leak-check=full --show-leak-kinds=all --track-origins=yes ./build/
 13. [Bonnes Pratiques OpenGL](#13-bonnes-pratiques-opengl)
 14. [Player Objet vs ECS](#14-player-objet-vs-ecs)
 15. [Auth Joueur & Login Screen](#15-auth-joueur--login-screen)
+16. [Bench Stockage Monde](#16-bench-stockage-monde)
 
 ---
 
@@ -3826,6 +3827,151 @@ Cette structure prépare bien la suite :
 - écran titre encore plus travaillé
 - persistance du monde plus tard
 
+## 16. Bench Stockage Monde
+
+Un benchmark local a été ajouté pour comparer les coûts principaux du stockage monde :
+
+- génération procédurale
+- sérialisation actuelle par sections
+- RLE
+- compression type `ourCraft` avec `Zstd` niveau 3
+- écriture / lecture SQLite
+- écriture / lecture fichier unique indexé
+- écriture SQLite unitaire vs écriture SQLite en transaction batch
+
+### 16.1 Commandes
+
+Compilation :
+
+```bash
+cmake --build build --target VoxPlaceWorldBench -j4
+```
+
+Exécution :
+
+```bash
+./build/VoxPlaceWorldBench 256
+```
+
+### 16.2 Résultats observés sur 256 chunks
+
+| Mesure | Coût moyen |
+|--------|------------|
+| Génération chunk | **3.45 ms/chunk** |
+| Encode sections | **0.023 ms/chunk** |
+| Decode sections | **0.015 ms/chunk** |
+| Encode RLE | **0.654 ms/chunk** |
+| Decode RLE | **0.068 ms/chunk** |
+| Encode Zstd lvl 3 (raw chunk) | **0.220 ms/chunk** |
+| Decode Zstd lvl 3 (raw chunk) | **0.046 ms/chunk** |
+| Encode Zstd lvl 3 (sections) | **0.208 ms/chunk** |
+| Decode Zstd lvl 3 (sections) | **0.059 ms/chunk** |
+| SQLite save Zstd sections | **0.245 ms/chunk** |
+| SQLite load Zstd sections | **0.065 ms/chunk** |
+| SQLite parcours spatial aller Zstd sections | **0.064 ms/chunk** |
+| SQLite parcours spatial retour Zstd sections | **0.064 ms/chunk** |
+| SQLite save Zstd sections (batch transaction) | **0.037 ms/chunk** |
+| Fichier unique write Zstd sections | **0.0048 ms/chunk** |
+| Fichier unique load Zstd sections séquentiel | **0.061 ms/chunk** |
+| Fichier unique load Zstd sections aléatoire | **0.060 ms/chunk** |
+| Fichier unique parcours spatial aller Zstd sections | **0.058 ms/chunk** |
+| Fichier unique parcours spatial retour Zstd sections | **0.058 ms/chunk** |
+
+### 16.3 Tailles moyennes observées
+
+| Format | Taille moyenne |
+|--------|----------------|
+| Chunk brut | **65536 bytes** |
+| Snapshot sections | **~42450 bytes** |
+| RLE | **~62493 bytes** |
+| Zstd niveau 3 sur raw | **~16165 bytes** |
+| Zstd niveau 3 sur sections | **~15684 bytes** |
+| SQLite world file total | **~4239360 bytes** pour 256 chunks |
+| Fichier unique indexé total | **~4021279 bytes** pour 256 chunks |
+
+### 16.4 Interprétation
+
+Le point clé du benchmark est le suivant :
+
+- la **génération** d'un chunk coûte toujours très nettement plus que son **chargement depuis stockage**
+- recharger un chunk déjà persisté reste environ **50x plus rapide** que le régénérer
+- sur le **load**, SQLite et le fichier unique indexé sont dans le **même ordre de grandeur**
+- sur un scénario de **parcours spatial simulé avant puis retour arrière**, SQLite et le fichier restent aussi dans le même ordre de grandeur
+- le gros écart observé avant venait surtout du **write path SQLite chunk par chunk**
+- dès qu'on utilise une **transaction batch**, SQLite devient beaucoup plus compétitif en écriture
+
+Conclusion pratique :
+
+- si l'objectif prioritaire est la **latence** / le **temps CPU** / l'**expérience utilisateur** sur les zones revisitées, stocker tous les chunks visités ou générés est meilleur que stocker seulement les chunks modifiés
+- si l'objectif prioritaire est l'**économie disque**, stocker uniquement les chunks modifiés reste plus élégant, mais moins bon pour la latence de revisit
+- si l'objectif prioritaire est le **backend le plus simple à maintenir**, SQLite reste très défendable car le gain du fichier unique sur le load est faible
+
+### 16.5 Verdict RLE vs Zstd
+
+Le benchmark montre clairement que :
+
+- **RLE n'est pas un bon candidat** pour le terrain actuel de VoxPlace
+- le ratio est presque nul car les chunks ont beaucoup de variations de couleurs et de hauteur
+- **Zstd niveau 3** donne au contraire un gain très fort en taille avec un coût CPU modéré
+- compresser le **payload sections** avec `Zstd` est légèrement meilleur que compresser le chunk brut complet
+
+### 16.6 Décision retenue
+
+Direction choisie à ce stade :
+
+- **tout chunk en DB**
+- backend monde retenu pour le projet : **SQLite**
+- compression cible : **Zstd niveau 3**
+
+Stratégie de développement retenue :
+
+- logique `load or generate`
+- **tout chunk en stockage persistant**
+- `payload` chunk compressé en **Zstd niveau 3**
+- backend `SQLite` pour le monde
+- backend `SQLite` pour les joueurs aussi
+
+Lecture finale du benchmark :
+
+- le fichier unique indexé est très bon, mais il ne montre pas un avantage massif au chargement
+- SQLite chargé en chunks compressés reste très compétitif
+- avec une transaction batch, SQLite réduit fortement son handicap à l'écriture
+- le gain du backend fichier n'est pas suffisamment décisif pour justifier une architecture plus difficile à expliquer dans le cadre du projet
+- à ce stade, le meilleur compromis global pour VoxPlace devient **SQLite + Zstd niveau 3**
+
+Note pratique sur le bench :
+
+- le bench crée des fichiers temporaires (`.sqlite3`, `-wal`, `-shm`, `.world`) dans le dossier temporaire système
+- ces fichiers sont **supprimés automatiquement** à la fin de l'exécution
+- ce benchmark reste un **bench de stockage pur** ; il ne lance ni le client réel, ni le rendu, ni le réseau, ni le mesh build GPU/CPU
+
+### 16.7 Campagne End-to-End Réelle
+
+Une campagne de vrais runs client + serveur a été exécutée pendant l'évaluation pour comparer `sqlite` et `file` en conditions réelles.
+
+Résumé obtenu sur cette campagne :
+
+| Backend / mode | fps_avg_mean | frame_ms_avg_mean | render_cpu_ms_avg_mean |
+|----------------|--------------|-------------------|------------------------|
+| `sqlite/cold` | **1659.880** | **0.603** | **0.0106** |
+| `sqlite/warm` | **1668.630** | **0.600** | **0.0109** |
+| `file/cold` | **1661.605** | **0.602** | **0.0105** |
+| `file/warm` | **1675.682** | **0.597** | **0.0108** |
+
+Lecture honnête :
+
+- l'écart n'est **pas massif**
+- mais le backend `file` ressort **légèrement meilleur** que `sqlite` sur cette campagne réelle, en `cold` comme en `warm`
+- l'avantage le plus lisible apparaît sur `warm`, donc même quand le monde a déjà été persisté
+- en pratique, cet avantage reste trop faible pour compenser la complexité supplémentaire côté implémentation et explication
+- pour un TFE / mémoire, le critère d'expliquabilité et de simplicité d'architecture compte aussi
+
+Conclusion finale actuelle :
+
+- **Joueurs** : SQLite
+- **Monde** : SQLite + Zstd niveau 3
+- **Méthode de chargement** : `load or generate`
+
 ---
 
-*Dernière mise à jour : 26 mars 2026*
+*Dernière mise à jour : 27 mars 2026*

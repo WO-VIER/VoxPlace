@@ -25,6 +25,7 @@ if(NOT EMSCRIPTEN)
     endif()
     pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
     pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
+    pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
     set(OpenGL_GL_PREFERENCE "GLVND")
     find_package(OpenGL REQUIRED)
 else()
@@ -120,6 +121,7 @@ endif()
 set(SERVER_SOURCES
     src/PasswordHasher.cpp
     src/PlayerTable.cpp
+    src/WorldTable.cpp
     src/server/core/ServerLaunch.cpp
     src/server/main.cpp
     src/WorldServer.cpp
@@ -139,4 +141,25 @@ target_link_libraries(VoxPlaceServer PRIVATE
     PkgConfig::ENET
     PkgConfig::SODIUM
     PkgConfig::SQLITE3
+    PkgConfig::ZSTD
+)
+
+set(BENCH_SOURCES
+    src/server/world_storage_bench.cpp
+    src/WorldTable.cpp
+)
+
+add_executable(VoxPlaceWorldBench ${BENCH_SOURCES})
+
+target_include_directories(VoxPlaceWorldBench PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/dependencies
+    ${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
+)
+
+target_link_libraries(VoxPlaceWorldBench PRIVATE
+    voxplace_core
+    PkgConfig::SQLITE3
+    PkgConfig::ZSTD
 )

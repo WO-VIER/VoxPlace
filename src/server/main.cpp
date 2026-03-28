@@ -45,12 +45,14 @@ int main(int argc, char **argv)
 	{
 		std::cout << "Server worker profiling requested via environment" << std::endl;
 	}
+	std::cout << "World DB: " << launchOptions.worldDatabasePath << std::endl;
 
 	WorldServer server(
 		launchOptions.port,
 		std::make_unique<TerrainChunkGenerator>(42),
 		launchOptions.generationMode,
 		launchOptions.playerDatabasePath,
+		launchOptions.worldDatabasePath,
 		environmentOptions);
 	if (!server.start())
 	{

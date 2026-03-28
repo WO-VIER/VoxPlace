@@ -16,13 +16,14 @@ public:
 				std::unique_ptr<IChunkGenerator> generator,
 				WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier,
 				std::string playerDatabasePath = "voxplace_players.sqlite3",
+				std::string worldDatabasePath = "voxplace_world.sqlite3",
 				ServerEnvironmentOptions environmentOptions = {});
 	~WorldServer();
 
 	bool start();
 	int run();
 	void stop();
-
+	
 private:
 	struct Impl;
 	Impl *m_impl;

@@ -7,6 +7,7 @@
 #include <PlayerSessionData.h>
 #include <PlayerTable.h>
 #include <PlayerUsername.h>
+#include <WorldTable.h>
 
 #include <enet/enet.h>
 
@@ -34,6 +35,7 @@ namespace
 	constexpr int SERVER_TICK_MS = 50;
 	constexpr size_t DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK = 4;
 	constexpr size_t DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 5;
+	constexpr size_t DEFAULT_MAX_CHUNK_SAVES_PER_TICK = 1;
 	constexpr size_t CLASSIC_MIN_INTEGRATED_CHUNKS_PER_TICK = 8;
 	constexpr size_t CLASSIC_MID_INTEGRATED_CHUNKS_PER_TICK = 16;
 	constexpr size_t CLASSIC_MAX_INTEGRATED_CHUNKS_PER_TICK = 32;
@@ -121,14 +123,16 @@ struct WorldServer::Impl
 		std::string usernameKey;
 	};
 
-	uint16_t port = 0;
-	std::string playerDatabasePath;
+		uint16_t port = 0;
+		std::string playerDatabasePath;
+		std::string worldDatabasePath;
 	ServerEnvironmentOptions environmentOptions;
 	bool enetInitialized = false;
 	ENetHost *host = nullptr;
 	std::unique_ptr<IChunkGenerator> generator;
-	WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier;
-	PlayerTable playerTable;
+		WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier;
+		PlayerTable playerTable;
+		WorldTable worldTable;
 	PasswordHasher passwordHasher;
 
 	WorldFrontier frontier;
@@ -136,6 +140,9 @@ struct WorldServer::Impl
 	std::unordered_set<int64_t> activeChunkKeys;
 	std::unordered_map<ENetPeer *, ClientSession> clients;
 	std::unordered_map<std::string, uint64_t> activeUsernames;
+	std::unordered_set<int64_t> dirtyChunkKeys;
+	std::unordered_set<int64_t> queuedDirtyChunkKeys;
+	std::deque<int64_t> dirtyChunkQueue;
 
 	std::atomic<bool> running = false;
 	std::mutex taskMutex;
@@ -160,13 +167,15 @@ struct WorldServer::Impl
 	size_t profileSnapshotRawBytes = 0;
 	size_t profileSnapshotSectionCount = 0;
 
-	Impl(uint16_t listenPort,
-		 std::unique_ptr<IChunkGenerator> worldGenerator,
-		 WorldGenerationMode selectedGenerationMode,
-		 std::string selectedPlayerDatabasePath,
-		 ServerEnvironmentOptions selectedEnvironmentOptions)
-		: port(listenPort),
-		  playerDatabasePath(std::move(selectedPlayerDatabasePath)),
+		Impl(uint16_t listenPort,
+			 std::unique_ptr<IChunkGenerator> worldGenerator,
+			 WorldGenerationMode selectedGenerationMode,
+			 std::string selectedPlayerDatabasePath,
+			 std::string selectedWorldDatabasePath,
+			 ServerEnvironmentOptions selectedEnvironmentOptions)
+			: port(listenPort),
+			  playerDatabasePath(std::move(selectedPlayerDatabasePath)),
+			  worldDatabasePath(std::move(selectedWorldDatabasePath)),
 		  environmentOptions(selectedEnvironmentOptions),
 		  generator(std::move(worldGenerator)),
 		  generationMode(selectedGenerationMode),
@@ -186,12 +195,19 @@ struct WorldServer::Impl
 
 	bool start()
 	{
-		if (!playerTable.open(playerDatabasePath))
-		{
-			std::cerr << "Failed to open player database: "
-					  << playerTable.lastError() << std::endl;
-			return false;
-		}
+			if (!playerTable.open(playerDatabasePath))
+			{
+				std::cerr << "Failed to open player database: "
+						  << playerTable.lastError() << std::endl;
+				return false;
+			}
+			if (!worldTable.open(worldDatabasePath, worldGenerationModeName(generationMode)))
+			{
+				std::cerr << "Failed to open world database: "
+						  << worldTable.lastError() << std::endl;
+				playerTable.close();
+				return false;
+			}
 
 		if (enet_initialize() != 0)
 		{
@@ -216,10 +232,11 @@ struct WorldServer::Impl
 		}
 		profileWindowStart = std::chrono::steady_clock::now();
 
-		std::cout << "WorldServer listening on port " << port
-				  << " with " << workerCount << " generation worker(s)"
-				  << " in " << worldGenerationModeName(generationMode)
-				  << " mode" << std::endl;
+			std::cout << "WorldServer listening on port " << port
+					  << " with " << workerCount << " generation worker(s)"
+					  << " in " << worldGenerationModeName(generationMode)
+					  << " mode" << std::endl;
+			std::cout << "World DB path: " << worldDatabasePath << std::endl;
 		if (profileWorkers)
 		{
 			std::cout << "Server worker profiling enabled" << std::endl;
@@ -233,6 +250,7 @@ struct WorldServer::Impl
 	{
 		if (!running)
 		{
+			flushDirtyChunks(std::numeric_limits<size_t>::max());
 			saveAllAuthenticatedPlayers();
 			cleanupNetwork();
 			return;
@@ -248,6 +266,7 @@ struct WorldServer::Impl
 			}
 		}
 		workers.clear();
+		flushDirtyChunks(std::numeric_limits<size_t>::max());
 		saveAllAuthenticatedPlayers();
 		cleanupNetwork();
 	}
@@ -264,7 +283,9 @@ struct WorldServer::Impl
 			enet_deinitialize();
 			enetInitialized = false;
 		}
-	}
+			worldTable.close();
+			playerTable.close();
+		}
 
 	int run()
 	{
@@ -374,7 +395,24 @@ struct WorldServer::Impl
 			}
 
 			VoxelChunkData chunk(coord.x, coord.z);
-			generator->fillChunk(chunk);
+				bool loadedFromStorage = worldTable.loadChunk(coord.x, coord.z, chunk);
+				if (!loadedFromStorage)
+				{
+					if (!worldTable.lastError().empty())
+					{
+						std::cerr << "Failed to load world chunk " << coord.x << ","
+								  << coord.z << " from storage: "
+								  << worldTable.lastError() << std::endl;
+					}
+					generator->fillChunk(chunk);
+					if (!worldTable.saveChunk(chunk))
+					{
+						std::cerr << "Failed to persist generated world chunk "
+								  << coord.x << "," << coord.z << ": "
+								  << worldTable.lastError() << std::endl;
+						markChunkDirty(chunkKey(coord.x, coord.z));
+					}
+				}
 
 			std::lock_guard<std::mutex> readyLock(readyMutex);
 			readyChunks.push_back(std::move(chunk));
@@ -418,6 +456,7 @@ struct WorldServer::Impl
 		{
 			sendQueuedChunks(entry.second);
 		}
+		flushDirtyChunks(DEFAULT_MAX_CHUNK_SAVES_PER_TICK);
 		enet_host_flush(host);
 		logWorkerProfileWindowIfNeeded();
 	}
@@ -650,6 +689,54 @@ struct WorldServer::Impl
 		for (auto &entry : clients)
 		{
 			savePlayerForSession(entry.second);
+		}
+	}
+
+	void markChunkDirty(int64_t key)
+	{
+		dirtyChunkKeys.insert(key);
+		if (queuedDirtyChunkKeys.insert(key).second)
+		{
+			dirtyChunkQueue.push_back(key);
+		}
+	}
+
+	void flushDirtyChunks(size_t maxCount)
+	{
+		size_t savedCount = 0;
+		while (savedCount < maxCount && !dirtyChunkQueue.empty())
+		{
+			int64_t key = dirtyChunkQueue.front();
+			dirtyChunkQueue.pop_front();
+			queuedDirtyChunkKeys.erase(key);
+
+			if (dirtyChunkKeys.find(key) == dirtyChunkKeys.end())
+			{
+				continue;
+			}
+
+			auto worldIt = worldChunks.find(key);
+			if (worldIt == worldChunks.end())
+			{
+				dirtyChunkKeys.erase(key);
+				continue;
+			}
+
+				if (!worldTable.saveChunk(worldIt->second))
+				{
+					std::cerr << "Failed to save world chunk "
+							  << worldIt->second.chunkX << ","
+							  << worldIt->second.chunkZ << ": "
+							  << worldTable.lastError() << std::endl;
+					if (queuedDirtyChunkKeys.insert(key).second)
+					{
+						dirtyChunkQueue.push_back(key);
+				}
+				break;
+			}
+
+			dirtyChunkKeys.erase(key);
+			savedCount++;
 		}
 	}
 
@@ -964,6 +1051,7 @@ struct WorldServer::Impl
 			return;
 		}
 
+		markChunkDirty(key);
 		session.player.hot.blockActionReadyAtMs = nowMs + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
 
 		BlockUpdateBroadcastMessage update;
@@ -1201,6 +1289,7 @@ WorldServer::WorldServer(uint16_t port,
 						 std::unique_ptr<IChunkGenerator> generator,
 						 WorldGenerationMode generationMode,
 						 std::string playerDatabasePath,
+						 std::string worldDatabasePath,
 						 ServerEnvironmentOptions environmentOptions)
 {
 	m_impl = new Impl(
@@ -1208,6 +1297,7 @@ WorldServer::WorldServer(uint16_t port,
 		std::move(generator),
 		generationMode,
 		std::move(playerDatabasePath),
+		std::move(worldDatabasePath),
 		environmentOptions);
 }
 
