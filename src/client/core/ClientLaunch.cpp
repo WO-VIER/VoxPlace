@@ -93,8 +93,8 @@ bool tryReadEnvFloat(const char *name, float &value)
 void printClientUsage(const char *programName)
 {
 	std::cout << "Usage: " << programName << " [server_host server_port username]" << std::endl;
-	std::cout << "Example: " << programName << " 127.0.0.1 28713 Alice" << std::endl;
-	std::cout << "         " << programName << " 192.168.1.42 28713 Bob_42" << std::endl;
+	std::cout << "Example: " << programName << " 127.0.0.1 28713 Player" << std::endl;
+	std::cout << "         " << programName << " 192.168.1.42 28713 Player" << std::endl;
 }
 
 bool parseClientPort(std::string_view rawPort, uint16_t &port)

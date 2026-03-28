@@ -1,10 +1,13 @@
 .cache
 .PVS-Studio
 .PVS-Studio/
+.agents/
+notes/
 build
-build_wasm
 build_asan
 build_release/
+build_relwithdebinfo/
+build_minsizerel/
 *.pdf
-.agents/rules/cpp-style.md
 *.sqlite3*
+valgrind*.txt

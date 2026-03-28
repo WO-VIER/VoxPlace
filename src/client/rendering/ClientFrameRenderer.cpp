@@ -1,11 +1,6 @@
 // GLAD doit être inclus en premier !
-#if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN_WEB)
-#include <GLFW/glfw3.h>
-#include <emscripten.h>
-#else
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-#endif
 
 #include <client/rendering/ClientFrameRenderer.h>
 

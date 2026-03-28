@@ -1,0 +1,12 @@
+# LeakSanitizer suppressions for external runtime noise observed on Linux/X11/GLX.
+# These patterns intentionally target system / driver / DBus stacks, not VoxPlace code.
+
+leak:dbus_message_new_empty_header
+leak:_dbus_message_loader_queue_messages
+leak:dbus_connection_send_with_reply_and_block
+leak:internal_bus_get
+
+leak:glXQueryExtensionsString
+leak:_glfwCreateWindowX11
+leak:_glfwCreateContextGLX
+leak:extensionSupportedGLX

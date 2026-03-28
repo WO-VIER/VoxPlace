@@ -7,30 +7,37 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(ENABLE_GL_DEBUG "Enable OpenGL debug output for native builds" ON)
 option(ENABLE_ASAN "Enable Address Sanitizer for debugging" OFF)
 
-if(NOT EMSCRIPTEN)
-    add_compile_options(-w)
+add_compile_options(-w)
 
-    if(ENABLE_ASAN)
-        add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g3)
-        add_link_options(-fsanitize=address)
-    endif()
-endif()
-
-if(NOT EMSCRIPTEN)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
-    pkg_check_modules(ENET QUIET IMPORTED_TARGET libenet)
-    if(NOT ENET_FOUND)
-        pkg_check_modules(ENET REQUIRED IMPORTED_TARGET enet)
-    endif()
-    pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
-    pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
-    pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
-    set(OpenGL_GL_PREFERENCE "GLVND")
-    find_package(OpenGL REQUIRED)
+# Build-specific flags
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    message(STATUS "Configuring Release build with optimizations")
+    add_compile_options(-O3 -march=native -flto -fno-plt)
+    add_link_options(-flto)
+    add_definitions(-DNDEBUG)
 else()
-    set(OPENGL_gl_LIBRARY "")
+    message(STATUS "Configuring Debug build")
+    add_compile_options(-g3 -O0 -fbounds-check)
+    add_definitions(-DDEBUG)
 endif()
+
+if(ENABLE_ASAN)
+    message(STATUS "Address Sanitizer enabled")
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+endif()
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
+pkg_check_modules(ENET QUIET IMPORTED_TARGET libenet)
+if(NOT ENET_FOUND)
+    pkg_check_modules(ENET REQUIRED IMPORTED_TARGET enet)
+endif()
+pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
+pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
+set(OpenGL_GL_PREFERENCE "GLVND")
+find_package(OpenGL REQUIRED)
 
 set(CORE_SOURCES
     src/WorldProtocol.cpp
@@ -74,19 +81,15 @@ set(CLIENT_SOURCES
     thirdparty/imgui/backends/imgui_impl_opengl3.cpp
 )
 
-if(NOT EMSCRIPTEN)
-    list(APPEND CLIENT_SOURCES src/glad.c)
-    if(ENABLE_GL_DEBUG)
-        list(APPEND CLIENT_SOURCES src/errorReporting.cpp)
-    endif()
+list(APPEND CLIENT_SOURCES src/glad.c)
+if(ENABLE_GL_DEBUG)
+    list(APPEND CLIENT_SOURCES src/errorReporting.cpp)
 endif()
 
 add_executable(VoxPlace ${CLIENT_SOURCES})
 
-if(NOT EMSCRIPTEN)
-    if(ENABLE_GL_DEBUG)
-        target_compile_definitions(VoxPlace PRIVATE ENABLE_GL_DEBUG)
-    endif()
+if(ENABLE_GL_DEBUG)
+    target_compile_definitions(VoxPlace PRIVATE ENABLE_GL_DEBUG)
 endif()
 
 target_include_directories(VoxPlace PRIVATE
@@ -100,23 +103,11 @@ target_include_directories(VoxPlace PRIVATE
 
 target_link_libraries(VoxPlace PRIVATE voxplace_core)
 
-if(EMSCRIPTEN)
-    set_target_properties(VoxPlace PROPERTIES SUFFIX ".html")
-    target_compile_definitions(VoxPlace PRIVATE EMSCRIPTEN_WEB)
-    target_link_options(VoxPlace PRIVATE
-        "-sUSE_WEBGL2=1"
-        "-sFULL_ES3=1"
-        "-sALLOW_MEMORY_GROWTH=1"
-        "-sWASM=1"
-        "-sUSE_GLFW=3"
-    )
-else()
-    target_link_libraries(VoxPlace PRIVATE
-        PkgConfig::GLFW
-        PkgConfig::ENET
-        ${OPENGL_gl_LIBRARY}
-    )
-endif()
+target_link_libraries(VoxPlace PRIVATE
+    PkgConfig::GLFW
+    PkgConfig::ENET
+    ${OPENGL_gl_LIBRARY}
+)
 
 set(SERVER_SOURCES
     src/PasswordHasher.cpp
@@ -140,26 +131,6 @@ target_link_libraries(VoxPlaceServer PRIVATE
     voxplace_core
     PkgConfig::ENET
     PkgConfig::SODIUM
-    PkgConfig::SQLITE3
-    PkgConfig::ZSTD
-)
-
-set(BENCH_SOURCES
-    src/server/world_storage_bench.cpp
-    src/WorldTable.cpp
-)
-
-add_executable(VoxPlaceWorldBench ${BENCH_SOURCES})
-
-target_include_directories(VoxPlaceWorldBench PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/dependencies
-    ${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
-)
-
-target_link_libraries(VoxPlaceWorldBench PRIVATE
-    voxplace_core
     PkgConfig::SQLITE3
     PkgConfig::ZSTD
 )

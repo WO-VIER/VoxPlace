@@ -38,7 +38,16 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [],
+            "environment": [
+                {
+                    "name": "ASAN_OPTIONS",
+                    "value": "detect_leaks=1:halt_on_error=1:abort_on_error=1"
+                },
+                {
+                    "name": "LSAN_OPTIONS",
+                    "value": "suppressions=${workspaceFolder}/scripts/lsan_suppressions.txt:print_suppressions=0"
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb",

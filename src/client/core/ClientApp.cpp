@@ -1,11 +1,6 @@
 // GLAD doit être inclus en premier !
-#if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN_WEB)
-#include <GLFW/glfw3.h>
-#include <emscripten.h>
-#else
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-#endif
 
 #include <client/core/ClientApp.h>
 
@@ -182,13 +177,11 @@ namespace
 			installClientInputCallbacks(m_runtime.window, m_runtime.gameState, m_runtime.camera);
 			glfwSetInputMode(m_runtime.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
-#ifndef __EMSCRIPTEN__
 			if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
 			{
 				std::cerr << "Failed to initialize GLAD" << std::endl;
 				return false;
 			}
-#endif
 
 			return true;
 		}

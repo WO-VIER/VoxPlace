@@ -1,17 +1,20 @@
 JOBS ?= 8
+ASAN_BUILD_DIR ?= build_asan
 
-.PHONY: help native native-release native-asan wasm serve clean fclean
+.PHONY: help native native-release native-asan asan asan-client asan-server clean fclean
+ARGS ?=
 
 help:
 	@echo "Usage: make <target>"
 	@echo "Targets:"
-	@echo "  native      Configure & build native (CMake)"
-	@echo "  native-release Configure & build native release (CMake)"
-	@echo "  native-asan Configure & build native with Address Sanitizer"
-	@echo "  wasm        Configure & build WebAssembly (Emscripten)"
-	@echo "  serve       Serve build_wasm/ on http://localhost:8000"
-	@echo "  clean       Remove build/ and build_wasm/"
-	@echo "  fclean      Full clean: removes build dirs and generated artifacts"
+	@echo "  native          Configure & build native debug (CMake)"
+	@echo "  native-release  Configure & build native release (CMake)"
+	@echo "  native-asan     Configure & build native with Address Sanitizer"
+	@echo "  asan            Alias pratique pour native-asan"
+	@echo "  asan-client     Build ASAN puis lance le client"
+	@echo "  asan-server     Build ASAN puis lance le serveur"
+	@echo "  clean           Remove build directories"
+	@echo "  fclean          Full clean: removes build dirs and generated artifacts"
 
 native:
 	scripts/build_native.sh
@@ -22,16 +25,16 @@ native-release:
 native-asan:
 	scripts/build_native_asan.sh
 
-wasm:
-	scripts/build_wasm.sh
+asan: native-asan
 
-serve:
-	scripts/serve_wasm.sh
+asan-client: native-asan
+	scripts/run_client_asan.sh $(ARGS)
+
+asan-server: native-asan
+	./$(ASAN_BUILD_DIR)/VoxPlaceServer
 
 clean:
-	rm -rf build build_release build_relwithdebinfo build_minsizerel build_wasm
+	rm -rf build build_release build_relwithdebinfo build_minsizerel
 
 fclean:
-	# full-clean: supprime les dossiers de build et les fichiers générés
-	# depuis la racine du repo
 	scripts/clean_all.sh
