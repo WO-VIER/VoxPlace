@@ -1,1 +1,2 @@
- cmake -B build_tracy_profiler -S dependencies/tracy/profiler -DCMAKE_BUILD_TYPE=Release -DLEGACY=ON && cmake --build build_tracy_profiler -j$(nproc)
+ cmake -B build_tracy_profiler -S thirdparty/tracy/profiler -DCMAKE_BUILD_TYPE=Release -DLEGACY=ON && cmake --build build_tracy_profiler -j$(nproc)
+ Sur ryzen 5 3500u 140 - 165 fps a 32 render distance 
