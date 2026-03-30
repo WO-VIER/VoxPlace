@@ -2,7 +2,7 @@
 #define CLIENT_WORLD_CHUNK_STREAMING_SYSTEM_H
 
 #include <client/rendering/Camera.h>
-#include <Chunk2.h>
+#include <ClientChunk.h>
 #include <Frustum.h>
 #include <WorldClient.h>
 
@@ -16,7 +16,7 @@ public:
 	static bool usesClassicStreaming(bool hasWorldFrontier, const WorldFrontier &frontier);
 	static bool canStreamChunk(bool hasWorldFrontier, const WorldFrontier &frontier, int chunkX, int chunkZ);
 	static size_t inflightChunkRequestCount(const std::unordered_set<int64_t> &streamedChunkKeys,
-											const std::unordered_map<int64_t, Chunk2 *> &chunkMap);
+											const std::unordered_map<int64_t, ClientChunk *> &chunkMap);
 	static void syncChunkStreaming(
 		WorldClient &worldClient,
 		const Camera &camera,
@@ -28,7 +28,7 @@ public:
 		size_t classicMaxInflightChunkRequests,
 		size_t classicMaxChunkRequestsPerFrame,
 		std::unordered_set<int64_t> &streamedChunkKeys,
-		std::unordered_map<int64_t, Chunk2 *> &chunkMap,
+		std::unordered_map<int64_t, ClientChunk *> &chunkMap,
 		size_t &profileChunkRequestsWindow,
 		size_t &profileChunkDropsWindow,
 		const std::function<void(int64_t)> &dropChunkByKey);

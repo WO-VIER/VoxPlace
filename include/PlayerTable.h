@@ -1,7 +1,7 @@
 #ifndef PLAYER_TABLE_H
 #define PLAYER_TABLE_H
 
-#include <PlayerData.h>
+#include <Player.h>
 
 #include <sqlite3.h>
 
@@ -17,16 +17,16 @@ public:
 	void close();
 	bool isOpen() const;
 
-	bool loadPlayerByUsername(const std::string &username, PlayerData &player);
-	bool loadPlayerAuthByUsername(const std::string &username, PlayerData &player, std::string &passwordHash);
-	bool createPlayer(const std::string &username, const std::string &passwordHash, PlayerData &player);
+	bool loadPlayerByUsername(const std::string &username, Player &player);
+	bool loadPlayerAuthByUsername(const std::string &username, Player &player, std::string &passwordHash);
+	bool createPlayer(const std::string &username, const std::string &passwordHash, Player &player);
 	bool loadOrCreatePlayer(const std::string &username,
 							const std::string &passwordHashForNewPlayer,
-							PlayerData &player,
+							Player &player,
 							std::string &storedPasswordHash,
 							bool &createdPlayer);
 	bool updatePasswordHash(uint64_t playerId, const std::string &passwordHash);
-	bool savePlayer(const PlayerData &player);
+	bool savePlayer(const Player &player);
 
 	const std::string &lastError() const;
 

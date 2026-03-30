@@ -37,7 +37,7 @@ bool ChunkStreamingSystem::canStreamChunk(bool hasWorldFrontier,
 
 size_t ChunkStreamingSystem::inflightChunkRequestCount(
 	const std::unordered_set<int64_t> &streamedChunkKeys,
-	const std::unordered_map<int64_t, Chunk2 *> &chunkMap)
+	const std::unordered_map<int64_t, ClientChunk *> &chunkMap)
 {
 	size_t inflightCount = 0;
 	for (int64_t key : streamedChunkKeys)
@@ -61,7 +61,7 @@ void ChunkStreamingSystem::syncChunkStreaming(
 	size_t classicMaxInflightChunkRequests,
 	size_t classicMaxChunkRequestsPerFrame,
 	std::unordered_set<int64_t> &streamedChunkKeys,
-	std::unordered_map<int64_t, Chunk2 *> &chunkMap,
+	std::unordered_map<int64_t, ClientChunk *> &chunkMap,
 	size_t &profileChunkRequestsWindow,
 	size_t &profileChunkDropsWindow,
 	const std::function<void(int64_t)> &dropChunkByKey)

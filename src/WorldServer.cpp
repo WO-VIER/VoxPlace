@@ -10,8 +10,7 @@
 
 #include <ChunkPalette.h>
 #include <PasswordHasher.h>
-#include <PlayerData.h>
-#include <PlayerHotData.h>
+#include <Player.h>
 #include <PlayerSessionData.h>
 #include <PlayerTable.h>
 #include <PlayerUsername.h>
@@ -121,14 +120,24 @@ struct WorldServer::Impl
 {
 	struct ClientSession
 	{
+		struct ClientChunkStreamState
+		{
+			std::unordered_set<int64_t> wantedChunks;
+			std::unordered_set<int64_t> loadedChunks;
+			std::unordered_set<int64_t> queuedChunks;
+			std::deque<int64_t> sendQueue;
+		};
+
+		struct ClientPlayerContext
+		{
+			Player player;
+			PlayerSessionData playerSession;
+			std::string usernameKey;
+		};
+
 		ENetPeer *peer = nullptr;
-		std::unordered_set<int64_t> wantedChunks;
-		std::unordered_set<int64_t> loadedChunks;
-		std::unordered_set<int64_t> queuedChunks;
-		std::deque<int64_t> sendQueue;
-		PlayerData player;
-		PlayerSessionData playerSession;
-		std::string usernameKey;
+		ClientChunkStreamState chunkStream;
+		ClientPlayerContext playerContext;
 	};
 
 	struct ReadyChunk
@@ -533,9 +542,9 @@ struct WorldServer::Impl
 			for (auto &entry : clients)
 			{
 				ClientSession &session = entry.second;
-				if (session.wantedChunks.find(key) != session.wantedChunks.end())
+				if (session.chunkStream.wantedChunks.find(key) != session.chunkStream.wantedChunks.end())
 				{
-					queueChunkForClient(session, key);
+					queueChunkForClient(session.chunkStream, key);
 				}
 			}
 			integratedCount++;
@@ -673,7 +682,7 @@ struct WorldServer::Impl
 	{
 		ClientSession session;
 		session.peer = peer;
-		session.playerSession.lastSeenAtMs = systemNowMs();
+		session.playerContext.playerSession.lastSeenAtMs = systemNowMs();
 		clients[peer] = std::move(session);
 		std::cout << "Client connected" << std::endl;
 	}
@@ -684,9 +693,9 @@ struct WorldServer::Impl
 		if (sessionIt != clients.end())
 		{
 			savePlayerForSession(sessionIt->second);
-			if (!sessionIt->second.usernameKey.empty())
+			if (!sessionIt->second.playerContext.usernameKey.empty())
 			{
-				activeUsernames.erase(sessionIt->second.usernameKey);
+				activeUsernames.erase(sessionIt->second.playerContext.usernameKey);
 			}
 			clients.erase(sessionIt);
 		}
@@ -695,24 +704,24 @@ struct WorldServer::Impl
 
 	void sendPlayerState(ClientSession &session)
 	{
-		if (!session.playerSession.authenticated)
+		if (!session.playerContext.playerSession.authenticated)
 		{
 			return;
 		}
 
 		PlayerStateMessage message;
-		message.playerId = session.player.cold.playerId;
-		message.positionX = session.player.hot.position.x;
-		message.positionY = session.player.hot.position.y;
-		message.positionZ = session.player.hot.position.z;
-		message.blockActionReadyAtMs = session.player.hot.blockActionReadyAtMs;
+		message.playerId = session.playerContext.player.profile.playerId;
+		message.positionX = session.playerContext.player.state.position.x;
+		message.positionY = session.playerContext.player.state.position.y;
+		message.positionZ = session.playerContext.player.state.position.z;
+		message.blockActionReadyAtMs = session.playerContext.player.state.blockActionReadyAtMs;
 		message.serverNowMs = systemNowMs();
 		sendReliable(session.peer, encodePlayerState(message));
 	}
 
 	bool savePlayerForSession(ClientSession &session)
 	{
-		if (!session.playerSession.authenticated)
+		if (!session.playerContext.playerSession.authenticated)
 		{
 			return true;
 		}
@@ -720,10 +729,10 @@ struct WorldServer::Impl
 		{
 			return false;
 		}
-		if (!playerTable.savePlayer(session.player))
+		if (!playerTable.savePlayer(session.playerContext.player))
 		{
 			std::cerr << "Failed to save player "
-					  << session.player.cold.username
+					  << session.playerContext.player.profile.username
 					  << ": " << playerTable.lastError() << std::endl;
 			return false;
 		}
@@ -872,8 +881,8 @@ struct WorldServer::Impl
 		}
 
 		ClientSession &session = sessionIt->second;
-		session.playerSession.lastSeenAtMs = systemNowMs();
-		if (session.playerSession.authenticated)
+		session.playerContext.playerSession.lastSeenAtMs = systemNowMs();
+		if (session.playerContext.playerSession.authenticated)
 		{
 			return;
 		}
@@ -914,7 +923,7 @@ struct WorldServer::Impl
 		}
 
 		bool createdPlayer = false;
-		PlayerData loadedPlayer;
+		Player loadedPlayer;
 		std::string storedPasswordHash;
 		if (!playerTable.loadOrCreatePlayer(
 				trimmedUsername,
@@ -931,7 +940,7 @@ struct WorldServer::Impl
 			return;
 		}
 
-		session.player = loadedPlayer;
+		session.playerContext.player = loadedPlayer;
 		if (!createdPlayer)
 		{
 			if (!storedPasswordHash.empty())
@@ -947,7 +956,7 @@ struct WorldServer::Impl
 			else if (!password.empty())
 			{
 				if (!playerTable.updatePasswordHash(
-						session.player.cold.playerId,
+						session.playerContext.player.profile.playerId,
 						passwordHashForNewPlayer))
 				{
 					std::cerr << "Failed to set password hash for "
@@ -960,24 +969,24 @@ struct WorldServer::Impl
 			}
 		}
 
-		session.playerSession.playerId = session.player.cold.playerId;
-		session.playerSession.authenticated = true;
-		session.usernameKey = trimmedUsername;
-		activeUsernames[trimmedUsername] = session.player.cold.playerId;
+		session.playerContext.playerSession.playerId = session.playerContext.player.profile.playerId;
+		session.playerContext.playerSession.authenticated = true;
+		session.playerContext.usernameKey = trimmedUsername;
+		activeUsernames[trimmedUsername] = session.playerContext.player.profile.playerId;
 
 		response.status = LoginStatus::Accepted;
-		response.playerId = session.player.cold.playerId;
+		response.playerId = session.playerContext.player.profile.playerId;
 		copyPlayerUsernameToBuffer(trimmedUsername, response.username);
-		response.skinId = session.player.cold.skinId;
-		response.positionX = session.player.hot.position.x;
-		response.positionY = session.player.hot.position.y;
-		response.positionZ = session.player.hot.position.z;
-		response.blockActionReadyAtMs = session.player.hot.blockActionReadyAtMs;
+		response.skinId = session.playerContext.player.profile.skinId;
+		response.positionX = session.playerContext.player.state.position.x;
+		response.positionY = session.playerContext.player.state.position.y;
+		response.positionZ = session.playerContext.player.state.position.z;
+		response.blockActionReadyAtMs = session.playerContext.player.state.blockActionReadyAtMs;
 		sendReliable(peer, encodeLoginResponse(response));
 		sendReliable(peer, encodeWorldFrontier(frontier));
 
 		std::cout << "Player authenticated: " << trimmedUsername
-				  << " id=" << session.player.cold.playerId;
+				  << " id=" << session.playerContext.player.profile.playerId;
 		if (createdPlayer)
 		{
 			std::cout << " (created)";
@@ -1025,8 +1034,8 @@ struct WorldServer::Impl
 		{
 			return;
 		}
-		sessionIt->second.playerSession.lastSeenAtMs = systemNowMs();
-		if (!sessionIt->second.playerSession.authenticated)
+		sessionIt->second.playerContext.playerSession.lastSeenAtMs = systemNowMs();
+		if (!sessionIt->second.playerContext.playerSession.authenticated)
 		{
 			return;
 		}
@@ -1090,12 +1099,12 @@ struct WorldServer::Impl
 
 		int64_t key = chunkKey(request.chunkX, request.chunkZ);
 		ClientSession &session = sessionIt->second;
-		session.wantedChunks.insert(key);
+		session.chunkStream.wantedChunks.insert(key);
 
 		auto worldIt = worldChunks.find(key);
 		if (worldIt != worldChunks.end())
 		{
-			queueChunkForClient(session, key);
+			queueChunkForClient(session.chunkStream, key);
 			return;
 		}
 
@@ -1112,9 +1121,9 @@ struct WorldServer::Impl
 
 		int64_t key = chunkKey(drop.chunkX, drop.chunkZ);
 		ClientSession &session = sessionIt->second;
-		session.wantedChunks.erase(key);
-		session.loadedChunks.erase(key);
-		session.queuedChunks.erase(key);
+		session.chunkStream.wantedChunks.erase(key);
+		session.chunkStream.loadedChunks.erase(key);
+		session.chunkStream.queuedChunks.erase(key);
 	}
 
 	void handleBlockAction(ENetPeer *peer, const BlockActionRequestMessage &request)
@@ -1132,7 +1141,7 @@ struct WorldServer::Impl
 		};
 
 		uint64_t nowMs = systemNowMs();
-		if (nowMs < session.player.hot.blockActionReadyAtMs)
+		if (nowMs < session.playerContext.player.state.blockActionReadyAtMs)
 		{
 			rejectActionAndSync();
 			return;
@@ -1175,7 +1184,7 @@ struct WorldServer::Impl
 		}
 
 		markChunkDirty(key);
-		session.player.hot.blockActionReadyAtMs = nowMs + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
+		session.playerContext.player.state.blockActionReadyAtMs = nowMs + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
 
 		BlockUpdateBroadcastMessage update;
 		update.worldX = request.worldX;
@@ -1228,11 +1237,11 @@ struct WorldServer::Impl
 			return;
 		}
 
-		session.player.hot.position = glm::vec3(
+		session.playerContext.player.state.position = glm::vec3(
 			movement.positionX,
 			movement.positionY,
 			movement.positionZ);
-		session.player.hot.lookDirection = glm::vec3(
+		session.playerContext.player.state.lookDirection = glm::vec3(
 			movement.lookX,
 			movement.lookY,
 			movement.lookZ);
@@ -1317,36 +1326,36 @@ struct WorldServer::Impl
 		taskCv.notify_one();
 	}
 
-	void queueChunkForClient(ClientSession &session, int64_t key)
+	void queueChunkForClient(ClientSession::ClientChunkStreamState &chunkStream, int64_t key)
 	{
-		if (session.wantedChunks.find(key) == session.wantedChunks.end())
+		if (chunkStream.wantedChunks.find(key) == chunkStream.wantedChunks.end())
 		{
 			return;
 		}
-		if (session.loadedChunks.find(key) != session.loadedChunks.end())
+		if (chunkStream.loadedChunks.find(key) != chunkStream.loadedChunks.end())
 		{
 			return;
 		}
-		if (session.queuedChunks.find(key) != session.queuedChunks.end())
+		if (chunkStream.queuedChunks.find(key) != chunkStream.queuedChunks.end())
 		{
 			return;
 		}
-		session.sendQueue.push_back(key);
-		session.queuedChunks.insert(key);
+		chunkStream.sendQueue.push_back(key);
+		chunkStream.queuedChunks.insert(key);
 	}
 
 	void sendQueuedChunks(ClientSession &session)
 	{
 		size_t sentCount = 0;
-		size_t sendBudget = chunkSendBudgetForClient(session);
+		size_t sendBudget = chunkSendBudgetForClient(session.chunkStream);
 
-		while (sentCount < sendBudget && !session.sendQueue.empty())
+		while (sentCount < sendBudget && !session.chunkStream.sendQueue.empty())
 		{
-			int64_t key = session.sendQueue.front();
-			session.sendQueue.pop_front();
-			session.queuedChunks.erase(key);
+			int64_t key = session.chunkStream.sendQueue.front();
+			session.chunkStream.sendQueue.pop_front();
+			session.chunkStream.queuedChunks.erase(key);
 
-			if (session.wantedChunks.find(key) == session.wantedChunks.end())
+			if (session.chunkStream.wantedChunks.find(key) == session.chunkStream.wantedChunks.end())
 			{
 				continue;
 			}
@@ -1368,19 +1377,19 @@ struct WorldServer::Impl
 				sizeof(worldIt->second.chunkZ) +
 				sizeof(worldIt->second.revision) +
 				sizeof(worldIt->second.blocks);
-			session.loadedChunks.insert(key);
+			session.chunkStream.loadedChunks.insert(key);
 			sentCount++;
 		}
 	}
 
-	size_t chunkSendBudgetForClient(const ClientSession &session)
+	size_t chunkSendBudgetForClient(const ClientSession::ClientChunkStreamState &chunkStream)
 	{
 		if (!usesClassicStreaming())
 		{
 			return DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK;
 		}
 
-		size_t queueSize = session.sendQueue.size();
+		size_t queueSize = chunkStream.sendQueue.size();
 		size_t budget = CLASSIC_MIN_CHUNK_SENDS_PER_CLIENT_PER_TICK;
 		if (queueSize > 64)
 		{

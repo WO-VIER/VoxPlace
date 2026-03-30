@@ -1,7 +1,7 @@
 #ifndef WORLD_CLIENT_H
 #define WORLD_CLIENT_H
 
-#include <PlayerData.h>
+#include <Player.h>
 #include <WorldProtocol.h>
 #include <glm/vec3.hpp>
 #include <deque>
@@ -38,7 +38,7 @@ public:
 	void service();
 	bool popEvent(WorldClientEvent &event);
 	bool isConnected() const;
-	const PlayerData &localPlayer() const;
+	const Player &localPlayer() const;
 	uint64_t remainingBlockActionCooldownMs() const;
 	const std::string &lastConnectionError() const;
 

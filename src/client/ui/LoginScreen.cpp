@@ -301,7 +301,7 @@ LoginScreenPollResult LoginScreen::pollConnection(WorldClient &worldClient,
 		return LoginScreenPollResult::Failed;
 	}
 
-	camera.Position = worldClient.localPlayer().hot.position;
+	camera.Position = worldClient.localPlayer().state.position;
 	m_statusMessage.clear();
 	m_errorMessage.clear();
 	if (window != nullptr)

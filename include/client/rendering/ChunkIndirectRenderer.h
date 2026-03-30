@@ -1,7 +1,7 @@
 #ifndef CHUNK_INDIRECT_RENDERER_H
 #define CHUNK_INDIRECT_RENDERER_H
 
-#include <Chunk2.h>
+#include <ClientChunk.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -34,7 +34,7 @@ public:
 		size_t faceOffset = 0;
 		size_t reservedFaceCount = 0;
 		uint32_t faceCount = 0;
-		Chunk2 *chunk = nullptr;
+		ClientChunk *chunk = nullptr;
 	};
 
 	GLuint facesVbo = 0;
@@ -109,10 +109,10 @@ public:
 		cachedVisibleKeys.clear();
 	}
 
-	void upsertChunk(Chunk2 &chunk)
+	void upsertChunk(ClientChunk &chunk)
 	{
-		int64_t key = chunkKey(chunk.chunkX, chunk.chunkZ);
-		if (chunk.faceCount == 0 || chunk.packedFaces().empty())
+		int64_t key = chunkKey(chunk.storage.chunkX, chunk.storage.chunkZ);
+		if (chunk.renderState.faceCount == 0 || chunk.packedFaces().empty())
 		{
 			removeChunk(key);
 			return;
@@ -128,7 +128,7 @@ public:
 
 			if (instances.size() <= entry.reservedFaceCount)
 			{
-				entry.faceCount = chunk.faceCount;
+				entry.faceCount = chunk.renderState.faceCount;
 				writeInstances(entry.faceOffset, instances);
 				recomputeArenaReservedFaces();
 				markArenaDirty();
@@ -157,7 +157,7 @@ public:
 		markArenaDirty();
 	}
 
-	void buildVisibleDrawData(const std::vector<Chunk2 *> &visibleChunks)
+	void buildVisibleDrawData(const std::vector<ClientChunk *> &visibleChunks)
 	{
 		std::vector<int64_t> visibleKeys;
 		std::vector<ChunkDrawArraysIndirectCommand> drawCommands;
@@ -166,14 +166,14 @@ public:
 		drawCommands.reserve(visibleChunks.size());
 
 		faceCount = 0;
-		for (Chunk2 *chunk : visibleChunks)
+		for (ClientChunk *chunk : visibleChunks)
 		{
 			if (chunk == nullptr)
 			{
 				continue;
 			}
 
-			int64_t key = chunkKey(chunk->chunkX, chunk->chunkZ);
+			int64_t key = chunkKey(chunk->storage.chunkX, chunk->storage.chunkZ);
 			auto entryIt = entriesMap.find(key);
 			if (entryIt == entriesMap.end())
 			{
@@ -258,7 +258,7 @@ public:
 			std::vector<ChunkFaceInstanceGpu> instances = buildFaceInstances(*entry.chunk);
 			entry.faceOffset = cursor;
 			entry.reservedFaceCount = instances.size();
-			entry.faceCount = entry.chunk->faceCount;
+			entry.faceCount = entry.chunk->renderState.faceCount;
 
 			glBufferSubData(
 				GL_ARRAY_BUFFER,
@@ -338,7 +338,7 @@ private:
 		glBindVertexArray(0);
 	}
 
-	std::vector<ChunkFaceInstanceGpu> buildFaceInstances(const Chunk2 &chunk) const
+	std::vector<ChunkFaceInstanceGpu> buildFaceInstances(const ClientChunk &chunk) const
 	{
 		const std::vector<uint32_t> &packedFaces = chunk.packedFaces();
 		std::vector<ChunkFaceInstanceGpu> instances;
@@ -349,8 +349,8 @@ private:
 			ChunkFaceInstanceGpu instance;
 			instance.word0 = packedFaces[wordIndex];
 			instance.word1 = packedFaces[wordIndex + 1];
-			instance.chunkX = chunk.chunkX;
-			instance.chunkZ = chunk.chunkZ;
+			instance.chunkX = chunk.storage.chunkX;
+			instance.chunkZ = chunk.storage.chunkZ;
 			instances.push_back(instance);
 		}
 
@@ -472,7 +472,7 @@ private:
 			std::vector<ChunkFaceInstanceGpu> instances = buildFaceInstances(*entry.chunk);
 			entry.faceOffset = cursor;
 			entry.reservedFaceCount = instances.size();
-			entry.faceCount = entry.chunk->faceCount;
+			entry.faceCount = entry.chunk->renderState.faceCount;
 
 			glBufferSubData(
 				GL_ARRAY_BUFFER,
@@ -494,7 +494,7 @@ private:
 	}
 
 	void insertChunkAllocation(int64_t key,
-							   Chunk2 &chunk,
+							   ClientChunk &chunk,
 							   const std::vector<ChunkFaceInstanceGpu> &instances)
 	{
 		size_t cursor = 0;
@@ -505,7 +505,7 @@ private:
 				ArenaEntry entry;
 				entry.faceOffset = cursor;
 				entry.reservedFaceCount = instances.size();
-				entry.faceCount = chunk.faceCount;
+				entry.faceCount = chunk.renderState.faceCount;
 				entry.chunk = &chunk;
 				EntryIterator inserted = entriesList.insert(it, entry);
 				entriesMap[key] = inserted;
@@ -520,7 +520,7 @@ private:
 		ArenaEntry entry;
 		entry.faceOffset = cursor;
 		entry.reservedFaceCount = instances.size();
-		entry.faceCount = chunk.faceCount;
+		entry.faceCount = chunk.renderState.faceCount;
 		entry.chunk = &chunk;
 		entriesList.push_back(entry);
 		EntryIterator inserted = entriesList.end();

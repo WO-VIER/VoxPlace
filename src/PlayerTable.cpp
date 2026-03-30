@@ -1,6 +1,6 @@
 #include <PlayerTable.h>
 
-#include <PlayerHotData.h>
+#include <PlayerState.h>
 
 #include <chrono>
 #include <cstdint>
@@ -88,14 +88,14 @@ bool PlayerTable::isOpen() const
 	return m_db != nullptr;
 }
 
-bool PlayerTable::loadPlayerByUsername(const std::string &username, PlayerData &player)
+bool PlayerTable::loadPlayerByUsername(const std::string &username, Player &player)
 {
 	std::string ignoredPasswordHash;
 	return loadPlayerAuthByUsername(username, player, ignoredPasswordHash);
 }
 
 bool PlayerTable::loadPlayerAuthByUsername(const std::string &username,
-										   PlayerData &player,
+										   Player &player,
 										   std::string &passwordHash)
 {
 	m_lastError.clear();
@@ -125,21 +125,21 @@ bool PlayerTable::loadPlayerAuthByUsername(const std::string &username,
 	int stepResult = sqlite3_step(statement);
 	if (stepResult == SQLITE_ROW)
 	{
-		player.cold.playerId = static_cast<uint64_t>(sqlite3_column_int64(statement, 0));
+		player.profile.playerId = static_cast<uint64_t>(sqlite3_column_int64(statement, 0));
 		const unsigned char *storedUsername = sqlite3_column_text(statement, 1);
 		if (storedUsername != nullptr)
 		{
-			player.cold.username = reinterpret_cast<const char *>(storedUsername);
+			player.profile.username = reinterpret_cast<const char *>(storedUsername);
 		}
 		else
 		{
-			player.cold.username.clear();
+			player.profile.username.clear();
 		}
-		player.cold.skinId = static_cast<uint16_t>(sqlite3_column_int(statement, 2));
-		player.hot.position.x = static_cast<float>(sqlite3_column_double(statement, 3));
-		player.hot.position.y = static_cast<float>(sqlite3_column_double(statement, 4));
-		player.hot.position.z = static_cast<float>(sqlite3_column_double(statement, 5));
-		player.hot.blockActionReadyAtMs =
+		player.profile.skinId = static_cast<uint16_t>(sqlite3_column_int(statement, 2));
+		player.state.position.x = static_cast<float>(sqlite3_column_double(statement, 3));
+		player.state.position.y = static_cast<float>(sqlite3_column_double(statement, 4));
+		player.state.position.z = static_cast<float>(sqlite3_column_double(statement, 5));
+		player.state.blockActionReadyAtMs =
 			static_cast<uint64_t>(sqlite3_column_int64(statement, 6));
 		const unsigned char *storedHash = sqlite3_column_text(statement, 7);
 		if (storedHash != nullptr)
@@ -171,7 +171,7 @@ bool PlayerTable::loadPlayerAuthByUsername(const std::string &username,
 
 bool PlayerTable::createPlayer(const std::string &username,
 							   const std::string &passwordHash,
-							   PlayerData &player)
+							   Player &player)
 {
 	m_lastError.clear();
 	if (!isOpen())
@@ -190,21 +190,21 @@ bool PlayerTable::createPlayer(const std::string &username,
 		return false;
 	}
 
-	player.cold.username = username;
-	player.cold.skinId = 0;
-	player.hot.position.x = 0.0f;
-	player.hot.position.y = 35.0f;
-	player.hot.position.z = 0.0f;
-	player.hot.blockActionReadyAtMs = 0;
+	player.profile.username = username;
+	player.profile.skinId = 0;
+	player.state.position.x = 0.0f;
+	player.state.position.y = 35.0f;
+	player.state.position.z = 0.0f;
+	player.state.blockActionReadyAtMs = 0;
 
 	uint64_t nowMs = systemNowMs();
 
-	if (sqlite3_bind_text(statement, 1, player.cold.username.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
-		|| sqlite3_bind_int(statement, 2, static_cast<int>(player.cold.skinId)) != SQLITE_OK
-		|| sqlite3_bind_double(statement, 3, static_cast<double>(player.hot.position.x)) != SQLITE_OK
-		|| sqlite3_bind_double(statement, 4, static_cast<double>(player.hot.position.y)) != SQLITE_OK
-		|| sqlite3_bind_double(statement, 5, static_cast<double>(player.hot.position.z)) != SQLITE_OK
-		|| sqlite3_bind_int64(statement, 6, static_cast<sqlite3_int64>(player.hot.blockActionReadyAtMs)) != SQLITE_OK
+	if (sqlite3_bind_text(statement, 1, player.profile.username.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
+		|| sqlite3_bind_int(statement, 2, static_cast<int>(player.profile.skinId)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 3, static_cast<double>(player.state.position.x)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 4, static_cast<double>(player.state.position.y)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 5, static_cast<double>(player.state.position.z)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 6, static_cast<sqlite3_int64>(player.state.blockActionReadyAtMs)) != SQLITE_OK
 		|| sqlite3_bind_text(statement, 7, passwordHash.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
 		|| sqlite3_bind_int64(statement, 8, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK
 		|| sqlite3_bind_int64(statement, 9, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK)
@@ -221,14 +221,14 @@ bool PlayerTable::createPlayer(const std::string &username,
 		return false;
 	}
 
-	player.cold.playerId = static_cast<uint64_t>(sqlite3_last_insert_rowid(m_db));
+	player.profile.playerId = static_cast<uint64_t>(sqlite3_last_insert_rowid(m_db));
 	sqlite3_finalize(statement);
 	return true;
 }
 
 bool PlayerTable::loadOrCreatePlayer(const std::string &username,
 									 const std::string &passwordHashForNewPlayer,
-									 PlayerData &player,
+									 Player &player,
 									 std::string &storedPasswordHash,
 									 bool &createdPlayer)
 {
@@ -293,7 +293,7 @@ bool PlayerTable::updatePasswordHash(uint64_t playerId, const std::string &passw
 	return true;
 }
 
-bool PlayerTable::savePlayer(const PlayerData &player)
+bool PlayerTable::savePlayer(const Player &player)
 {
 	m_lastError.clear();
 	if (!isOpen())
@@ -301,7 +301,7 @@ bool PlayerTable::savePlayer(const PlayerData &player)
 		m_lastError = "Player database is not open";
 		return false;
 	}
-	if (player.cold.playerId == 0)
+	if (player.profile.playerId == 0)
 	{
 		m_lastError = "Cannot save player with invalid id";
 		return false;
@@ -321,14 +321,14 @@ bool PlayerTable::savePlayer(const PlayerData &player)
 
 	uint64_t nowMs = systemNowMs();
 
-	if (sqlite3_bind_text(statement, 1, player.cold.username.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
-		|| sqlite3_bind_int(statement, 2, static_cast<int>(player.cold.skinId)) != SQLITE_OK
-		|| sqlite3_bind_double(statement, 3, static_cast<double>(player.hot.position.x)) != SQLITE_OK
-		|| sqlite3_bind_double(statement, 4, static_cast<double>(player.hot.position.y)) != SQLITE_OK
-		|| sqlite3_bind_double(statement, 5, static_cast<double>(player.hot.position.z)) != SQLITE_OK
-		|| sqlite3_bind_int64(statement, 6, static_cast<sqlite3_int64>(player.hot.blockActionReadyAtMs)) != SQLITE_OK
+	if (sqlite3_bind_text(statement, 1, player.profile.username.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
+		|| sqlite3_bind_int(statement, 2, static_cast<int>(player.profile.skinId)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 3, static_cast<double>(player.state.position.x)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 4, static_cast<double>(player.state.position.y)) != SQLITE_OK
+		|| sqlite3_bind_double(statement, 5, static_cast<double>(player.state.position.z)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 6, static_cast<sqlite3_int64>(player.state.blockActionReadyAtMs)) != SQLITE_OK
 		|| sqlite3_bind_int64(statement, 7, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK
-		|| sqlite3_bind_int64(statement, 8, static_cast<sqlite3_int64>(player.cold.playerId)) != SQLITE_OK)
+		|| sqlite3_bind_int64(statement, 8, static_cast<sqlite3_int64>(player.profile.playerId)) != SQLITE_OK)
 	{
 		setLastErrorFromDatabase("Failed to bind player save statement");
 		sqlite3_finalize(statement);

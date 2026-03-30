@@ -2,7 +2,7 @@
 #define CLIENT_RENDER_WORLD_RENDERER_H
 
 #include <client/rendering/Camera.h>
-#include <Chunk2.h>
+#include <ClientChunk.h>
 #include <client/rendering/ChunkIndirectRenderer.h>
 #include <client/rendering/Shader.h>
 #include <client/rendering/RenderFrameContext.h>
@@ -16,13 +16,13 @@
 
 struct ChunkDraw
 {
-	Chunk2 *chunk = nullptr;
+	ClientChunk *chunk = nullptr;
 	float distSq = 0.0f;
 };
 
 struct ChunkRebuildCandidate
 {
-	Chunk2 *chunk = nullptr;
+	ClientChunk *chunk = nullptr;
 	float distSq = 0.0f;
 	bool inFrustum = false;
 };
@@ -51,8 +51,8 @@ public:
 								const glm::vec3 &fogColor,
 								const glm::vec3 &cameraPosition,
 								const RenderSettings &settings);
-	static uint64_t computeTotalFaces(const std::unordered_map<int64_t, Chunk2 *> &chunkMap);
-	static WorldVisibilitySet collectVisibility(const std::unordered_map<int64_t, Chunk2 *> &chunkMap,
+	static uint64_t computeTotalFaces(const std::unordered_map<int64_t, ClientChunk *> &chunkMap);
+	static WorldVisibilitySet collectVisibility(const std::unordered_map<int64_t, ClientChunk *> &chunkMap,
 											   const Camera &camera,
 											   const RenderFrameContext &frameContext,
 											   bool sortVisibleChunksFrontToBack);
@@ -62,12 +62,12 @@ public:
 								  TerrainRenderArchitecture architecture);
 	static void rebuildIndirectArenaFromLoadedChunks(
 		ChunkIndirectRenderer &indirectRenderer,
-		const std::unordered_map<int64_t, Chunk2 *> &chunkMap);
+		const std::unordered_map<int64_t, ClientChunk *> &chunkMap);
 	static void applyArchitectureSwitch(
 		TerrainRenderArchitecture currentArchitecture,
 		TerrainRenderArchitecture &previousArchitecture,
 		ChunkIndirectRenderer &indirectRenderer,
-		const std::unordered_map<int64_t, Chunk2 *> &chunkMap);
+		const std::unordered_map<int64_t, ClientChunk *> &chunkMap);
 };
 
 #endif

@@ -4,7 +4,7 @@
 
 #include <client/core/ClientApp.h>
 
-#include <Chunk2.h>
+#include <ClientChunk.h>
 #include <WorldClient.h>
 #include <client/core/ClientLaunch.h>
 #include <client/core/ClientProfiler.h>
@@ -309,7 +309,7 @@ namespace
 					m_runtime.gameState,
 					m_runtime.camera,
 					m_runtime.worldClient);
-				std::cout << "Connected as " << m_runtime.worldClient.localPlayer().cold.username
+				std::cout << "Connected as " << m_runtime.worldClient.localPlayer().profile.username
 						  << " to " << m_runtime.gameState.connection.serverHost
 						  << ":" << m_runtime.gameState.connection.serverPort << std::endl;
 			}

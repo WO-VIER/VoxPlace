@@ -18,12 +18,12 @@ std::string formatBytes(size_t bytes)
 	return oss.str();
 }
 
-void printChunkProfiler(const std::unordered_map<int64_t, Chunk2*>& chunkMap)
+void printChunkProfiler(const std::unordered_map<int64_t, ClientChunk *> &chunkMap)
 {
 	size_t totalRAM = 0, totalVRAM = 0;
 	uint64_t totalVertices = 0;
 
-	std::vector<Chunk2::ChunkStats> allStats;
+	std::vector<ClientChunk::ChunkStats> allStats;
 	for (const auto& [key, c] : chunkMap)
 	{
 		auto s = c->getStats();

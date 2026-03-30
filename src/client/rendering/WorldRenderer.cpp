@@ -111,17 +111,17 @@ void WorldRenderer::configureShader(Shader &shader,
 	shader.setInt("useIndirectDraw", 0);
 }
 
-uint64_t WorldRenderer::computeTotalFaces(const std::unordered_map<int64_t, Chunk2 *> &chunkMap)
+uint64_t WorldRenderer::computeTotalFaces(const std::unordered_map<int64_t, ClientChunk *> &chunkMap)
 {
 	uint64_t totalFaces = 0;
 	for (const auto &[key, chunk] : chunkMap)
 	{
-		totalFaces += chunk->faceCount;
-	}
+		totalFaces += chunk->renderState.faceCount;
+}
 	return totalFaces;
 }
 
-WorldVisibilitySet WorldRenderer::collectVisibility(const std::unordered_map<int64_t, Chunk2 *> &chunkMap,
+WorldVisibilitySet WorldRenderer::collectVisibility(const std::unordered_map<int64_t, ClientChunk *> &chunkMap,
 													const Camera &camera,
 													const RenderFrameContext &frameContext,
 													bool sortVisibleChunksFrontToBack)
@@ -132,10 +132,10 @@ WorldVisibilitySet WorldRenderer::collectVisibility(const std::unordered_map<int
 
 	for (const auto &[key, chunk] : chunkMap)
 	{
-		float distSq = chunkCenterDistanceSqToCamera(camera, chunk->chunkX, chunk->chunkZ);
-		bool inFrustum = frameContext.frustum.isChunkVisible(chunk->chunkX, chunk->chunkZ);
+		float distSq = chunkCenterDistanceSqToCamera(camera, chunk->storage.chunkX, chunk->storage.chunkZ);
+		bool inFrustum = frameContext.frustum.isChunkVisible(chunk->storage.chunkX, chunk->storage.chunkZ);
 
-		if (chunk->needsMeshRebuild)
+		if (chunk->renderState.needsMeshRebuild)
 		{
 			ChunkRebuildCandidate rebuildCandidate;
 			rebuildCandidate.chunk = chunk;
@@ -185,7 +185,7 @@ float WorldRenderer::drawVisibleWorld(Shader &shader,
 	bool useIndirectRendering = usesIndirectRendering(architecture);
 	if (useIndirectRendering)
 	{
-		std::vector<Chunk2 *> visibleChunksForIndirect;
+		std::vector<ClientChunk *> visibleChunksForIndirect;
 		visibleChunksForIndirect.reserve(visibility.visibleChunks.size());
 		for (const ChunkDraw &draw : visibility.visibleChunks)
 		{
@@ -202,9 +202,9 @@ float WorldRenderer::drawVisibleWorld(Shader &shader,
 		for (const ChunkDraw &draw : visibility.visibleChunks)
 		{
 			shader.setVec3("chunkPos", glm::vec3(
-										 static_cast<float>(draw.chunk->chunkX * CHUNK_SIZE_X),
+										 static_cast<float>(draw.chunk->storage.chunkX * CHUNK_SIZE_X),
 										 0.0f,
-										 static_cast<float>(draw.chunk->chunkZ * CHUNK_SIZE_Z)));
+										 static_cast<float>(draw.chunk->storage.chunkZ * CHUNK_SIZE_Z)));
 			draw.chunk->render();
 		}
 	}
@@ -215,7 +215,7 @@ float WorldRenderer::drawVisibleWorld(Shader &shader,
 
 void WorldRenderer::rebuildIndirectArenaFromLoadedChunks(
 	ChunkIndirectRenderer &indirectRenderer,
-	const std::unordered_map<int64_t, Chunk2 *> &chunkMap)
+	const std::unordered_map<int64_t, ClientChunk *> &chunkMap)
 {
 	indirectRenderer.cleanup();
 	indirectRenderer.init();
@@ -234,7 +234,7 @@ void WorldRenderer::applyArchitectureSwitch(
 	TerrainRenderArchitecture currentArchitecture,
 	TerrainRenderArchitecture &previousArchitecture,
 	ChunkIndirectRenderer &indirectRenderer,
-	const std::unordered_map<int64_t, Chunk2 *> &chunkMap)
+	const std::unordered_map<int64_t, ClientChunk *> &chunkMap)
 {
 	if (currentArchitecture == previousArchitecture)
 	{

@@ -1,7 +1,7 @@
 #ifndef CLIENT_CHUNK_MESHER_H
 #define CLIENT_CHUNK_MESHER_H
 
-#include <Chunk2.h>
+#include <ClientChunk.h>
 
 #include <condition_variable>
 #include <cstddef>
@@ -18,7 +18,7 @@ struct ClientChunkMeshJob
 	int chunkZ = 0;
 	uint64_t revision = 0;
 	VoxelChunkData center;
-	Chunk2::MeshNeighborhood neighbors;
+	ClientChunk::MeshNeighborhood neighbors;
 };
 
 static_assert(sizeof(ClientChunkMeshJob) <= 131072,
@@ -190,7 +190,7 @@ private:
 					result.chunkZ = job.chunkZ;
 					result.revision = job.revision;
 					result.nonEmptySectionCount = static_cast<uint8_t>(job.center.nonEmptySectionCount());
-					result.packedFaces = Chunk2::buildPackedFaces(job.center, job.neighbors);
+					result.packedFaces = ClientChunk::buildPackedFaces(job.center, job.neighbors);
 
 			{
 				std::lock_guard<std::mutex> completedLock(completedMutex);

@@ -1,6 +1,6 @@
 #include <WorldClient.h>
 
-#include <PlayerHotData.h>
+#include <PlayerState.h>
 #include <PlayerUsername.h>
 
 #include <enet/enet.h>
@@ -27,7 +27,7 @@ struct WorldClient::Impl
 	ENetHost *host = nullptr;
 	ENetPeer *peer = nullptr;
 	bool connected = false;
-	PlayerData localPlayer;
+	Player localPlayer;
 	std::string lastConnectionError;
 	int64_t serverTimeOffsetMs = 0;
 
@@ -44,19 +44,19 @@ struct WorldClient::Impl
 
 	bool canIssueBlockAction() const
 	{
-		return estimatedServerNowMs() >= localPlayer.hot.blockActionReadyAtMs;
+		return estimatedServerNowMs() >= localPlayer.state.blockActionReadyAtMs;
 	}
 
 	void applyLoginResponse(const LoginResponseMessage &message)
 	{
-		localPlayer.cold.playerId = message.playerId;
-		localPlayer.cold.username = playerUsernameFromBuffer(message.username);
-		localPlayer.cold.skinId = message.skinId;
-		localPlayer.hot.position = glm::vec3(
+		localPlayer.profile.playerId = message.playerId;
+		localPlayer.profile.username = playerUsernameFromBuffer(message.username);
+		localPlayer.profile.skinId = message.skinId;
+		localPlayer.state.position = glm::vec3(
 			message.positionX,
 			message.positionY,
 			message.positionZ);
-		localPlayer.hot.blockActionReadyAtMs = message.blockActionReadyAtMs;
+		localPlayer.state.blockActionReadyAtMs = message.blockActionReadyAtMs;
 
 		int64_t localNow = static_cast<int64_t>(systemNowMs());
 		int64_t serverNow = static_cast<int64_t>(message.serverNowMs);
@@ -65,16 +65,16 @@ struct WorldClient::Impl
 
 	void applyPlayerState(const PlayerStateMessage &message)
 	{
-		if (localPlayer.cold.playerId != 0 && message.playerId != localPlayer.cold.playerId)
+		if (localPlayer.profile.playerId != 0 && message.playerId != localPlayer.profile.playerId)
 		{
 			return;
 		}
 
-		localPlayer.hot.position = glm::vec3(
+		localPlayer.state.position = glm::vec3(
 			message.positionX,
 			message.positionY,
 			message.positionZ);
-		localPlayer.hot.blockActionReadyAtMs = message.blockActionReadyAtMs;
+		localPlayer.state.blockActionReadyAtMs = message.blockActionReadyAtMs;
 
 		int64_t localNow = static_cast<int64_t>(systemNowMs());
 		int64_t serverNow = static_cast<int64_t>(message.serverNowMs);
@@ -299,7 +299,7 @@ void WorldClient::disconnect()
 	enet_peer_reset(m_impl->peer);
 	m_impl->peer = nullptr;
 	m_impl->connected = false;
-	m_impl->localPlayer = PlayerData{};
+	m_impl->localPlayer = Player{};
 	m_impl->serverTimeOffsetMs = 0;
 }
 
@@ -344,7 +344,7 @@ bool WorldClient::isConnected() const
 	return m_impl->connected;
 }
 
-const PlayerData &WorldClient::localPlayer() const
+const Player &WorldClient::localPlayer() const
 {
 	return m_impl->localPlayer;
 }
@@ -352,11 +352,11 @@ const PlayerData &WorldClient::localPlayer() const
 uint64_t WorldClient::remainingBlockActionCooldownMs() const
 {
 	uint64_t nowMs = m_impl->estimatedServerNowMs();
-	if (m_impl->localPlayer.hot.blockActionReadyAtMs <= nowMs)
+	if (m_impl->localPlayer.state.blockActionReadyAtMs <= nowMs)
 	{
 		return 0;
 	}
-	return m_impl->localPlayer.hot.blockActionReadyAtMs - nowMs;
+	return m_impl->localPlayer.state.blockActionReadyAtMs - nowMs;
 }
 
 const std::string &WorldClient::lastConnectionError() const
@@ -415,7 +415,7 @@ void WorldClient::sendPlaceBlock(int worldX, int worldY, int worldZ, uint8_t pal
 	std::vector<uint8_t> payload = encodeBlockActionRequest(message);
 	ENetPacket *packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
 	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
-	m_impl->localPlayer.hot.blockActionReadyAtMs =
+	m_impl->localPlayer.state.blockActionReadyAtMs =
 		m_impl->estimatedServerNowMs() + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
 }
 
@@ -440,7 +440,7 @@ void WorldClient::sendBreakBlock(int worldX, int worldY, int worldZ)
 	std::vector<uint8_t> payload = encodeBlockActionRequest(message);
 	ENetPacket *packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
 	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
-	m_impl->localPlayer.hot.blockActionReadyAtMs =
+	m_impl->localPlayer.state.blockActionReadyAtMs =
 		m_impl->estimatedServerNowMs() + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
 }
 
@@ -466,8 +466,8 @@ void WorldClient::sendPlayerMoveUpdate(const glm::vec3 &position, const glm::vec
 
 void WorldClient::updateLocalPlayerTransform(const glm::vec3 &position, const glm::vec3 &lookDirection)
 {
-	m_impl->localPlayer.hot.position = position;
-	m_impl->localPlayer.hot.lookDirection = lookDirection;
+	m_impl->localPlayer.state.position = position;
+	m_impl->localPlayer.state.lookDirection = lookDirection;
 }
 
 void WorldClient::pushEvent(const WorldClientEvent &event)

@@ -1,7 +1,7 @@
 #ifndef CLIENT_GAMEPLAY_CLIENT_WORLD_STATE_H
 #define CLIENT_GAMEPLAY_CLIENT_WORLD_STATE_H
 
-#include <Chunk2.h>
+#include <ClientChunk.h>
 #include <WorldBounds.h>
 
 #include <cstdint>
@@ -12,7 +12,7 @@ struct ClientWorldState
 {
 	WorldFrontier frontier;
 	bool hasWorldFrontier = false;
-	std::unordered_map<int64_t, Chunk2 *> chunkMap;
+	std::unordered_map<int64_t, ClientChunk *> chunkMap;
 	std::unordered_set<int64_t> streamedChunkKeys;
 	std::unordered_map<int64_t, uint64_t> pendingMeshRevisions;
 	size_t profileChunkRequestsWindow = 0;

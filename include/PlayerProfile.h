@@ -1,11 +1,11 @@
-#ifndef PLAYER_COLD_DATA_H
-#define PLAYER_COLD_DATA_H
+#ifndef PLAYER_PROFILE_H
+#define PLAYER_PROFILE_H
 
 #include <PlayerUsername.h>
 #include <cstdint>
 #include <string>
 
-struct PlayerColdData
+struct PlayerProfile
 {
 	uint64_t playerId = 0;
 	std::string username;

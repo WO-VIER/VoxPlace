@@ -15,3 +15,4 @@ build_tracy_profiler/
 .cachegrind/
 output/
 *.py
+vgcore*
