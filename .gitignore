@@ -12,3 +12,6 @@ build_minsizerel/
 *.sqlite3*
 valgrind*.txt
 build_tracy_profiler/
+.cachegrind/
+output/
+*.py
