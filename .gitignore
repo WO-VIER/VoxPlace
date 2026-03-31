@@ -16,3 +16,5 @@ build_tracy_profiler/
 output/
 *.py
 vgcore*
+.github/deploy_key.pub 
+Analyse

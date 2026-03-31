@@ -84,6 +84,16 @@ Exemple :
 ./build/VoxPlaceServer --classic-gen --port 28713
 ```
 
+### Serveur public
+
+Un serveur de démonstration est disponible pour tester le projet :
+
+```text
+Adresse : 161.35.214.248
+Port    : 28713 (UDP)
+Mode    : ClassicStreaming
+```
+
 ### Client
 
 Pour se connecter à un serveur en cours d'exécution :
@@ -93,6 +103,18 @@ Pour se connecter à un serveur en cours d'exécution :
 ```
 
 Le client se connecte à `localhost:28713` par défaut. L'adresse du serveur peut être modifiée depuis l'écran de connexion en jeu.
+
+Connexion au serveur public :
+
+```bash
+./build/VoxPlace 161.35.214.248 28713 MonPseudo
+```
+
+Connexion à un serveur local :
+
+```bash
+./build/VoxPlace 127.0.0.1 28713 MonPseudo
+```
 
 ## Structure du projet
 
