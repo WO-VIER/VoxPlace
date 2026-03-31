@@ -10,13 +10,26 @@ if systemctl is-active --quiet voxplace.service; then
     echo '[deploy] Service stopped.'
 fi
 
+# Tuer un éventuel serveur lancé à la main hors systemd.
+STRAY_MATCH="/root/VoxPlace/build/VoxPlaceServer"
+if pgrep -af "$STRAY_MATCH" >/dev/null 2>&1; then
+    echo '[deploy] Found stray VoxPlaceServer process outside systemd:'
+    pgrep -af "$STRAY_MATCH" || true
+    echo '[deploy] Killing stray VoxPlaceServer process(es)...'
+    pkill -f "$STRAY_MATCH" || true
+    sleep 1
+fi
+
+# Nettoyer l'état failed éventuel du service avant redémarrage.
+systemctl reset-failed voxplace.service || true
+
 cd /root/VoxPlace
 git pull origin main
 
 mkdir -p build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TRACY=OFF -DENABLE_GL_DEBUG=OFF
-make VoxPlaceServer -j2
+cmake --build . --target VoxPlaceServer -j2
 
 strip VoxPlaceServer
 
