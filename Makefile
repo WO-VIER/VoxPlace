@@ -1,7 +1,7 @@
 JOBS ?= 8
 ASAN_BUILD_DIR ?= build_asan
 
-.PHONY: help native native-release native-asan asan asan-client asan-server clean fclean
+.PHONY: help native native-release chunky native-asan asan asan-client asan-server clean fclean
 ARGS ?=
 
 help:
@@ -9,6 +9,7 @@ help:
 	@echo "Targets:"
 	@echo "  native          Configure & build native debug (CMake)"
 	@echo "  native-release  Configure & build native release (CMake)"
+	@echo "  chunky          Build only VoxPlacePregen in build_chunky/"
 	@echo "  native-asan     Configure & build native with Address Sanitizer"
 	@echo "  asan            Alias pratique pour native-asan"
 	@echo "  asan-client     Build ASAN puis lance le client"
@@ -22,6 +23,9 @@ native:
 native-release:
 	BUILD_TYPE=Release scripts/build_native.sh
 
+chunky:
+	scripts/build_chunky.sh
+
 native-asan:
 	scripts/build_native_asan.sh
 
@@ -34,7 +38,7 @@ asan-server: native-asan
 	./$(ASAN_BUILD_DIR)/VoxPlaceServer
 
 clean:
-	rm -rf build build_release build_relwithdebinfo build_minsizerel
+	rm -rf build build_chunky build_release build_relwithdebinfo build_minsizerel
 
 fclean:
 	scripts/clean_all.sh

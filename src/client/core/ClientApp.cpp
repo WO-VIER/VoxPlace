@@ -550,6 +550,7 @@ namespace
 				m_runtime.worldState.profileChunkRequestsWindow,
 				m_runtime.worldState.profileChunkDropsWindow,
 				m_runtime.worldState.profileChunkReceivesWindow,
+				m_runtime.worldState.profileChunkUnloadsWindow,
 				m_runtime.worldState.profileMeshedChunkCountWindow,
 				m_runtime.worldState.profileMeshedSectionCountWindow);
 		}

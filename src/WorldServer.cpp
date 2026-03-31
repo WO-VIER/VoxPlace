@@ -43,12 +43,14 @@ namespace
 	constexpr size_t DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK = 4;
 	constexpr size_t DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 5;
 	constexpr size_t DEFAULT_MAX_CHUNK_SAVES_PER_TICK = 8;
+	constexpr size_t DEFAULT_MAX_CHUNK_UNLOADS_PER_TICK = 8;
 	constexpr size_t CLASSIC_MIN_INTEGRATED_CHUNKS_PER_TICK = 8;
 	constexpr size_t CLASSIC_MID_INTEGRATED_CHUNKS_PER_TICK = 16;
 	constexpr size_t CLASSIC_MAX_INTEGRATED_CHUNKS_PER_TICK = 32;
 	constexpr size_t CLASSIC_MIN_CHUNK_SENDS_PER_CLIENT_PER_TICK = 8;
 	constexpr size_t CLASSIC_MID_CHUNK_SENDS_PER_CLIENT_PER_TICK = 16;
 	constexpr size_t CLASSIC_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 24;
+	constexpr size_t CLASSIC_MAX_CHUNK_UNLOADS_PER_TICK = 32;
 	constexpr int INITIAL_PLAYABLE_RADIUS = 1;
 	constexpr int INITIAL_PADDING_CHUNKS = 0;
 	volatile std::sig_atomic_t gWorldServerSignalStopRequested = 0;
@@ -209,6 +211,7 @@ struct WorldServer::Impl
 	size_t profileSnapshotSectionCount = 0;
 	std::atomic<size_t> profileSaveBatchCount = 0;
 	std::atomic<size_t> profileSavedChunkCount = 0;
+	size_t profileUnloadedChunks = 0;
 
 			Impl(uint16_t listenPort,
 				 std::unique_ptr<IChunkGenerator> worldGenerator,
@@ -525,8 +528,77 @@ struct WorldServer::Impl
 			sendQueuedChunks(entry.second);
 		}
 		flushDirtyChunks(DEFAULT_MAX_CHUNK_SAVES_PER_TICK);
+		unloadColdChunks(unloadChunksBudgetForTick());
 		enet_host_flush(host);
 		logWorkerProfileWindowIfNeeded();
+	}
+
+	bool isChunkWantedByAnyClient(int64_t key) const
+	{
+		for (const auto &entry : clients)
+		{
+			const ClientSession &session = entry.second;
+			if (session.chunkStream.wantedChunks.find(key) != session.chunkStream.wantedChunks.end())
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool canUnloadChunkNow(int64_t key) const
+	{
+		if (activeChunkKeys.find(key) != activeChunkKeys.end())
+		{
+			return false;
+		}
+		if (dirtyChunkKeys.find(key) != dirtyChunkKeys.end())
+		{
+			return false;
+		}
+		if (queuedDirtyChunkKeys.find(key) != queuedDirtyChunkKeys.end())
+		{
+			return false;
+		}
+		if (isChunkWantedByAnyClient(key))
+		{
+			return false;
+		}
+		return true;
+	}
+
+	size_t unloadChunksBudgetForTick() const
+	{
+		if (!usesClassicStreaming())
+		{
+			return DEFAULT_MAX_CHUNK_UNLOADS_PER_TICK;
+		}
+		return CLASSIC_MAX_CHUNK_UNLOADS_PER_TICK;
+	}
+
+	void unloadColdChunks(size_t maxCount)
+	{
+		if (maxCount == 0 || worldChunks.empty())
+		{
+			return;
+		}
+
+		size_t unloadedCount = 0;
+		for (auto it = worldChunks.begin();
+			 it != worldChunks.end() && unloadedCount < maxCount;)
+		{
+			int64_t key = it->first;
+			if (!canUnloadChunkNow(key))
+			{
+				++it;
+				continue;
+			}
+
+			it = worldChunks.erase(it);
+			unloadedCount++;
+		}
+
+		profileUnloadedChunks += unloadedCount;
 	}
 
 	void integrateReadyChunks(size_t maxCount)
@@ -656,6 +728,7 @@ struct WorldServer::Impl
 				  << " integrated_window=" << profileIntegratedChunks
 				  << " integrated_loaded_window=" << profileIntegratedLoadedChunks
 				  << " integrated_generated_window=" << profileIntegratedGeneratedChunks
+				  << " unloaded_window=" << profileUnloadedChunks
 				  << " queued_for_send_window=" << profileQueuedForSendChunks
 				  << " send_queue_now=" << queuedSendCount
 				  << " dirty_marked_window=" << profileMarkedDirtyChunks
@@ -704,6 +777,7 @@ struct WorldServer::Impl
 		profileIntegratedChunks = 0;
 		profileIntegratedLoadedChunks = 0;
 		profileIntegratedGeneratedChunks = 0;
+		profileUnloadedChunks = 0;
 		profileQueuedForSendChunks = 0;
 		profileMarkedDirtyChunks = 0;
 		profileTickCount = 0;

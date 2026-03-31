@@ -26,6 +26,8 @@ void resetClientProfilerWindow(ClientProfilerState &state,
 	state.maxDrops = 0;
 	state.accumReceives = 0;
 	state.maxReceives = 0;
+	state.accumUnloads = 0;
+	state.maxUnloads = 0;
 }
 
 void accumulateClientProfilerSample(ClientProfilerState &state,
@@ -102,6 +104,7 @@ bool flushClientProfilerWindowIfReady(ClientProfilerState &state,
 									  size_t &profileChunkRequestsWindow,
 									  size_t &profileChunkDropsWindow,
 									  size_t &profileChunkReceivesWindow,
+									  size_t &profileChunkUnloadsWindow,
 									  size_t &profileMeshedChunkCountWindow,
 									  size_t &profileMeshedSectionCountWindow)
 {
@@ -143,6 +146,12 @@ bool flushClientProfilerWindowIfReady(ClientProfilerState &state,
 			static_cast<double>(profileChunkReceivesWindow) /
 			static_cast<double>(profileChunkRequestsWindow);
 	}
+	double unloadsPerSecond = 0.0;
+	if (elapsedSeconds > 0.0)
+	{
+		unloadsPerSecond =
+			static_cast<double>(profileChunkUnloadsWindow) / elapsedSeconds;
+	}
 	double avgMeshedSections = 0.0;
 	if (meshedChunks > 0)
 	{
@@ -177,6 +186,8 @@ bool flushClientProfilerWindowIfReady(ClientProfilerState &state,
 			  << " receives_window=" << profileChunkReceivesWindow
 			  << " receives_per_sec=" << receivesPerSecond
 			  << " receives_max=" << state.maxReceives
+			  << " unloads_window=" << profileChunkUnloadsWindow
+			  << " unloads_per_sec=" << unloadsPerSecond
 			  << " receive_request_ratio=" << receiveRequestRatio
 			  << " net_stream_delta="
 			  << static_cast<long long>(profileChunkReceivesWindow) -
@@ -189,6 +200,7 @@ bool flushClientProfilerWindowIfReady(ClientProfilerState &state,
 	profileChunkRequestsWindow = 0;
 	profileChunkDropsWindow = 0;
 	profileChunkReceivesWindow = 0;
+	profileChunkUnloadsWindow = 0;
 	profileMeshedChunkCountWindow = 0;
 	profileMeshedSectionCountWindow = 0;
 	return true;

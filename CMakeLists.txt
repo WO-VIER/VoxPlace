@@ -146,6 +146,25 @@ target_link_libraries(VoxPlaceServer PRIVATE
     PkgConfig::ZSTD
 )
 
+set(PREGEN_SOURCES
+    src/tools/pregen_main.cpp
+    src/WorldClient.cpp
+)
+
+add_executable(VoxPlacePregen ${PREGEN_SOURCES})
+
+target_include_directories(VoxPlacePregen PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/dependencies
+    ${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
+)
+
+target_link_libraries(VoxPlacePregen PRIVATE
+    voxplace_core
+    PkgConfig::ENET
+)
+
 if(ENABLE_TRACY)
     target_link_libraries(VoxPlaceServer PRIVATE Tracy::TracyClient)
     target_compile_definitions(VoxPlaceServer PRIVATE TRACY_ENABLE)

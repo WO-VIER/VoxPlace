@@ -18,7 +18,8 @@ public:
 	static bool removeClientChunkByKey(int64_t key,
 									   std::unordered_map<int64_t, ClientChunk *> &chunkMap,
 									   std::unordered_map<int64_t, uint64_t> &pendingMeshRevisions,
-									   ChunkIndirectRenderer &indirectRenderer);
+									   ChunkIndirectRenderer &indirectRenderer,
+									   size_t &chunkUnloadCountWindow);
 	static uint32_t getBlockWorld(const std::unordered_map<int64_t, ClientChunk *> &chunkMap,
 								  int wx,
 								  int wy,

@@ -62,7 +62,8 @@ ClientFrameRenderResult ClientFrameRenderer::renderWorldFrame(
 				key,
 				worldState.chunkMap,
 				worldState.pendingMeshRevisions,
-				chunkIndirectRenderer);
+				chunkIndirectRenderer,
+				worldState.profileChunkUnloadsWindow);
 		});
 
 	result.visibility = WorldRenderer::collectVisibility(

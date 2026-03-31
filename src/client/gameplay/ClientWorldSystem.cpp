@@ -11,6 +11,7 @@ void ClientWorldSystem::clear(ClientWorldState &worldState, ChunkIndirectRendere
 	worldState.profileChunkRequestsWindow = 0;
 	worldState.profileChunkDropsWindow = 0;
 	worldState.profileChunkReceivesWindow = 0;
+	worldState.profileChunkUnloadsWindow = 0;
 	worldState.profileMeshedChunkCountWindow = 0;
 	worldState.profileMeshedSectionCountWindow = 0;
 

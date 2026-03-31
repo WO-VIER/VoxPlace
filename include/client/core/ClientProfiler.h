@@ -27,6 +27,8 @@ struct ClientProfilerState
 	size_t maxDrops = 0;
 	size_t accumReceives = 0;
 	size_t maxReceives = 0;
+	size_t accumUnloads = 0;
+	size_t maxUnloads = 0;
 };
 
 void resetClientProfilerWindow(ClientProfilerState &state,
@@ -56,6 +58,7 @@ bool flushClientProfilerWindowIfReady(ClientProfilerState &state,
 									  size_t &profileChunkRequestsWindow,
 									  size_t &profileChunkDropsWindow,
 									  size_t &profileChunkReceivesWindow,
+									  size_t &profileChunkUnloadsWindow,
 									  size_t &profileMeshedChunkCountWindow,
 									  size_t &profileMeshedSectionCountWindow);
 

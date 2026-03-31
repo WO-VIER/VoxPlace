@@ -20,3 +20,4 @@ vgcore*
 .github/deploy_key.pub
 Analyse
 bench
+build_chunky

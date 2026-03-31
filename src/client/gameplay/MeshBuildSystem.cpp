@@ -30,7 +30,8 @@ void MeshBuildSystem::markChunkNeighborhoodDirty(std::unordered_map<int64_t, Cli
 bool MeshBuildSystem::removeClientChunkByKey(int64_t key,
 											 std::unordered_map<int64_t, ClientChunk *> &chunkMap,
 											 std::unordered_map<int64_t, uint64_t> &pendingMeshRevisions,
-											 ChunkIndirectRenderer &indirectRenderer)
+											 ChunkIndirectRenderer &indirectRenderer,
+											 size_t &chunkUnloadCountWindow)
 {
 	pendingMeshRevisions.erase(key);
 	indirectRenderer.removeChunk(key);
@@ -45,6 +46,7 @@ bool MeshBuildSystem::removeClientChunkByKey(int64_t key,
 	int cz = chunkIt->second->storage.chunkZ;
 	delete chunkIt->second;
 	chunkMap.erase(chunkIt);
+	chunkUnloadCountWindow++;
 	markChunkNeighborhoodDirty(chunkMap, cx, cz);
 	return true;
 }

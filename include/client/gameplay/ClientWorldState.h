@@ -18,6 +18,7 @@ struct ClientWorldState
 	size_t profileChunkRequestsWindow = 0;
 	size_t profileChunkDropsWindow = 0;
 	size_t profileChunkReceivesWindow = 0;
+	size_t profileChunkUnloadsWindow = 0;
 	size_t profileMeshedChunkCountWindow = 0;
 	size_t profileMeshedSectionCountWindow = 0;
 };
