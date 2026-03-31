@@ -1,5 +1,6 @@
 #include <client/core/ClientLaunch.h>
 
+#include <WorldProtocol.h>
 #include <PlayerUsername.h>
 
 #include <algorithm>
@@ -92,9 +93,9 @@ bool tryReadEnvFloat(const char *name, float &value)
 
 void printClientUsage(const char *programName)
 {
-	std::cout << "Usage: " << programName << " [server_host server_port username]" << std::endl;
-	std::cout << "Example: " << programName << " 127.0.0.1 28713 Player" << std::endl;
-	std::cout << "         " << programName << " 192.168.1.42 28713 Player" << std::endl;
+	std::cout << "Usage: " << programName << " [server_host server_port username password]" << std::endl;
+	std::cout << "Example: " << programName << " 127.0.0.1 28713 Player StrongPassword123" << std::endl;
+	std::cout << "         " << programName << " 192.168.1.42 28713 Player AnotherPassword" << std::endl;
 }
 
 bool parseClientPort(std::string_view rawPort, uint16_t &port)
@@ -135,7 +136,7 @@ bool parseClientLaunchOptions(int argc, char **argv, ClientLaunchOptions &option
 		return true;
 	}
 
-	if (argc != 4)
+	if (argc != 5)
 	{
 		printClientUsage(argv[0]);
 		return false;
@@ -161,6 +162,18 @@ bool parseClientLaunchOptions(int argc, char **argv, ClientLaunchOptions &option
 		std::cerr << "Invalid username: "
 				  << playerUsernameValidationErrorText(usernameError)
 				  << std::endl;
+		return false;
+	}
+
+	options.password = std::string(argv[4]);
+	if (options.password.empty())
+	{
+		std::cerr << "Password must not be empty" << std::endl;
+		return false;
+	}
+	if (options.password.size() > PLAYER_PASSWORD_MAX_LENGTH)
+	{
+		std::cerr << "Password is too long" << std::endl;
 		return false;
 	}
 

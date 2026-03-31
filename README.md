@@ -64,11 +64,12 @@ ou
 Options :
 
 ```text
---classic-gen         Active la génération de terrain "classic streaming" autour du joueur
---port <port>         Change le port d'écoute du serveur (défaut : 28713)
---db <path>           Fichier SQLite pour la persistance des joueurs
---world-db <path>     Fichier SQLite pour la persistance des chunks du monde
---help                Affiche l'aide
+--classic-gen           Active la génération de terrain "classic streaming" autour du joueur
+--port <port>           Change le port d'écoute du serveur (défaut : 28713)
+--db <path>             Fichier SQLite pour la persistance des joueurs
+--world-db <path>       Fichier SQLite pour la persistance des chunks du monde
+--modified-only-world   Ne persiste que les chunks effectivement modifiés par les joueurs
+--help                  Affiche l'aide
 ```
 
 Variables d'environnement :
@@ -104,17 +105,55 @@ Pour se connecter à un serveur en cours d'exécution :
 
 Le client se connecte à `localhost:28713` par défaut. L'adresse du serveur peut être modifiée depuis l'écran de connexion en jeu.
 
+Un **mot de passe est obligatoire** dès qu'un username est utilisé.
+
+Le serveur fonctionne avec la règle suivante :
+
+- un `username` correspond à un compte unique côté serveur
+- si le compte n'existe pas encore, il est créé avec le couple `username + password`
+- si le compte existe déjà, le même `username` doit être fourni avec le bon mot de passe
+
 Connexion au serveur public :
 
 ```bash
-./build/VoxPlace 161.35.214.248 28713 MonPseudo
+./build/VoxPlace 161.35.214.248 28713 MonPseudo MonMotDePasse
 ```
 
 Connexion à un serveur local :
 
 ```bash
-./build/VoxPlace 127.0.0.1 28713 MonPseudo
+./build/VoxPlace 127.0.0.1 28713 MonPseudo MonMotDePasse
 ```
+
+Exemple en release :
+
+```bash
+./build_release/VoxPlace 161.35.214.248 28713 MonPseudo MonMotDePasse
+```
+
+### Persistance SQLite
+
+Le projet utilise actuellement SQLite pour deux choses distinctes :
+
+- **DB joueurs** (`--db`)
+  - compte joueur
+  - hash du mot de passe
+  - position
+  - cooldown d'action bloc
+- **DB monde** (`--world-db`)
+  - chunks du monde persistés
+  - payload compressé en `Zstd` niveau 3
+  - stratégie `load or generate`
+
+En `classic-gen`, les chemins par défaut sont :
+
+- `voxplace_players_classic_gen.sqlite3`
+- `voxplace_world_classic_gen.sqlite3`
+
+En mode non `classic-gen`, les chemins par défaut sont :
+
+- `voxplace_players_classic_voxplace.sqlite3`
+- `voxplace_world_classic_voxplace.sqlite3`
 
 ## Structure du projet
 

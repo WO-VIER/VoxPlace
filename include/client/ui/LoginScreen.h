@@ -19,6 +19,7 @@ struct LoginLaunchData
 	std::string host;
 	uint16_t port = 0;
 	std::string username;
+	std::string password;
 	bool autoConnect = false;
 };
 

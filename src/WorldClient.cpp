@@ -126,6 +126,11 @@ bool WorldClient::connectToServer(const std::string &hostName,
 		m_impl->lastConnectionError = playerUsernameValidationErrorText(usernameError);
 		return false;
 	}
+	if (password.empty())
+	{
+		m_impl->lastConnectionError = "Password must not be empty";
+		return false;
+	}
 
 	if (m_impl->host == nullptr)
 	{

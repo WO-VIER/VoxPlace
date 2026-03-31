@@ -120,6 +120,7 @@ namespace
 			loginLaunchData.host = m_launchOptions.host;
 			loginLaunchData.port = m_launchOptions.port;
 			loginLaunchData.username = m_launchOptions.username;
+			loginLaunchData.password = m_launchOptions.password;
 			loginLaunchData.autoConnect = m_launchOptions.autoConnect;
 			m_runtime.loginScreen.initialize(loginLaunchData);
 

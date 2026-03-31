@@ -165,7 +165,7 @@ void LoginScreen::initialize(const LoginLaunchData &launchData)
 	copyStringToBuffer(launchData.host, m_host);
 	copyStringToBuffer(std::to_string(launchData.port), m_port);
 	copyStringToBuffer(launchData.username, m_username);
-	std::fill(std::begin(m_password), std::end(m_password), '\0');
+	copyStringToBuffer(launchData.password, m_password);
 	m_errorMessage.clear();
 	m_statusMessage.clear();
 	m_autoConnectPending = launchData.autoConnect;
@@ -376,6 +376,11 @@ bool LoginScreen::beginConnect(WorldClient &worldClient,
 		return false;
 	}
 	std::string password = std::string(m_password);
+	if (password.empty())
+	{
+		m_errorMessage = "Password must not be empty";
+		return false;
+	}
 	if (password.size() > PLAYER_PASSWORD_MAX_LENGTH)
 	{
 		m_errorMessage = "Password is too long";

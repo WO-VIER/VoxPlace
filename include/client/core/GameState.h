@@ -23,6 +23,7 @@ struct ClientLaunchOptions
 	std::string host = CLIENT_DEFAULT_SERVER_HOST;
 	uint16_t port = CLIENT_DEFAULT_SERVER_PORT;
 	std::string username;
+	std::string password;
 	bool autoConnect = false;
 };
 

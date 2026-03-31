@@ -916,18 +916,21 @@ struct WorldServer::Impl
 		}
 
 		std::string password = std::string(request.password);
-		std::string passwordHashForNewPlayer;
-		if (!password.empty())
+		if (password.empty())
 		{
-			if (!passwordHasher.hashPassword(password, passwordHashForNewPlayer))
-			{
-				std::cerr << "Failed to hash password for "
-						  << trimmedUsername
-						  << ": " << passwordHasher.lastError() << std::endl;
-				response.status = LoginStatus::InvalidCredentials;
-				sendReliable(peer, encodeLoginResponse(response));
-				return;
-			}
+			response.status = LoginStatus::InvalidCredentials;
+			sendReliable(peer, encodeLoginResponse(response));
+			return;
+		}
+		std::string passwordHashForNewPlayer;
+		if (!passwordHasher.hashPassword(password, passwordHashForNewPlayer))
+		{
+			std::cerr << "Failed to hash password for "
+					  << trimmedUsername
+					  << ": " << passwordHasher.lastError() << std::endl;
+			response.status = LoginStatus::InvalidCredentials;
+			sendReliable(peer, encodeLoginResponse(response));
+			return;
 		}
 
 		bool createdPlayer = false;
@@ -961,7 +964,7 @@ struct WorldServer::Impl
 					return;
 				}
 			}
-			else if (!password.empty())
+			else
 			{
 				if (!playerTable.updatePasswordHash(
 						session.playerContext.player.profile.playerId,
