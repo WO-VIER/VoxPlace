@@ -189,8 +189,15 @@ struct WorldServer::Impl
 	size_t workerCount = 0;
 	bool profileWorkers = false;
 	std::chrono::steady_clock::time_point profileWindowStart;
-	size_t profileGeneratedChunks = 0;
+	std::atomic<size_t> profileReadyChunks = 0;
+	std::atomic<size_t> profileLoadedChunks = 0;
+	std::atomic<size_t> profileGeneratedFreshChunks = 0;
+	std::atomic<size_t> profileLoadErrorChunks = 0;
 	size_t profileIntegratedChunks = 0;
+	size_t profileIntegratedLoadedChunks = 0;
+	size_t profileIntegratedGeneratedChunks = 0;
+	size_t profileQueuedForSendChunks = 0;
+	size_t profileMarkedDirtyChunks = 0;
 	size_t profileTickCount = 0;
 	size_t profileAccumGenerationTasks = 0;
 	size_t profileAccumReadyChunks = 0;
@@ -200,6 +207,8 @@ struct WorldServer::Impl
 	size_t profileSnapshotPayloadBytes = 0;
 	size_t profileSnapshotRawBytes = 0;
 	size_t profileSnapshotSectionCount = 0;
+	std::atomic<size_t> profileSaveBatchCount = 0;
+	std::atomic<size_t> profileSavedChunkCount = 0;
 
 			Impl(uint16_t listenPort,
 				 std::unique_ptr<IChunkGenerator> worldGenerator,
@@ -451,24 +460,30 @@ struct WorldServer::Impl
 				}
 				readyChunk.loadedFromStorage = loadedFromStorage;
 
-				if (!loadedFromStorage)
+				if (loadedFromStorage)
 				{
-				if (!worldTable.lastError().empty())
-				{
-					std::cerr << "Failed to load world chunk " << coord.x << ","
-							  << coord.z << " from storage: "
-							  << worldTable.lastError() << std::endl;
+					profileLoadedChunks.fetch_add(1, std::memory_order_relaxed);
 				}
-				
+				else
+				{
+					if (!worldTable.lastError().empty())
+					{
+						std::cerr << "Failed to load world chunk " << coord.x << ","
+								  << coord.z << " from storage: "
+								  << worldTable.lastError() << std::endl;
+						profileLoadErrorChunks.fetch_add(1, std::memory_order_relaxed);
+					}
+
 					{
 						ZoneScopedN("CPU: FastNoise Gen Terrain");
 						generator->fillChunk(readyChunk.chunk);
 					}
+					profileGeneratedFreshChunks.fetch_add(1, std::memory_order_relaxed);
 				}
 
 				std::lock_guard<std::mutex> readyLock(readyMutex);
 				readyChunks.push_back(std::move(readyChunk));
-				profileGeneratedChunks++;
+				profileReadyChunks.fetch_add(1, std::memory_order_relaxed);
 			}
 		}
 
@@ -534,9 +549,18 @@ struct WorldServer::Impl
 
 					int64_t key = chunkKey(chunk.chunkX, chunk.chunkZ);
 					worldChunks[key] = std::move(chunk);
+					if (readyChunk.loadedFromStorage)
+					{
+						profileIntegratedLoadedChunks++;
+					}
+					else
+					{
+						profileIntegratedGeneratedChunks++;
+					}
 					if (!readyChunk.loadedFromStorage && persistGeneratedChunks)
 					{
 						markChunkDirty(key);
+						profileMarkedDirtyChunks++;
 					}
 				{
 					std::lock_guard<std::mutex> taskLock(taskMutex);
@@ -602,12 +626,41 @@ struct WorldServer::Impl
 			avgReady = static_cast<double>(profileAccumReadyChunks) / static_cast<double>(profileTickCount);
 		}
 
+		size_t readyWindow = profileReadyChunks.exchange(0, std::memory_order_relaxed);
+		size_t loadedWindow = profileLoadedChunks.exchange(0, std::memory_order_relaxed);
+		size_t generatedFreshWindow = profileGeneratedFreshChunks.exchange(0, std::memory_order_relaxed);
+		size_t loadErrorsWindow = profileLoadErrorChunks.exchange(0, std::memory_order_relaxed);
+		size_t saveBatchWindow = profileSaveBatchCount.exchange(0, std::memory_order_relaxed);
+		size_t savedChunksWindow = profileSavedChunkCount.exchange(0, std::memory_order_relaxed);
+
+		size_t queuedSendCount = 0;
+		for (const auto &entry : clients)
+		{
+			queuedSendCount += entry.second.chunkStream.sendQueue.size();
+		}
+
+		size_t saveQueueJobsNow = 0;
+		{
+			std::lock_guard<std::mutex> lock(saveMutex);
+			saveQueueJobsNow = saveJobs.size();
+		}
+
 		std::cout << "[server-profile] workers=" << workerCount
 				  << " mode=" << worldGenerationModeName(generationMode)
 				  << " clients=" << clients.size()
 				  << " world_chunks=" << worldChunks.size()
-				  << " generated_window=" << profileGeneratedChunks
+				  << " ready_window=" << readyWindow
+				  << " loaded_window=" << loadedWindow
+				  << " generated_fresh_window=" << generatedFreshWindow
+				  << " load_errors_window=" << loadErrorsWindow
 				  << " integrated_window=" << profileIntegratedChunks
+				  << " integrated_loaded_window=" << profileIntegratedLoadedChunks
+				  << " integrated_generated_window=" << profileIntegratedGeneratedChunks
+				  << " queued_for_send_window=" << profileQueuedForSendChunks
+				  << " send_queue_now=" << queuedSendCount
+				  << " dirty_marked_window=" << profileMarkedDirtyChunks
+				  << " dirty_queue_now=" << dirtyChunkQueue.size()
+				  << " save_queue_jobs_now=" << saveQueueJobsNow
 				  << " tasks_now=" << generationTaskCount
 				  << " tasks_avg=" << avgTasks
 				  << " tasks_max=" << profileMaxGenerationTasks
@@ -633,12 +686,26 @@ struct WorldServer::Impl
 					  << " snapshot_ratio=" << ratio;
 		}
 
+		double saveAvgChunks = 0.0;
+		if (saveBatchWindow > 0)
+		{
+			saveAvgChunks =
+				static_cast<double>(savedChunksWindow) /
+				static_cast<double>(saveBatchWindow);
+		}
+		std::cout << " saved_chunks_window=" << savedChunksWindow
+				  << " save_batches_window=" << saveBatchWindow
+				  << " save_avg_chunks=" << saveAvgChunks;
+
 		std::cout
 			<< std::endl;
 
 		profileWindowStart = now;
-		profileGeneratedChunks = 0;
 		profileIntegratedChunks = 0;
+		profileIntegratedLoadedChunks = 0;
+		profileIntegratedGeneratedChunks = 0;
+		profileQueuedForSendChunks = 0;
+		profileMarkedDirtyChunks = 0;
 		profileTickCount = 0;
 		profileAccumGenerationTasks = 0;
 		profileAccumReadyChunks = 0;
@@ -808,7 +875,10 @@ struct WorldServer::Impl
 					}
 					saveCv.notify_one();
 					std::this_thread::sleep_for(std::chrono::milliseconds(10));
+					continue;
 				}
+				profileSaveBatchCount.fetch_add(1, std::memory_order_relaxed);
+				profileSavedChunkCount.fetch_add(job.chunks.size(), std::memory_order_relaxed);
 			}
 		}
 	}
@@ -1353,6 +1423,7 @@ struct WorldServer::Impl
 		}
 		chunkStream.sendQueue.push_back(key);
 		chunkStream.queuedChunks.insert(key);
+		profileQueuedForSendChunks++;
 	}
 
 	void sendQueuedChunks(ClientSession &session)

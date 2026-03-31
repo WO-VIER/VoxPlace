@@ -19,3 +19,4 @@ vgcore*
 .github/deploy_key
 .github/deploy_key.pub
 Analyse
+bench

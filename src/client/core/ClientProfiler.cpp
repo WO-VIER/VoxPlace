@@ -123,9 +123,26 @@ bool flushClientProfilerWindowIfReady(ClientProfilerState &state,
 	double avgReady = static_cast<double>(state.accumReady) / static_cast<double>(state.sampleCount);
 	double avgVisible = static_cast<double>(state.accumVisible) / static_cast<double>(state.sampleCount);
 	double avgStreamed = static_cast<double>(state.accumStreamed) / static_cast<double>(state.sampleCount);
-	double avgRequests = static_cast<double>(state.accumRequests) / static_cast<double>(state.sampleCount);
-	double avgDrops = static_cast<double>(state.accumDrops) / static_cast<double>(state.sampleCount);
-	double avgReceives = static_cast<double>(state.accumReceives) / static_cast<double>(state.sampleCount);
+	double elapsedSeconds = static_cast<double>(elapsed.count()) / 1000.0;
+	double requestsPerSecond = 0.0;
+	double dropsPerSecond = 0.0;
+	double receivesPerSecond = 0.0;
+	if (elapsedSeconds > 0.0)
+	{
+		requestsPerSecond =
+			static_cast<double>(profileChunkRequestsWindow) / elapsedSeconds;
+		dropsPerSecond =
+			static_cast<double>(profileChunkDropsWindow) / elapsedSeconds;
+		receivesPerSecond =
+			static_cast<double>(profileChunkReceivesWindow) / elapsedSeconds;
+	}
+	double receiveRequestRatio = 0.0;
+	if (profileChunkRequestsWindow > 0)
+	{
+		receiveRequestRatio =
+			static_cast<double>(profileChunkReceivesWindow) /
+			static_cast<double>(profileChunkRequestsWindow);
+	}
 	double avgMeshedSections = 0.0;
 	if (meshedChunks > 0)
 	{
@@ -151,12 +168,19 @@ bool flushClientProfilerWindowIfReady(ClientProfilerState &state,
 			  << " visible_max=" << state.maxVisible
 			  << " streamed_avg=" << avgStreamed
 			  << " streamed_max=" << state.maxStreamed
-			  << " requests_avg=" << avgRequests
+			  << " requests_window=" << profileChunkRequestsWindow
+			  << " requests_per_sec=" << requestsPerSecond
 			  << " requests_max=" << state.maxRequests
-			  << " drops_avg=" << avgDrops
+			  << " drops_window=" << profileChunkDropsWindow
+			  << " drops_per_sec=" << dropsPerSecond
 			  << " drops_max=" << state.maxDrops
-			  << " receives_avg=" << avgReceives
+			  << " receives_window=" << profileChunkReceivesWindow
+			  << " receives_per_sec=" << receivesPerSecond
 			  << " receives_max=" << state.maxReceives
+			  << " receive_request_ratio=" << receiveRequestRatio
+			  << " net_stream_delta="
+			  << static_cast<long long>(profileChunkReceivesWindow) -
+					 static_cast<long long>(profileChunkDropsWindow)
 			  << " meshed_chunks=" << meshedChunks
 			  << " meshed_sections_avg=" << avgMeshedSections
 			  << std::endl;
