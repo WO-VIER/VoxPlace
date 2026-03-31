@@ -3,6 +3,13 @@ set -e
 
 echo "[deploy] $(date) - Starting deployment..."
 
+# Arrêter l'ancien serveur AVANT de rebuild
+if pgrep VoxPlaceServer > /dev/null; then
+    echo '[deploy] Stopping old server...'
+    kill -SIGINT $(pgrep VoxPlaceServer)
+    sleep 3
+fi
+
 cd /root/VoxPlace
 git pull origin main
 
@@ -12,13 +19,6 @@ cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TRACY=OFF -DENABLE_GL_DEBUG=OFF
 make VoxPlaceServer -j1
 
 strip VoxPlaceServer
-
-# Arrêter l'ancien serveur proprement
-if pgrep VoxPlaceServer > /dev/null; then
-    echo '[deploy] Stopping old server...'
-    kill -SIGINT $(pgrep VoxPlaceServer)
-    sleep 3
-fi
 
 # Relancer avec priorité max et 2 workers
 nice -n -20 nohup env VOXPLACE_SERVER_WORKERS=2 \
