@@ -152,9 +152,10 @@ struct WorldServer::Impl
 	};
 
 		uint16_t port = 0;
-		std::string playerDatabasePath;
-		std::string worldDatabasePath;
-	ServerEnvironmentOptions environmentOptions;
+			std::string playerDatabasePath;
+			std::string worldDatabasePath;
+			bool persistGeneratedChunks = true;
+		ServerEnvironmentOptions environmentOptions;
 	bool enetInitialized = false;
 	ENetHost *host = nullptr;
 	std::unique_ptr<IChunkGenerator> generator;
@@ -200,16 +201,18 @@ struct WorldServer::Impl
 	size_t profileSnapshotRawBytes = 0;
 	size_t profileSnapshotSectionCount = 0;
 
-		Impl(uint16_t listenPort,
-			 std::unique_ptr<IChunkGenerator> worldGenerator,
-			 WorldGenerationMode selectedGenerationMode,
-			 std::string selectedPlayerDatabasePath,
-			 std::string selectedWorldDatabasePath,
-			 ServerEnvironmentOptions selectedEnvironmentOptions)
-			: port(listenPort),
-			  playerDatabasePath(std::move(selectedPlayerDatabasePath)),
-			  worldDatabasePath(std::move(selectedWorldDatabasePath)),
-		  environmentOptions(selectedEnvironmentOptions),
+			Impl(uint16_t listenPort,
+				 std::unique_ptr<IChunkGenerator> worldGenerator,
+				 WorldGenerationMode selectedGenerationMode,
+				 std::string selectedPlayerDatabasePath,
+				 std::string selectedWorldDatabasePath,
+				 bool shouldPersistGeneratedChunks,
+				 ServerEnvironmentOptions selectedEnvironmentOptions)
+				: port(listenPort),
+				  playerDatabasePath(std::move(selectedPlayerDatabasePath)),
+				  worldDatabasePath(std::move(selectedWorldDatabasePath)),
+				  persistGeneratedChunks(shouldPersistGeneratedChunks),
+			  environmentOptions(selectedEnvironmentOptions),
 		  generator(std::move(worldGenerator)),
 		  generationMode(selectedGenerationMode),
 		  profileWorkers(environmentOptions.profileWorkersEnabled)
@@ -529,12 +532,12 @@ struct WorldServer::Impl
 				}
 				VoxelChunkData chunk = std::move(readyChunk.chunk);
 
-				int64_t key = chunkKey(chunk.chunkX, chunk.chunkZ);
-				worldChunks[key] = std::move(chunk);
-				if (!readyChunk.loadedFromStorage)
-				{
-					markChunkDirty(key);
-				}
+					int64_t key = chunkKey(chunk.chunkX, chunk.chunkZ);
+					worldChunks[key] = std::move(chunk);
+					if (!readyChunk.loadedFromStorage && persistGeneratedChunks)
+					{
+						markChunkDirty(key);
+					}
 				{
 					std::lock_guard<std::mutex> taskLock(taskMutex);
 					scheduledChunkKeys.erase(key);
@@ -828,8 +831,13 @@ struct WorldServer::Impl
 		ZoneScopedN("SQLite: Flush Dirty Chunks");
 		std::vector<int64_t> attemptedKeys;
 		std::vector<VoxelChunkData> chunksToSave;
-		attemptedKeys.reserve(maxCount);
-		chunksToSave.reserve(maxCount);
+		size_t reserveCount = dirtyChunkQueue.size();
+		if (maxCount < reserveCount)
+		{
+			reserveCount = maxCount;
+		}
+		attemptedKeys.reserve(reserveCount);
+		chunksToSave.reserve(reserveCount);
 
 		{
 			ZoneScopedN("SQLite: Collect Dirty Chunk Batch");
@@ -1422,6 +1430,7 @@ WorldServer::WorldServer(uint16_t port,
 						 WorldGenerationMode generationMode,
 						 std::string playerDatabasePath,
 						 std::string worldDatabasePath,
+						 bool persistGeneratedChunks,
 						 ServerEnvironmentOptions environmentOptions)
 {
 	m_impl = new Impl(
@@ -1430,6 +1439,7 @@ WorldServer::WorldServer(uint16_t port,
 		generationMode,
 		std::move(playerDatabasePath),
 		std::move(worldDatabasePath),
+		persistGeneratedChunks,
 		environmentOptions);
 }
 

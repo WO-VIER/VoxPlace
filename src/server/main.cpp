@@ -46,6 +46,9 @@ int main(int argc, char **argv)
 		std::cout << "Server worker profiling requested via environment" << std::endl;
 	}
 	std::cout << "World DB: " << launchOptions.worldDatabasePath << std::endl;
+	std::cout << "Persist generated chunks: "
+			  << (launchOptions.persistGeneratedChunks ? "yes" : "modified-only")
+			  << std::endl;
 
 	WorldServer server(
 		launchOptions.port,
@@ -53,6 +56,7 @@ int main(int argc, char **argv)
 		launchOptions.generationMode,
 		launchOptions.playerDatabasePath,
 		launchOptions.worldDatabasePath,
+		launchOptions.persistGeneratedChunks,
 		environmentOptions);
 	if (!server.start())
 	{

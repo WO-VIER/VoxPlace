@@ -17,6 +17,7 @@ public:
 				WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier,
 				std::string playerDatabasePath = "voxplace_players.sqlite3",
 				std::string worldDatabasePath = "voxplace_world.sqlite3",
+				bool persistGeneratedChunks = true,
 				ServerEnvironmentOptions environmentOptions = {});
 	~WorldServer();
 
