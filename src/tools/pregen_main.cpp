@@ -2,6 +2,7 @@
 
 #include <VoxelChunkData.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -13,13 +14,22 @@
 
 namespace
 {
+	enum class PregenMode
+	{
+		Square,
+		LineX
+	};
+
 	struct PregenOptions
 	{
 		std::string host;
 		uint16_t port = 0;
 		std::string username;
 		std::string password;
+		PregenMode mode = PregenMode::Square;
 		int radiusChunks = 0;
+		int travelChunks = 0;
+		int renderDistanceChunks = 0;
 		int centerChunkX = 0;
 		int centerChunkZ = 0;
 		size_t maxInflight = 128;
@@ -27,13 +37,23 @@ namespace
 
 	void printUsage(const char *programName)
 	{
+		std::cout << "Usage:" << std::endl;
 		std::cout
-			<< "Usage: " << programName
+			<< "  " << programName
 			<< " <host> <port> <username> <password> <radius_chunks> [center_chunk_x center_chunk_z] [max_inflight]"
 			<< std::endl;
 		std::cout
-			<< "Example: " << programName
+			<< "  " << programName
+			<< " <host> <port> <username> <password> line-x <travel_chunks> <render_distance_chunks> [start_chunk_x start_chunk_z] [max_inflight]"
+			<< std::endl;
+		std::cout << "Examples:" << std::endl;
+		std::cout
+			<< "  " << programName
 			<< " 161.35.214.248 28713 PregenUser StrongPass 64 0 0 128"
+			<< std::endl;
+		std::cout
+			<< "  " << programName
+			<< " 161.35.214.248 28713 PregenUser StrongPass line-x 60 32 0 0 128"
 			<< std::endl;
 	}
 
@@ -97,7 +117,7 @@ namespace
 
 	bool parseOptions(int argc, char **argv, PregenOptions &options)
 	{
-		if (argc != 6 && argc != 8 && argc != 9)
+		if (argc < 6)
 		{
 			printUsage(argv[0]);
 			return false;
@@ -118,28 +138,78 @@ namespace
 			return false;
 		}
 
-		if (!parseInt(argv[5], options.radiusChunks) || options.radiusChunks < 0)
+		if (std::string(argv[5]) == "line-x")
 		{
-			std::cerr << "Invalid radius_chunks: " << argv[5] << std::endl;
-			return false;
-		}
-
-		if (argc >= 8)
-		{
-			if (!parseInt(argv[6], options.centerChunkX) ||
-				!parseInt(argv[7], options.centerChunkZ))
+			options.mode = PregenMode::LineX;
+			if (argc != 8 && argc != 10 && argc != 11)
 			{
-				std::cerr << "Invalid center chunk coordinates" << std::endl;
+				printUsage(argv[0]);
 				return false;
 			}
-		}
 
-		if (argc >= 9)
-		{
-			if (!parseSizeT(argv[8], options.maxInflight) || options.maxInflight == 0)
+			if (!parseInt(argv[6], options.travelChunks))
 			{
-				std::cerr << "Invalid max_inflight: " << argv[8] << std::endl;
+				std::cerr << "Invalid travel_chunks: " << argv[6] << std::endl;
 				return false;
+			}
+			if (!parseInt(argv[7], options.renderDistanceChunks) ||
+				options.renderDistanceChunks < 0)
+			{
+				std::cerr << "Invalid render_distance_chunks: " << argv[7] << std::endl;
+				return false;
+			}
+
+			if (argc >= 10)
+			{
+				if (!parseInt(argv[8], options.centerChunkX) ||
+					!parseInt(argv[9], options.centerChunkZ))
+				{
+					std::cerr << "Invalid start chunk coordinates" << std::endl;
+					return false;
+				}
+			}
+
+			if (argc >= 11)
+			{
+				if (!parseSizeT(argv[10], options.maxInflight) || options.maxInflight == 0)
+				{
+					std::cerr << "Invalid max_inflight: " << argv[10] << std::endl;
+					return false;
+				}
+			}
+		}
+		else
+		{
+			options.mode = PregenMode::Square;
+			if (argc != 6 && argc != 8 && argc != 9)
+			{
+				printUsage(argv[0]);
+				return false;
+			}
+
+			if (!parseInt(argv[5], options.radiusChunks) || options.radiusChunks < 0)
+			{
+				std::cerr << "Invalid radius_chunks: " << argv[5] << std::endl;
+				return false;
+			}
+
+			if (argc >= 8)
+			{
+				if (!parseInt(argv[6], options.centerChunkX) ||
+					!parseInt(argv[7], options.centerChunkZ))
+				{
+					std::cerr << "Invalid center chunk coordinates" << std::endl;
+					return false;
+				}
+			}
+
+			if (argc >= 9)
+			{
+				if (!parseSizeT(argv[8], options.maxInflight) || options.maxInflight == 0)
+				{
+					std::cerr << "Invalid max_inflight: " << argv[8] << std::endl;
+					return false;
+				}
 			}
 		}
 
@@ -180,6 +250,80 @@ namespace
 
 		return coords;
 	}
+
+	std::vector<ChunkCoord> buildLineXCoverage(
+		int travelChunks,
+		int renderDistanceChunks,
+		int startChunkX,
+		int startChunkZ)
+	{
+		struct Candidate
+		{
+			ChunkCoord coord;
+			int distSq = 0;
+		};
+
+		std::unordered_set<int64_t> seenKeys;
+		std::vector<ChunkCoord> coords;
+
+		int step = travelChunks >= 0 ? 1 : -1;
+		int endChunkX = startChunkX + travelChunks;
+		size_t estimatedWidth = static_cast<size_t>(std::abs(travelChunks)) +
+			static_cast<size_t>(renderDistanceChunks * 2 + 1);
+		size_t estimatedDepth = static_cast<size_t>(renderDistanceChunks * 2 + 1);
+		coords.reserve(estimatedWidth * estimatedDepth);
+		seenKeys.reserve(estimatedWidth * estimatedDepth * 2);
+
+		for (int cameraChunkX = startChunkX;
+			 (step > 0) ? (cameraChunkX <= endChunkX) : (cameraChunkX >= endChunkX);
+			 cameraChunkX += step)
+		{
+			std::vector<Candidate> candidates;
+			for (int dz = -renderDistanceChunks; dz <= renderDistanceChunks; dz++)
+			{
+				for (int dx = -renderDistanceChunks; dx <= renderDistanceChunks; dx++)
+				{
+					int distSq = dx * dx + dz * dz;
+					if (distSq > renderDistanceChunks * renderDistanceChunks)
+					{
+						continue;
+					}
+
+					Candidate candidate;
+					candidate.coord.x = cameraChunkX + dx;
+					candidate.coord.z = startChunkZ + dz;
+					candidate.distSq = distSq;
+					candidates.push_back(candidate);
+				}
+			}
+
+			std::sort(candidates.begin(), candidates.end(),
+					  [](const Candidate &left, const Candidate &right)
+					  {
+						  if (left.distSq != right.distSq)
+						  {
+							  return left.distSq < right.distSq;
+						  }
+						  if (left.coord.x != right.coord.x)
+						  {
+							  return left.coord.x < right.coord.x;
+						  }
+						  return left.coord.z < right.coord.z;
+					  });
+
+			for (const Candidate &candidate : candidates)
+			{
+				int64_t key = chunkKey(candidate.coord);
+				if (!seenKeys.insert(key).second)
+				{
+					continue;
+				}
+				coords.push_back(candidate.coord);
+			}
+		}
+
+		return coords;
+	}
 }
 
 int main(int argc, char **argv)
@@ -190,10 +334,22 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	std::vector<ChunkCoord> coords = buildSquareSpiral(
-		options.radiusChunks,
-		options.centerChunkX,
-		options.centerChunkZ);
+	std::vector<ChunkCoord> coords;
+	if (options.mode == PregenMode::LineX)
+	{
+		coords = buildLineXCoverage(
+			options.travelChunks,
+			options.renderDistanceChunks,
+			options.centerChunkX,
+			options.centerChunkZ);
+	}
+	else
+	{
+		coords = buildSquareSpiral(
+			options.radiusChunks,
+			options.centerChunkX,
+			options.centerChunkZ);
+	}
 	if (coords.empty())
 	{
 		std::cerr << "No chunk coordinates generated" << std::endl;
@@ -202,8 +358,19 @@ int main(int argc, char **argv)
 
 	std::cout << "Connecting pregen client to "
 			  << options.host << ":" << options.port
-			  << " radius=" << options.radiusChunks
-			  << " center=(" << options.centerChunkX << "," << options.centerChunkZ << ")"
+			  << " mode=" << (options.mode == PregenMode::LineX ? "line-x" : "square");
+	if (options.mode == PregenMode::LineX)
+	{
+		std::cout << " travel_chunks=" << options.travelChunks
+				  << " render_distance=" << options.renderDistanceChunks
+				  << " start=(" << options.centerChunkX << "," << options.centerChunkZ << ")";
+	}
+	else
+	{
+		std::cout << " radius=" << options.radiusChunks
+				  << " center=(" << options.centerChunkX << "," << options.centerChunkZ << ")";
+	}
+	std::cout
 			  << " total_chunks=" << coords.size()
 			  << " max_inflight=" << options.maxInflight
 			  << std::endl;

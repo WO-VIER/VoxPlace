@@ -29,6 +29,10 @@ systemctl reset-failed voxplace.service || true
 cd /root/VoxPlace
 git pull origin main
 
+# Installer l'unité systemd versionnée dans le repo.
+install -m 0644 scripts/voxplace.service /etc/systemd/system/voxplace.service
+systemctl daemon-reload
+
 mkdir -p build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TRACY=OFF -DENABLE_GL_DEBUG=OFF
