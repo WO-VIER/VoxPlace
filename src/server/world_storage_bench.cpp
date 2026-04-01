@@ -569,6 +569,7 @@ int main(int argc, char **argv)
 	TerrainGenerator generator(42);
 	std::vector<VoxelChunkData> chunks;
 	chunks.reserve(chunkCount);
+	TimerResult generation;
 	{
 		auto start = std::chrono::steady_clock::now();
 		for (const auto &[cx, cz] : coords)
@@ -578,7 +579,6 @@ int main(int argc, char **argv)
 			chunks.push_back(std::move(chunk));
 		}
 		auto stop = std::chrono::steady_clock::now();
-		TimerResult generation;
 		generation.totalMs =
 			std::chrono::duration<double, std::milli>(stop - start).count();
 		generation.perChunkMs = generation.totalMs / static_cast<double>(chunkCount);
@@ -823,19 +823,62 @@ int main(int argc, char **argv)
 
 	std::filesystem::path databasePath =
 		std::filesystem::temp_directory_path() / "voxplace_world_storage_bench.sqlite3";
+	std::filesystem::path databaseMissPath =
+		std::filesystem::temp_directory_path() / "voxplace_world_storage_bench_miss.sqlite3";
 	std::filesystem::path databaseBatchPath =
 		std::filesystem::temp_directory_path() / "voxplace_world_storage_bench_batch.sqlite3";
 	std::filesystem::path worldFilePath =
 		std::filesystem::temp_directory_path() / "voxplace_world_storage_bench.world";
 	std::error_code removeError;
 	std::filesystem::remove(databasePath, removeError);
+	std::filesystem::remove(databaseMissPath, removeError);
 	std::filesystem::remove(databaseBatchPath, removeError);
 	std::filesystem::remove(std::filesystem::path(databasePath.string() + "-wal"), removeError);
 	std::filesystem::remove(std::filesystem::path(databasePath.string() + "-shm"), removeError);
+	std::filesystem::remove(std::filesystem::path(databaseMissPath.string() + "-wal"), removeError);
+	std::filesystem::remove(std::filesystem::path(databaseMissPath.string() + "-shm"), removeError);
 	std::filesystem::remove(std::filesystem::path(databaseBatchPath.string() + "-wal"), removeError);
 	std::filesystem::remove(std::filesystem::path(databaseBatchPath.string() + "-shm"), removeError);
 	std::filesystem::remove(worldFilePath, removeError);
 
+	TimerResult loadMissSqlite;
+	{
+		WorldTable table;
+		if (!table.open(databaseMissPath.string(), "bench_miss"))
+		{
+			std::cerr << "Failed to open miss bench world DB: "
+					  << table.lastError() << std::endl;
+			return 1;
+		}
+
+		auto missStart = std::chrono::steady_clock::now();
+		for (const auto &[cx, cz] : coords)
+		{
+			VoxelChunkData chunk;
+			if (table.loadChunk(cx, cz, chunk))
+			{
+				std::cerr << "Unexpected chunk hit during miss benchmark"
+						  << std::endl;
+				return 1;
+			}
+			if (!table.lastError().empty())
+			{
+				std::cerr << "Unexpected SQLite load miss error: "
+						  << table.lastError() << std::endl;
+				return 1;
+			}
+		}
+		auto missStop = std::chrono::steady_clock::now();
+		loadMissSqlite.totalMs =
+			std::chrono::duration<double, std::milli>(missStop - missStart).count();
+		loadMissSqlite.perChunkMs =
+			loadMissSqlite.totalMs / static_cast<double>(chunkCount);
+		printTimer("sqlite_load_miss_zstd_sections", loadMissSqlite);
+	}
+
+	TimerResult loadHitSqlite;
+	TimerResult saveSqlite;
+	TimerResult saveSqliteBatch;
 	{
 		WorldTable table;
 		if (!table.open(databasePath.string(), "bench"))
@@ -856,7 +899,6 @@ int main(int argc, char **argv)
 			}
 		}
 		auto stop = std::chrono::steady_clock::now();
-		TimerResult saveSqlite;
 		saveSqlite.totalMs =
 			std::chrono::duration<double, std::milli>(stop - start).count();
 		saveSqlite.perChunkMs =
@@ -875,57 +917,56 @@ int main(int argc, char **argv)
 			}
 		}
 		auto loadStop = std::chrono::steady_clock::now();
-			TimerResult loadSqlite;
-			loadSqlite.totalMs =
-				std::chrono::duration<double, std::milli>(loadStop - loadStart).count();
-			loadSqlite.perChunkMs =
-				loadSqlite.totalMs / static_cast<double>(chunkCount);
-			printTimer("sqlite_load_zstd_sections", loadSqlite);
+		loadHitSqlite.totalMs =
+			std::chrono::duration<double, std::milli>(loadStop - loadStart).count();
+		loadHitSqlite.perChunkMs =
+			loadHitSqlite.totalMs / static_cast<double>(chunkCount);
+		printTimer("sqlite_load_zstd_sections", loadHitSqlite);
 
-			auto flyForwardStart = std::chrono::steady_clock::now();
-			for (int64_t key : flyThroughKeys)
+		auto flyForwardStart = std::chrono::steady_clock::now();
+		for (int64_t key : flyThroughKeys)
+		{
+			VoxelChunkData chunk;
+			const auto &coord = coordByKey[key];
+			if (!table.loadChunk(coord.first, coord.second, chunk))
 			{
-				VoxelChunkData chunk;
-				const auto &coord = coordByKey[key];
-				if (!table.loadChunk(coord.first, coord.second, chunk))
-				{
-					std::cerr << "Failed to fly-through load chunk from SQLite: "
-							  << table.lastError() << std::endl;
-					return 1;
-				}
+				std::cerr << "Failed to fly-through load chunk from SQLite: "
+						  << table.lastError() << std::endl;
+				return 1;
 			}
-			auto flyForwardStop = std::chrono::steady_clock::now();
-			TimerResult flySqliteForward;
-			flySqliteForward.totalMs =
-				std::chrono::duration<double, std::milli>(
-					flyForwardStop - flyForwardStart)
-					.count();
-			flySqliteForward.perChunkMs =
-				flySqliteForward.totalMs / static_cast<double>(flyThroughKeys.size());
-			printTimer("sqlite_flythrough_forward_zstd_sections", flySqliteForward);
-
-			auto flyReverseStart = std::chrono::steady_clock::now();
-			for (int64_t key : reverseFlyThroughKeys)
-			{
-				VoxelChunkData chunk;
-				const auto &coord = coordByKey[key];
-				if (!table.loadChunk(coord.first, coord.second, chunk))
-				{
-					std::cerr << "Failed to reverse fly-through load chunk from SQLite: "
-							  << table.lastError() << std::endl;
-					return 1;
-				}
-			}
-			auto flyReverseStop = std::chrono::steady_clock::now();
-			TimerResult flySqliteReverse;
-			flySqliteReverse.totalMs =
-				std::chrono::duration<double, std::milli>(
-					flyReverseStop - flyReverseStart)
-					.count();
-			flySqliteReverse.perChunkMs =
-				flySqliteReverse.totalMs / static_cast<double>(reverseFlyThroughKeys.size());
-			printTimer("sqlite_flythrough_reverse_zstd_sections", flySqliteReverse);
 		}
+		auto flyForwardStop = std::chrono::steady_clock::now();
+		TimerResult flySqliteForward;
+		flySqliteForward.totalMs =
+			std::chrono::duration<double, std::milli>(
+				flyForwardStop - flyForwardStart)
+				.count();
+		flySqliteForward.perChunkMs =
+			flySqliteForward.totalMs / static_cast<double>(flyThroughKeys.size());
+		printTimer("sqlite_flythrough_forward_zstd_sections", flySqliteForward);
+
+		auto flyReverseStart = std::chrono::steady_clock::now();
+		for (int64_t key : reverseFlyThroughKeys)
+		{
+			VoxelChunkData chunk;
+			const auto &coord = coordByKey[key];
+			if (!table.loadChunk(coord.first, coord.second, chunk))
+			{
+				std::cerr << "Failed to reverse fly-through load chunk from SQLite: "
+						  << table.lastError() << std::endl;
+				return 1;
+			}
+		}
+		auto flyReverseStop = std::chrono::steady_clock::now();
+		TimerResult flySqliteReverse;
+		flySqliteReverse.totalMs =
+			std::chrono::duration<double, std::milli>(
+				flyReverseStop - flyReverseStart)
+				.count();
+		flySqliteReverse.perChunkMs =
+			flySqliteReverse.totalMs / static_cast<double>(reverseFlyThroughKeys.size());
+		printTimer("sqlite_flythrough_reverse_zstd_sections", flySqliteReverse);
+	}
 
 	size_t sqliteMainBytes = fileSizeOrZero(databasePath);
 	size_t sqliteWalBytes =
@@ -945,7 +986,6 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		auto stop = std::chrono::steady_clock::now();
-		TimerResult saveSqliteBatch;
 		saveSqliteBatch.totalMs =
 			std::chrono::duration<double, std::milli>(stop - start).count();
 		saveSqliteBatch.perChunkMs =

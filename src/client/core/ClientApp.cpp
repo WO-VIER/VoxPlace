@@ -258,6 +258,7 @@ namespace
 
 				if (renderLoginFrameIfNeeded())
 				{
+					maybeStopBenchRun();
 					presentFrame();
 					continue;
 				}
@@ -301,6 +302,9 @@ namespace
 				m_runtime.camera);
 			if (pollResult == LoginScreenPollResult::Failed)
 			{
+				std::cerr << "Connection failed: "
+						  << m_runtime.worldClient.lastConnectionError()
+						  << std::endl;
 				m_runtime.gameState.appState = ClientAppState::Login;
 			}
 			else if (pollResult == LoginScreenPollResult::Connected)
@@ -568,6 +572,19 @@ namespace
 			double benchElapsedSeconds = static_cast<double>(benchElapsed.count()) / 1000.0;
 			if (benchElapsedSeconds >= static_cast<double>(m_environmentOptions.benchDurationSeconds))
 			{
+				if (m_runtime.gameState.appState != ClientAppState::InGame)
+				{
+					std::cerr << "Bench stopped before entering game";
+					if (m_runtime.loginScreen.isConnecting())
+					{
+						std::cerr << ": still connecting";
+					}
+					else if (!m_runtime.worldClient.lastConnectionError().empty())
+					{
+						std::cerr << ": " << m_runtime.worldClient.lastConnectionError();
+					}
+					std::cerr << std::endl;
+				}
 				glfwSetWindowShouldClose(m_runtime.window, GLFW_TRUE);
 			}
 		}

@@ -146,6 +146,26 @@ target_link_libraries(VoxPlaceServer PRIVATE
     PkgConfig::ZSTD
 )
 
+set(WORLD_STORAGE_BENCH_SOURCES
+    src/WorldTable.cpp
+    src/server/world_storage_bench.cpp
+)
+
+add_executable(VoxPlaceWorldStorageBench ${WORLD_STORAGE_BENCH_SOURCES})
+
+target_include_directories(VoxPlaceWorldStorageBench PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/dependencies
+    ${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
+)
+
+target_link_libraries(VoxPlaceWorldStorageBench PRIVATE
+    voxplace_core
+    PkgConfig::SQLITE3
+    PkgConfig::ZSTD
+)
+
 set(PREGEN_SOURCES
     src/tools/pregen_main.cpp
     src/WorldClient.cpp
