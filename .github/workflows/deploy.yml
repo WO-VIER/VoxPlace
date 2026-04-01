@@ -25,7 +25,8 @@ jobs:
             libsodium-dev \
             libsqlite3-dev \
             libzstd-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            libglm-dev
 
       - name: Configure CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_TRACY=OFF -DENABLE_GL_DEBUG=OFF
