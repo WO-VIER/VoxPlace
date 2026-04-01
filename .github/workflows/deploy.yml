@@ -1,14 +1,49 @@
-name: Deploy VoxPlace Server
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-  deploy:
+  build:
+    name: Build & Verify
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to VPS
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libglfw3-dev \
+            libenet-dev \
+            libsodium-dev \
+            libsqlite3-dev \
+            libzstd-dev \
+            libgl1-mesa-dev
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_TRACY=OFF -DENABLE_GL_DEBUG=OFF
+
+      - name: Build Server
+        run: cmake --build build --target VoxPlaceServer -j2
+        
+      - name: Build Client
+        run: cmake --build build --target VoxPlace -j2
+
+  deploy:
+    name: Deploy to VPS
+    needs: build
+    # On déploie uniquement si on est sur 'main' et que c'est un push (pas une PR)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger VPS Deployment
         uses: appleboy/ssh-action@v1
         with:
           host: 161.35.214.248
