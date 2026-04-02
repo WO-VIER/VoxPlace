@@ -205,20 +205,35 @@ bool WorldTable::isOpen() const
 	return m_db != nullptr;
 }
 
-bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
+WorldTableLoadChunkResult WorldTable::loadChunkResult(int cx,
+													  int cz,
+													  VoxelChunkData &chunk,
+													  std::string *errorMessage)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 	m_lastError.clear();
+	if (errorMessage != nullptr)
+	{
+		errorMessage->clear();
+	}
 	if (m_db == nullptr)
 	{
 		m_lastError = "World database is not open";
-		return false;
+		if (errorMessage != nullptr)
+		{
+			*errorMessage = m_lastError;
+		}
+		return WorldTableLoadChunkResult::Error;
 	}
 
 	if (m_loadChunkStatement == nullptr)
 	{
 		m_lastError = "World load statement is not prepared";
-		return false;
+		if (errorMessage != nullptr)
+		{
+			*errorMessage = m_lastError;
+		}
+		return WorldTableLoadChunkResult::Error;
 	}
 	sqlite3_stmt *statement = m_loadChunkStatement;
 	sqlite3_reset(statement);
@@ -230,7 +245,11 @@ bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
 		setLastErrorFromDatabaseNoLock("Failed to bind chunk key for world load");
 		sqlite3_reset(statement);
 		sqlite3_clear_bindings(statement);
-		return false;
+		if (errorMessage != nullptr)
+		{
+			*errorMessage = m_lastError;
+		}
+		return WorldTableLoadChunkResult::Error;
 	}
 
 	int stepResult = sqlite3_step(statement);
@@ -238,7 +257,7 @@ bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
 	{
 		sqlite3_reset(statement);
 		sqlite3_clear_bindings(statement);
-		return false;
+		return WorldTableLoadChunkResult::Missing;
 	}
 
 	if (stepResult != SQLITE_ROW)
@@ -246,7 +265,11 @@ bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
 		setLastErrorFromDatabaseNoLock("Failed to read world chunk row");
 		sqlite3_reset(statement);
 		sqlite3_clear_bindings(statement);
-		return false;
+		if (errorMessage != nullptr)
+		{
+			*errorMessage = m_lastError;
+		}
+		return WorldTableLoadChunkResult::Error;
 	}
 
 	const void *blob = sqlite3_column_blob(statement, 0);
@@ -256,7 +279,11 @@ bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
 		m_lastError = "World chunk payload is empty";
 		sqlite3_reset(statement);
 		sqlite3_clear_bindings(statement);
-		return false;
+		if (errorMessage != nullptr)
+		{
+			*errorMessage = m_lastError;
+		}
+		return WorldTableLoadChunkResult::Error;
 	}
 
 	DecodedChunkSnapshot decoded;
@@ -265,7 +292,11 @@ bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
 		m_lastError = "Failed to decode stored world chunk payload";
 		sqlite3_reset(statement);
 		sqlite3_clear_bindings(statement);
-		return false;
+		if (errorMessage != nullptr)
+		{
+			*errorMessage = m_lastError;
+		}
+		return WorldTableLoadChunkResult::Error;
 	}
 	sqlite3_reset(statement);
 	sqlite3_clear_bindings(statement);
@@ -273,10 +304,61 @@ bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
 	if (decoded.chunk.chunkX != cx || decoded.chunk.chunkZ != cz)
 	{
 		m_lastError = "Stored world chunk coordinates do not match requested chunk";
-		return false;
+		if (errorMessage != nullptr)
+		{
+			*errorMessage = m_lastError;
+		}
+		return WorldTableLoadChunkResult::Error;
 	}
 
 	chunk = std::move(decoded.chunk);
+	return WorldTableLoadChunkResult::Loaded;
+}
+
+bool WorldTable::loadChunk(int cx, int cz, VoxelChunkData &chunk)
+{
+	return loadChunkResult(cx, cz, chunk) == WorldTableLoadChunkResult::Loaded;
+}
+
+bool WorldTable::loadAllChunkKeys(std::vector<int64_t> &outChunkKeys)
+{
+	std::lock_guard<std::mutex> lock(m_mutex);
+	m_lastError.clear();
+	outChunkKeys.clear();
+	if (m_db == nullptr)
+	{
+		m_lastError = "World database is not open";
+		return false;
+	}
+
+	const char *sql =
+		"SELECT chunk_key FROM world_chunk_table;";
+	sqlite3_stmt *statement = nullptr;
+	if (!prepareStatementNoLock(sql, &statement))
+	{
+		return false;
+	}
+
+	while (true)
+	{
+		int stepResult = sqlite3_step(statement);
+		if (stepResult == SQLITE_DONE)
+		{
+			break;
+		}
+		if (stepResult != SQLITE_ROW)
+		{
+			setLastErrorFromDatabaseNoLock("Failed to iterate world chunk keys");
+			sqlite3_finalize(statement);
+			outChunkKeys.clear();
+			return false;
+		}
+
+		int64_t key = static_cast<int64_t>(sqlite3_column_int64(statement, 0));
+		outChunkKeys.push_back(key);
+	}
+
+	sqlite3_finalize(statement);
 	return true;
 }
 
@@ -426,6 +508,12 @@ bool WorldTable::saveChunkUsingPreparedStatementNoLock(
 
 const std::string &WorldTable::lastError() const
 {
+	return m_lastError;
+}
+
+std::string WorldTable::lastErrorCopy() const
+{
+	std::lock_guard<std::mutex> lock(m_mutex);
 	return m_lastError;
 }
 

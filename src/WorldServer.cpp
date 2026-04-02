@@ -56,42 +56,34 @@ namespace
 	constexpr int INITIAL_PADDING_CHUNKS = 0;
 	volatile std::sig_atomic_t gWorldServerSignalStopRequested = 0;
 
-	size_t computeWorkerCount(size_t requestedWorkerCount)
-	{
-		if (requestedWorkerCount > 0)
+		size_t computeWorkerCount(size_t requestedWorkerCount)
 		{
-			return requestedWorkerCount;
-		}
+			if (requestedWorkerCount > 0)
+			{
+				return requestedWorkerCount;
+			}
 
-		unsigned int reported = std::thread::hardware_concurrency();
-		printf("Threads %d\n", reported);
-		if (reported == 0)
-		{
-			return 2;
-		}
+			unsigned int reported = std::thread::hardware_concurrency();
+			printf("Threads %d\n", reported);
+			if (reported == 0)
+			{
+				return 1;
+			}
 
-		// Heuristique mesurée pour le serveur génération:
-		// en classic-gen local avec gros churn, 8 workers sur-produisent surtout
-		// des readyChunks sans améliorer clairement le résultat visible client.
-		// 2 workers tiennent déjà bien le flux sur le desktop principal, et
-		// correspondent mieux à un budget partagé client+serveur.
-		//
-		// On garde donc:
-		// - petite machine (<= 8 threads logiques): 1 worker
-		// - machine desktop courante (<= 16 threads logiques): 2 workers
-		// - machine plus grosse: 4 workers par défaut
-		//
-		// Les overrides env restent possibles pour les benchs ou un serveur dédié.
-		if (reported <= 8)
-		{
-			return 1;
+			// Politique serveur dédiée:
+			// - 1 thread logique réservé au main thread (réseau + tick + intégration)
+			// - 1 thread logique réservé au save worker SQLite
+			// - tout le reste est alloué au pool de génération
+			//
+			// Cela pousse beaucoup plus fort qu'une heuristique desktop partagée
+			// client+serveur, tout en gardant explicitement la place pour le thread
+			// autoritaire et la persistance asynchrone.
+			if (reported <= 2)
+			{
+				return 1;
+			}
+			return static_cast<size_t>(reported - 2);
 		}
-		if (reported <= 16)
-		{
-			return 2;
-		}
-		return 4;
-	}
 
 	ChunkBounds makeSquareBounds(int radiusChunks)
 	{
@@ -180,14 +172,17 @@ struct WorldServer::Impl
 	std::unordered_map<ENetPeer *, ClientSession> clients;
 	std::unordered_map<ENetPacket *, PendingChunkPacket> pendingChunkPackets;
 	std::unordered_map<std::string, uint64_t> activeUsernames;
-	std::unordered_set<int64_t> dirtyChunkKeys;
-	std::unordered_set<int64_t> queuedDirtyChunkKeys;
-	std::deque<int64_t> dirtyChunkQueue;
-	std::mutex saveMutex;
-	std::condition_variable saveCv;
-	std::deque<SaveBatchJob> saveJobs;
-	std::thread saveWorker;
-	bool saveStopRequested = false;
+		std::unordered_set<int64_t> dirtyChunkKeys;
+		std::unordered_set<int64_t> queuedDirtyChunkKeys;
+		std::deque<int64_t> dirtyChunkQueue;
+			mutable std::mutex persistedChunkKeysMutex;
+			std::unordered_set<int64_t> persistedChunkKeys;
+			mutable std::mutex saveMutex;
+		std::condition_variable saveCv;
+		std::deque<SaveBatchJob> saveJobs;
+		std::unordered_map<int64_t, size_t> pendingSaveChunkCounts;
+		std::thread saveWorker;
+		bool saveStopRequested = false;
 
 	std::atomic<bool> running = false;
 	std::mutex taskMutex;
@@ -251,24 +246,35 @@ struct WorldServer::Impl
 		stop();
 	}
 
-	bool start()
-	{
-			if (!playerTable.open(playerDatabasePath))
-			{
+		bool start()
+		{
+				if (!playerTable.open(playerDatabasePath))
+				{
 				std::cerr << "Failed to open player database: "
 						  << playerTable.lastError() << std::endl;
 				return false;
 			}
-			if (!worldTable.open(worldDatabasePath, worldGenerationModeName(generationMode)))
-			{
-				std::cerr << "Failed to open world database: "
-						  << worldTable.lastError() << std::endl;
-				playerTable.close();
-				return false;
-			}
+				if (!worldTable.open(worldDatabasePath, worldGenerationModeName(generationMode)))
+				{
+					std::cerr << "Failed to open world database: "
+							  << worldTable.lastErrorCopy() << std::endl;
+					playerTable.close();
+					return false;
+				}
+				if (!persistGeneratedChunks)
+				{
+					if (!loadPersistedChunkKeys())
+					{
+						std::cerr << "Failed to preload modified chunk keys: "
+								  << worldTable.lastErrorCopy() << std::endl;
+						worldTable.close();
+						playerTable.close();
+						return false;
+					}
+				}
 
-		if (enet_initialize() != 0)
-		{
+			if (enet_initialize() != 0)
+			{
 			return false;
 		}
 		enetInitialized = true;
@@ -296,10 +302,16 @@ struct WorldServer::Impl
 					  << " with " << workerCount << " generation worker(s)"
 					  << " in " << worldGenerationModeName(generationMode)
 					  << " mode" << std::endl;
-			std::cout << "World DB path: " << worldDatabasePath << std::endl;
-		if (profileWorkers)
-		{
-			std::cout << "Server worker profiling enabled" << std::endl;
+				std::cout << "World DB path: " << worldDatabasePath << std::endl;
+			if (!persistGeneratedChunks)
+			{
+				std::cout << "Modified-only world cache contains "
+						  << persistedChunkKeyCount()
+						  << " persisted chunk(s)" << std::endl;
+			}
+			if (profileWorkers)
+			{
+				std::cout << "Server worker profiling enabled" << std::endl;
 		}
 
 		bootstrapInitialWorld();
@@ -444,11 +456,11 @@ struct WorldServer::Impl
 		return frontier.generatedBounds.containsChunk(chunkX, chunkZ);
 	}
 
-	void workerLoop()
-	{
-		while (running)
+		void workerLoop()
 		{
-			ChunkCoord coord;
+			while (running)
+			{
+				ChunkCoord coord;
 			{
 				std::unique_lock<std::mutex> lock(taskMutex);
 				taskCv.wait(lock, [&]()
@@ -459,39 +471,56 @@ struct WorldServer::Impl
 				}
 				coord = generationTasks.front();
 				generationTasks.pop_front();
-			}
-
-				ZoneScopedN("Worker Generate Chunk");
-				ReadyChunk readyChunk;
-				readyChunk.chunk = VoxelChunkData(coord.x, coord.z);
-				bool loadedFromStorage = false;
-				{
-					ZoneScopedN("SQLite: Load Chunk");
-					loadedFromStorage = worldTable.loadChunk(
-						coord.x,
-						coord.z,
-						readyChunk.chunk);
 				}
-				readyChunk.loadedFromStorage = loadedFromStorage;
 
-				if (loadedFromStorage)
-				{
-					profileLoadedChunks.fetch_add(1, std::memory_order_relaxed);
-				}
-				else
-				{
-					if (!worldTable.lastError().empty())
+					ZoneScopedN("Worker Generate Chunk");
+					ReadyChunk readyChunk;
+					readyChunk.chunk = VoxelChunkData(coord.x, coord.z);
+					int64_t key = chunkKey(coord.x, coord.z);
+					bool loadedFromStorage = false;
+					bool shouldTryStorageLoad = true;
+					if (!persistGeneratedChunks)
 					{
-						std::cerr << "Failed to load world chunk " << coord.x << ","
-								  << coord.z << " from storage: "
-								  << worldTable.lastError() << std::endl;
-						profileLoadErrorChunks.fetch_add(1, std::memory_order_relaxed);
+						shouldTryStorageLoad = isChunkPersistedOnDisk(key);
 					}
 
+					if (shouldTryStorageLoad)
 					{
-						ZoneScopedN("CPU: FastNoise Gen Terrain");
-						generator->fillChunk(readyChunk.chunk);
+						std::string loadError;
+						WorldTableLoadChunkResult loadResult;
+						{
+							ZoneScopedN("SQLite: Load Chunk");
+							loadResult = worldTable.loadChunkResult(
+								coord.x,
+								coord.z,
+								readyChunk.chunk,
+								&loadError);
+						}
+
+						if (loadResult == WorldTableLoadChunkResult::Loaded)
+						{
+							loadedFromStorage = true;
+						}
+						else if (loadResult == WorldTableLoadChunkResult::Error)
+						{
+							std::cerr << "Failed to load world chunk " << coord.x << ","
+									  << coord.z << " from storage: "
+									  << loadError << std::endl;
+							profileLoadErrorChunks.fetch_add(1, std::memory_order_relaxed);
+						}
 					}
+					readyChunk.loadedFromStorage = loadedFromStorage;
+
+					if (loadedFromStorage)
+					{
+						profileLoadedChunks.fetch_add(1, std::memory_order_relaxed);
+					}
+					else
+					{
+						{
+							ZoneScopedN("CPU: FastNoise Gen Terrain");
+							generator->fillChunk(readyChunk.chunk);
+						}
 					profileGeneratedFreshChunks.fetch_add(1, std::memory_order_relaxed);
 				}
 
@@ -557,9 +586,9 @@ struct WorldServer::Impl
 		return false;
 	}
 
-	bool canUnloadChunkNow(int64_t key) const
-	{
-		if (activeChunkKeys.find(key) != activeChunkKeys.end())
+		bool canUnloadChunkNow(int64_t key) const
+		{
+			if (activeChunkKeys.find(key) != activeChunkKeys.end())
 		{
 			return false;
 		}
@@ -567,13 +596,17 @@ struct WorldServer::Impl
 		{
 			return false;
 		}
-		if (queuedDirtyChunkKeys.find(key) != queuedDirtyChunkKeys.end())
-		{
-			return false;
-		}
-		if (isChunkWantedByAnyClient(key))
-		{
-			return false;
+			if (queuedDirtyChunkKeys.find(key) != queuedDirtyChunkKeys.end())
+			{
+				return false;
+			}
+			if (isChunkPendingSave(key))
+			{
+				return false;
+			}
+			if (isChunkWantedByAnyClient(key))
+			{
+				return false;
 		}
 		return true;
 	}
@@ -911,19 +944,24 @@ struct WorldServer::Impl
 		}
 	}
 
-	void enqueueSaveBatch(std::vector<VoxelChunkData> &&chunks)
-	{
-		if (chunks.empty())
+		void enqueueSaveBatch(std::vector<VoxelChunkData> &&chunks)
 		{
+			if (chunks.empty())
+			{
 			return;
 		}
 
-		{
-			std::lock_guard<std::mutex> lock(saveMutex);
-			saveJobs.push_back(SaveBatchJob{std::move(chunks)});
+			{
+				std::lock_guard<std::mutex> lock(saveMutex);
+				for (const VoxelChunkData &chunk : chunks)
+				{
+					int64_t key = chunkKey(chunk.chunkX, chunk.chunkZ);
+					pendingSaveChunkCounts[key]++;
+				}
+				saveJobs.push_back(SaveBatchJob{std::move(chunks)});
+			}
+			saveCv.notify_one();
 		}
-		saveCv.notify_one();
-	}
 
 	void saveWorkerLoop()
 	{
@@ -948,23 +986,51 @@ struct WorldServer::Impl
 			}
 
 			ZoneScopedN("SQLite Save Worker");
-			{
-				ZoneScopedN("SQLite: Save Chunk Batch");
-				if (!worldTable.saveChunksBatch(job.chunks))
 				{
-					std::cerr << "Failed to save world chunk batch: "
-							  << worldTable.lastError() << std::endl;
+					ZoneScopedN("SQLite: Save Chunk Batch");
+					if (!worldTable.saveChunksBatch(job.chunks))
 					{
-						std::lock_guard<std::mutex> lock(saveMutex);
-						saveJobs.push_front(std::move(job));
+						std::string saveError = worldTable.lastErrorCopy();
+						std::cerr << "Failed to save world chunk batch: "
+								  << saveError << std::endl;
+						{
+							std::lock_guard<std::mutex> lock(saveMutex);
+							saveJobs.push_front(std::move(job));
 					}
 					saveCv.notify_one();
 					std::this_thread::sleep_for(std::chrono::milliseconds(10));
-					continue;
+						continue;
+					}
+					{
+						std::lock_guard<std::mutex> lock(saveMutex);
+						for (const VoxelChunkData &chunk : job.chunks)
+						{
+							int64_t key = chunkKey(chunk.chunkX, chunk.chunkZ);
+							auto pendingIt = pendingSaveChunkCounts.find(key);
+							if (pendingIt == pendingSaveChunkCounts.end())
+							{
+								continue;
+							}
+							if (pendingIt->second <= 1)
+							{
+								pendingSaveChunkCounts.erase(pendingIt);
+							}
+							else
+							{
+								pendingIt->second--;
+							}
+						}
+					}
+					if (!persistGeneratedChunks)
+					{
+						for (const VoxelChunkData &chunk : job.chunks)
+						{
+							rememberPersistedChunkKey(chunkKey(chunk.chunkX, chunk.chunkZ));
+						}
+					}
+					profileSaveBatchCount.fetch_add(1, std::memory_order_relaxed);
+					profileSavedChunkCount.fetch_add(job.chunks.size(), std::memory_order_relaxed);
 				}
-				profileSaveBatchCount.fetch_add(1, std::memory_order_relaxed);
-				profileSavedChunkCount.fetch_add(job.chunks.size(), std::memory_order_relaxed);
-			}
 		}
 	}
 
@@ -981,8 +1047,8 @@ struct WorldServer::Impl
 		}
 	}
 
-	void flushDirtyChunks(size_t maxCount)
-	{
+		void flushDirtyChunks(size_t maxCount)
+		{
 		ZoneScopedN("SQLite: Flush Dirty Chunks");
 		std::vector<int64_t> attemptedKeys;
 		std::vector<VoxelChunkData> chunksToSave;
@@ -1029,11 +1095,66 @@ struct WorldServer::Impl
 			enqueueSaveBatch(std::move(chunksToSave));
 		}
 
-		for (int64_t key : attemptedKeys)
-		{
-			dirtyChunkKeys.erase(key);
+			for (int64_t key : attemptedKeys)
+			{
+				dirtyChunkKeys.erase(key);
+			}
 		}
-	}
+
+		bool loadPersistedChunkKeys()
+		{
+			std::vector<int64_t> storedKeys;
+			if (!worldTable.loadAllChunkKeys(storedKeys))
+			{
+				return false;
+			}
+
+			std::lock_guard<std::mutex> lock(persistedChunkKeysMutex);
+			persistedChunkKeys.clear();
+			persistedChunkKeys.reserve(storedKeys.size());
+			for (int64_t key : storedKeys)
+			{
+				persistedChunkKeys.insert(key);
+			}
+			return true;
+		}
+
+		size_t persistedChunkKeyCount() const
+		{
+			std::lock_guard<std::mutex> lock(persistedChunkKeysMutex);
+			return persistedChunkKeys.size();
+		}
+
+		bool isChunkPersistedOnDisk(int64_t key) const
+		{
+			std::lock_guard<std::mutex> lock(persistedChunkKeysMutex);
+			if (persistedChunkKeys.find(key) != persistedChunkKeys.end())
+			{
+				return true;
+			}
+			return false;
+		}
+
+		void rememberPersistedChunkKey(int64_t key)
+		{
+			std::lock_guard<std::mutex> lock(persistedChunkKeysMutex);
+			persistedChunkKeys.insert(key);
+		}
+
+		bool isChunkPendingSave(int64_t key) const
+		{
+			std::lock_guard<std::mutex> lock(saveMutex);
+			auto pendingIt = pendingSaveChunkCounts.find(key);
+			if (pendingIt == pendingSaveChunkCounts.end())
+			{
+				return false;
+			}
+			if (pendingIt->second == 0)
+			{
+				return false;
+			}
+			return true;
+		}
 
 	void handleLoginRequest(ENetPeer *peer, const LoginRequestMessage &request)
 	{

@@ -5,9 +5,17 @@
 
 #include <sqlite3.h>
 
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <vector>
+
+enum class WorldTableLoadChunkResult : uint8_t
+{
+	Loaded = 0,
+	Missing = 1,
+	Error = 2
+};
 
 class WorldTable
 {
@@ -19,11 +27,17 @@ public:
 	void close();
 	bool isOpen() const;
 
+	WorldTableLoadChunkResult loadChunkResult(int cx,
+											  int cz,
+											  VoxelChunkData &chunk,
+											  std::string *errorMessage = nullptr);
 	bool loadChunk(int cx, int cz, VoxelChunkData &chunk);
+	bool loadAllChunkKeys(std::vector<int64_t> &outChunkKeys);
 	bool saveChunk(const VoxelChunkData &chunk);
 	bool saveChunksBatch(const std::vector<VoxelChunkData> &chunks);
 
 	const std::string &lastError() const;
+	std::string lastErrorCopy() const;
 
 private:
 	sqlite3 *m_db = nullptr;
