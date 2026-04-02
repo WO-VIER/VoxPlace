@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=env VOXPLACE_SERVER_WORKERS=1 VOXPLACE_PROFILE_WORKERS=1 /root/VoxPlace/build/VoxPlaceServer --classic-gen --port 28713
+ExecStart=env VOXPLACE_SERVER_WORKERS=1 VOXPLACE_PROFILE_WORKERS=1 /root/VoxPlace/build/VoxPlaceServer --classic-gen --modified-only --port 28713
 WorkingDirectory=/root/VoxPlace
 Nice=-20
 Restart=on-failure
