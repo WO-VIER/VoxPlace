@@ -20,6 +20,13 @@ if pgrep -a -x VoxPlaceServer >/dev/null 2>&1; then
     pgrep -a -x VoxPlaceServer || true
     echo '[deploy] Killing existing VoxPlaceServer process(es)...'
     pkill -x VoxPlaceServer || true
+    sleep 2
+fi
+
+# Libérer le port 28713 de force (au cas où un process fantôme l'occuperait encore)
+if command -v fuser >/dev/null 2>&1; then
+    echo '[deploy] Force-closing any process on port 28713 (UDP/TCP)...'
+    fuser -k 28713/udp 28713/tcp 2>/dev/null || true
     sleep 1
 fi
 

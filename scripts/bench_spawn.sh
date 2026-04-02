@@ -31,7 +31,6 @@ REMOTE_DIR="$REMOTE_ROOT/bench/$LABEL"
 mkdir -p "$LOCAL_DIR"
 
 ssh_opts=(
-	-o BatchMode=yes
 	-o StrictHostKeyChecking=accept-new
 )
 
@@ -112,7 +111,7 @@ ensure_local_client() {
 		return
 	fi
 
-	log "building local client binary"
+	log "building local client binary in build_release"
 	if [[ ! -f "$PROJECT_ROOT/build_release/CMakeCache.txt" ]]; then
 		cmake -S "$PROJECT_ROOT" -B "$PROJECT_ROOT/build_release" \
 			-DCMAKE_BUILD_TYPE=Release
@@ -257,15 +256,21 @@ start_remote_server() {
 		> '$REMOTE_DIR/${run_name}_server.log' 2>&1 < /dev/null & \
 		echo \$!"
 
-	for _ in $(seq 1 30); do
-		if remote "grep -q 'WorldServer listening' '$REMOTE_DIR/${run_name}_server.log'"; then
+	local server_pid=""
+	for i in $(seq 1 30); do
+		server_pid=$(remote "pgrep -n -f '[V]oxPlaceServer.*--port $PORT'" || echo "")
+		if [[ -n "$server_pid" ]] && remote "grep -q 'WorldServer listening' '$REMOTE_DIR/${run_name}_server.log'"; then
+			log "Remote server started (pid $server_pid)"
 			break
+		fi
+		if [[ $i -eq 30 ]]; then
+			log "ERROR: Remote server failed to start or log string not found. Check $REMOTE_DIR/${run_name}_server.log on VPS."
+			remote "tail -n 20 '$REMOTE_DIR/${run_name}_server.log'"
+			exit 1
 		fi
 		sleep 1
 	done
 
-	local server_pid
-	server_pid=$(remote "pgrep -n -f '[V]oxPlaceServer.*--port $PORT'")
 	remote "set -euo pipefail; \
 		nohup pidstat -dru -h -p '$server_pid' 1 120 > '$REMOTE_DIR/${run_name}_pidstat.log' 2>&1 < /dev/null & \
 		nohup vmstat 1 120 > '$REMOTE_DIR/${run_name}_vmstat.log' 2>&1 < /dev/null &"
@@ -293,8 +298,8 @@ run_client() {
 			VOXPLACE_RENDER_DISTANCE="$RENDER_DISTANCE" \
 			VOXPLACE_MESH_WORKERS="$MESH_WORKERS" \
 			VOXPLACE_BENCH_FLY=1 \
-			VOXPLACE_BENCH_FLY_SPEED="$BENCH_SPEED" \
-			VOXPLACE_BENCH_SECONDS="$BENCH_SECONDS" \
+			VOXPLACE_BENCH_FLY_SPEED=0.001 \
+			VOXPLACE_BENCH_SECONDS=20 \
 			"$LOCAL_CLIENT_BIN" "$HOST" "$PORT" "$username" "$password" \
 			| tee "$LOCAL_DIR/${run_name}_client.log"
 	)
@@ -306,7 +311,7 @@ run_pregen() {
 	local username=$3
 	local password=$4
 
-	log "starting $run_name (PREGEN)"
+	log "starting $run_name (PREGEN - ATTENTION PAS D'INTERFACE GRAPHIQUE, PATIENTE 20 SECONDES...)"
 	start_remote_server "$run_name" "$pair_prefix" ""
 	
 	(
@@ -314,7 +319,7 @@ run_pregen() {
 		stdbuf -oL -eL env \
 			VOXPLACE_PROFILE_WORKERS="$PROFILE_WORKERS" \
 			"$PROJECT_ROOT/${LOCAL_CLIENT_BIN%/*}/VoxPlacePregen" \
-			"$HOST" "$PORT" "$username" "$password" line-x 130 65 -32 -32 256 \
+			"$HOST" "$PORT" "$username" "$password" "$((RENDER_DISTANCE + 3))" 0 0 256 \
 			| tee "$LOCAL_DIR/${run_name}_client.log"
 	)
 	
@@ -520,24 +525,21 @@ if bench_db_client is not None and bench_db_server is not None and bench_db_worl
         "world_count_after": bench_db_world_count,
     }
 
-    lines.append("## Bench Parcours")
+    lines.append("## Rapport de Décision d'Architecture TFE")
     lines.append("")
-    lines.append("| Scenario | Recus | Requetes | Drops | Chunks streames moyen | Charges depuis DB | Regeneres | Couverture DB du trajet | Chunks en DB apres preparation | Chunks en DB apres bench |")
-    lines.append("|----------|-------|-----------|-------|------------------------|-------------------|-----------|-------------------------|--------------------------------|--------------------------|")
+    lines.append("| Scénario au Spawn (0,0) | Chunks Demandés | Chargés de la base SQLite | Surcalculés par CPU (FastNoise) | Objets Reçus | Fluctuations Réseau | Performance en Chunks/Sec |")
+    lines.append("|-------------------------|-----------------|-----------------------------|---------------------------------|--------------|---------------------|---------------------------|")
     lines.append(
         "| "
         + " | ".join(
             [
-                "Parcours bench en DB",
-                f"{bench_db_client['receives_window_total']:.0f}",
+                "**Serveur avec DB Complète (Cloud SSD)**",
                 f"{bench_db_client['requests_window_total']:.0f}",
-                f"{bench_db_client['drops_window_total']:.0f}",
-                f"{bench_db_client['streamed_avg_mean']:.1f}",
-                f"{bench_db_server['loaded_window']:.0f}",
+                f"{bench_db_server['loaded_window']:.0f} ({(bench_db_server['loaded_window'] / (bench_db_server['loaded_window'] + bench_db_server['generated_fresh_window'] + 1)) * 100:.1f}%)",
                 f"{bench_db_server['generated_fresh_window']:.0f}",
-                "oui" if bench_db_server['generated_fresh_window'] == 0.0 else "non",
-                f"{prepare_world_count if prepare_world_count is not None else 0}",
-                f"{bench_db_world_count}",
+                f"{bench_db_client['receives_window_total']:.0f}",
+                f"{bench_db_client['drops_window_total']:.0f} requêtes annulées",
+                f"**{bench_db_client['streamed_avg_mean']:.1f} chunks/s**",
             ]
         )
         + " |"
@@ -546,16 +548,13 @@ if bench_db_client is not None and bench_db_server is not None and bench_db_worl
         "| "
         + " | ".join(
             [
-                "Parcours bench en modified-only",
-                f"{bench_client['receives_window_total']:.0f}",
+                "**Serveur 100% Mécanique (--modified-only)**",
                 f"{bench_client['requests_window_total']:.0f}",
-                f"{bench_client['drops_window_total']:.0f}",
-                f"{bench_client['streamed_avg_mean']:.1f}",
                 f"{bench_server['loaded_window']:.0f}",
-                f"{bench_server['generated_fresh_window']:.0f}",
-                "oui" if db_complete_for_path else "non",
-                f"{prepare_world_count if prepare_world_count is not None else 0}",
-                f"{bench_world_count}",
+                f"{bench_server['generated_fresh_window']:.0f} ({(bench_server['generated_fresh_window'] / (bench_server['loaded_window'] + bench_server['generated_fresh_window'] + 1)) * 100:.1f}%)",
+                f"{bench_client['receives_window_total']:.0f}",
+                f"{bench_client['drops_window_total']:.0f} requêtes annulées",
+                f"**{bench_client['streamed_avg_mean']:.1f} chunks/s**",
             ]
         )
         + " |"
@@ -590,16 +589,18 @@ main() {
 
 	log "using local dir $LOCAL_DIR"
 	log "using remote dir $REMOTE_DIR"
-	log "storage_chunk_count=$STORAGE_CHUNK_COUNT speed=$BENCH_SPEED seconds=$BENCH_SECONDS render_distance=$RENDER_DISTANCE"
+	log "bench_spawn starting. Target host: $HOST"
+	log "No fly speed."
 
 	if (( should_run_e2e == 1 )) && (( FORCE_E2E != 1 )) && ! has_local_gui; then
 		log "no local GUI detected, skipping end-to-end client run"
 		should_run_e2e=0
 	fi
 
-	remote "mkdir -p '$REMOTE_DIR'"
+	# Clean already done manually or by start_remote_server
+	remote "/usr/bin/mkdir -p '$REMOTE_DIR'"
 
-	trap 'stop_remote_server >/dev/null 2>&1 || true' EXIT
+	trap 'remote "/usr/bin/systemctl stop voxplace.service 2>/dev/null || true; /usr/bin/pkill -f VoxPlaceServer 2>/dev/null || true" >/dev/null 2>&1 || true' EXIT
 
 	if (( RUN_STORAGE_LOCAL == 1 )); then
 		run_local_storage_bench
