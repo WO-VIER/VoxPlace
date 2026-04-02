@@ -58,6 +58,10 @@ target_include_directories(voxplace_core PUBLIC
     ${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
 )
 
+target_link_libraries(voxplace_core PUBLIC
+    PkgConfig::ZSTD
+)
+
 set(CLIENT_SOURCES
     src/client/core/ClientApp.cpp
     src/client/core/ClientLaunch.cpp

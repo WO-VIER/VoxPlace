@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <limits>
+#include <zstd.h>
 
 namespace
 {
@@ -13,6 +14,7 @@ namespace
 
 	constexpr uint8_t VALID_CHUNK_SECTION_MASK =
 		static_cast<uint8_t>((1u << CHUNK_SECTION_COUNT) - 1u);
+	constexpr int CHUNK_SNAPSHOT_NETWORK_ZSTD_LEVEL = 1;
 
 	template <typename T>
 	void appendValue(std::vector<uint8_t> &buffer, const T &value)
@@ -53,6 +55,56 @@ namespace
 		}
 		if (actualType != expectedType)
 		{
+			return false;
+		}
+		return true;
+	}
+
+	bool compressPayloadZstd(const std::vector<uint8_t> &input,
+							 int compressionLevel,
+							 std::vector<uint8_t> &output)
+	{
+		size_t maxCompressedSize = ZSTD_compressBound(input.size());
+		output.resize(maxCompressedSize);
+		size_t compressedSize = ZSTD_compress(
+			output.data(),
+			output.size(),
+			input.data(),
+			input.size(),
+			compressionLevel);
+		if (ZSTD_isError(compressedSize))
+		{
+			output.clear();
+			return false;
+		}
+		output.resize(compressedSize);
+		return true;
+	}
+
+	bool decompressPayloadZstd(const uint8_t *data,
+							   size_t size,
+							   size_t expectedSize,
+							   std::vector<uint8_t> &output)
+	{
+		if (expectedSize == 0)
+		{
+			return false;
+		}
+
+		output.resize(expectedSize);
+		size_t result = ZSTD_decompress(
+			output.data(),
+			output.size(),
+			data,
+			size);
+		if (ZSTD_isError(result))
+		{
+			output.clear();
+			return false;
+		}
+		if (result != output.size())
+		{
+			output.clear();
 			return false;
 		}
 		return true;
@@ -219,6 +271,44 @@ std::vector<uint8_t> encodeChunkSnapshot(const VoxelChunkData &chunk)
 	return buffer;
 }
 
+std::vector<uint8_t> encodeChunkSnapshotNetwork(const VoxelChunkData &chunk)
+{
+	std::vector<uint8_t> rawPayload = encodeChunkSnapshot(chunk);
+	if (rawPayload.size() > static_cast<size_t>(std::numeric_limits<uint32_t>::max()))
+	{
+		return rawPayload;
+	}
+
+	std::vector<uint8_t> compressedPayload;
+	if (!compressPayloadZstd(
+			rawPayload,
+			CHUNK_SNAPSHOT_NETWORK_ZSTD_LEVEL,
+			compressedPayload))
+	{
+		return rawPayload;
+	}
+
+	size_t wrappedCompressedSize =
+		sizeof(PacketType) +
+		sizeof(uint32_t) +
+		compressedPayload.size();
+	if (wrappedCompressedSize >= rawPayload.size())
+	{
+		return rawPayload;
+	}
+
+	std::vector<uint8_t> networkPayload;
+	networkPayload.reserve(wrappedCompressedSize);
+	appendValue(networkPayload, PacketType::ChunkSnapshotSectionsZstd);
+	uint32_t rawPayloadSize = static_cast<uint32_t>(rawPayload.size());
+	appendValue(networkPayload, rawPayloadSize);
+	networkPayload.insert(
+		networkPayload.end(),
+		compressedPayload.begin(),
+		compressedPayload.end());
+	return networkPayload;
+}
+
 bool decodeChunkSnapshot(const uint8_t *data, size_t size, DecodedChunkSnapshot &message)
 {
 	size_t offset = 0;
@@ -350,6 +440,34 @@ bool decodeChunkSnapshot(const uint8_t *data, size_t size, DecodedChunkSnapshot 
 		return true;
 	}
 
+	if (packetType == PacketType::ChunkSnapshotSectionsZstd)
+	{
+		uint32_t rawPayloadSize = 0;
+		if (!readValue(data, size, offset, rawPayloadSize))
+		{
+			return false;
+		}
+		if (offset >= size)
+		{
+			return false;
+		}
+
+		std::vector<uint8_t> decompressedPayload;
+		if (!decompressPayloadZstd(
+				data + offset,
+				size - offset,
+				rawPayloadSize,
+				decompressedPayload))
+		{
+			return false;
+		}
+
+		return decodeChunkSnapshot(
+			decompressedPayload.data(),
+			decompressedPayload.size(),
+			message);
+	}
+
 	return false;
 }
 
@@ -443,6 +561,8 @@ const char *packetTypeName(PacketType type)
 		return "ChunkSnapshotRle";
 	case PacketType::ChunkSnapshotSections:
 		return "ChunkSnapshotSections";
+	case PacketType::ChunkSnapshotSectionsZstd:
+		return "ChunkSnapshotSectionsZstd";
 	}
 	return "Unknown";
 }

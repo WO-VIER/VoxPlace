@@ -42,6 +42,7 @@ namespace
 	constexpr int SERVER_TICK_MS = 50;
 	constexpr size_t DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK = 4;
 	constexpr size_t DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 5;
+	constexpr size_t MAX_PENDING_CHUNK_SNAPSHOTS_PER_CLIENT = 12;
 	constexpr size_t DEFAULT_MAX_CHUNK_SAVES_PER_TICK = 8;
 	constexpr size_t DEFAULT_MAX_CHUNK_UNLOADS_PER_TICK = 8;
 	constexpr size_t CLASSIC_MIN_INTEGRATED_CHUNKS_PER_TICK = 8;
@@ -127,6 +128,7 @@ struct WorldServer::Impl
 			std::unordered_set<int64_t> wantedChunks;
 			std::unordered_set<int64_t> loadedChunks;
 			std::unordered_set<int64_t> queuedChunks;
+			std::unordered_set<uint64_t> pendingPacketIds;
 			std::deque<int64_t> sendQueue;
 		};
 
@@ -153,6 +155,12 @@ struct WorldServer::Impl
 		std::vector<VoxelChunkData> chunks;
 	};
 
+	struct PendingChunkPacket
+	{
+		ENetPeer *peer = nullptr;
+		uint64_t packetId = 0;
+	};
+
 		uint16_t port = 0;
 			std::string playerDatabasePath;
 			std::string worldDatabasePath;
@@ -170,6 +178,7 @@ struct WorldServer::Impl
 	std::unordered_map<int64_t, VoxelChunkData> worldChunks;
 	std::unordered_set<int64_t> activeChunkKeys;
 	std::unordered_map<ENetPeer *, ClientSession> clients;
+	std::unordered_map<ENetPacket *, PendingChunkPacket> pendingChunkPackets;
 	std::unordered_map<std::string, uint64_t> activeUsernames;
 	std::unordered_set<int64_t> dirtyChunkKeys;
 	std::unordered_set<int64_t> queuedDirtyChunkKeys;
@@ -209,6 +218,7 @@ struct WorldServer::Impl
 	size_t profileSnapshotPayloadBytes = 0;
 	size_t profileSnapshotRawBytes = 0;
 	size_t profileSnapshotSectionCount = 0;
+	uint64_t nextChunkSnapshotPacketId = 1;
 	std::atomic<size_t> profileSaveBatchCount = 0;
 	std::atomic<size_t> profileSavedChunkCount = 0;
 	size_t profileUnloadedChunks = 0;
@@ -332,14 +342,15 @@ struct WorldServer::Impl
 			enet_host_destroy(host);
 			host = nullptr;
 		}
+		pendingChunkPackets.clear();
 		if (enetInitialized)
 		{
 			enet_deinitialize();
 			enetInitialized = false;
 		}
-			worldTable.close();
-			playerTable.close();
-		}
+		worldTable.close();
+		playerTable.close();
+	}
 
 	int run()
 	{
@@ -1505,7 +1516,9 @@ struct WorldServer::Impl
 		size_t sentCount = 0;
 		size_t sendBudget = chunkSendBudgetForClient(session.chunkStream);
 
-		while (sentCount < sendBudget && !session.chunkStream.sendQueue.empty())
+		while (sentCount < sendBudget &&
+			   pendingChunkPacketCountForClient(session.chunkStream) < MAX_PENDING_CHUNK_SNAPSHOTS_PER_CLIENT &&
+			   !session.chunkStream.sendQueue.empty())
 		{
 			int64_t key = session.chunkStream.sendQueue.front();
 			session.chunkStream.sendQueue.pop_front();
@@ -1522,8 +1535,13 @@ struct WorldServer::Impl
 				continue;
 			}
 
-			std::vector<uint8_t> payload = encodeChunkSnapshot(worldIt->second);
-			sendReliable(session.peer, payload);
+			std::vector<uint8_t> payload = encodeChunkSnapshotNetwork(worldIt->second);
+			if (!sendChunkSnapshot(session, payload))
+			{
+				session.chunkStream.sendQueue.push_front(key);
+				session.chunkStream.queuedChunks.insert(key);
+				break;
+			}
 			profileSnapshotCount++;
 			profileSnapshotPayloadBytes += payload.size();
 			profileSnapshotSectionCount += worldIt->second.nonEmptySectionCount();
@@ -1558,10 +1576,102 @@ struct WorldServer::Impl
 		return budget;
 	}
 
-	void sendReliable(ENetPeer *peer, const std::vector<uint8_t> &payload)
+	size_t pendingChunkPacketCountForClient(const ClientSession::ClientChunkStreamState &chunkStream) const
 	{
-		ENetPacket *packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
-		enet_peer_send(peer, WORLD_CHANNEL_RELIABLE, packet);
+		return chunkStream.pendingPacketIds.size();
+	}
+
+	static void onChunkSnapshotPacketFreed(ENetPacket *packet)
+	{
+		if (packet == nullptr)
+		{
+			return;
+		}
+		Impl *server = static_cast<Impl *>(packet->userData);
+		if (server == nullptr)
+		{
+			return;
+		}
+		server->handleChunkSnapshotPacketFreed(packet);
+	}
+
+	void handleChunkSnapshotPacketFreed(ENetPacket *packet)
+	{
+		auto pendingIt = pendingChunkPackets.find(packet);
+		if (pendingIt == pendingChunkPackets.end())
+		{
+			return;
+		}
+
+		PendingChunkPacket pendingPacket = pendingIt->second;
+		pendingChunkPackets.erase(pendingIt);
+
+		auto sessionIt = clients.find(pendingPacket.peer);
+		if (sessionIt == clients.end())
+		{
+			return;
+		}
+		sessionIt->second.chunkStream.pendingPacketIds.erase(pendingPacket.packetId);
+	}
+
+	bool sendChunkSnapshot(ClientSession &session, const std::vector<uint8_t> &payload)
+	{
+		ENetPacket *packet = enet_packet_create(
+			payload.data(),
+			payload.size(),
+			ENET_PACKET_FLAG_RELIABLE);
+		if (packet == nullptr)
+		{
+			return false;
+		}
+
+		uint64_t packetId = nextChunkSnapshotPacketId;
+		nextChunkSnapshotPacketId++;
+		if (nextChunkSnapshotPacketId == 0)
+		{
+			nextChunkSnapshotPacketId = 1;
+		}
+
+		packet->freeCallback = &Impl::onChunkSnapshotPacketFreed;
+		packet->userData = this;
+
+		PendingChunkPacket pendingPacket;
+		pendingPacket.peer = session.peer;
+		pendingPacket.packetId = packetId;
+		pendingChunkPackets[packet] = pendingPacket;
+		session.chunkStream.pendingPacketIds.insert(packetId);
+
+		int sendResult = enet_peer_send(session.peer, WORLD_CHANNEL_RELIABLE, packet);
+		if (sendResult != 0)
+		{
+			pendingChunkPackets.erase(packet);
+			session.chunkStream.pendingPacketIds.erase(packetId);
+			packet->freeCallback = nullptr;
+			packet->userData = nullptr;
+			enet_packet_destroy(packet);
+			return false;
+		}
+		return true;
+	}
+
+	bool sendReliable(ENetPeer *peer, const std::vector<uint8_t> &payload)
+	{
+		ENetPacket *packet = enet_packet_create(
+			payload.data(),
+			payload.size(),
+			ENET_PACKET_FLAG_RELIABLE);
+		if (packet == nullptr)
+		{
+			return false;
+		}
+
+		int sendResult = enet_peer_send(peer, WORLD_CHANNEL_RELIABLE, packet);
+		if (sendResult != 0)
+		{
+			enet_packet_destroy(packet);
+			return false;
+		}
+		return true;
 	}
 
 	void broadcastReliable(const std::vector<uint8_t> &payload)

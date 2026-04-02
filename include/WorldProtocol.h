@@ -26,7 +26,8 @@ enum class PacketType : uint8_t
 	LoginRequest = 10,
 	LoginResponse = 11,
 	PlayerState = 12,
-	PlayerMoveUpdate = 13
+	PlayerMoveUpdate = 13,
+	ChunkSnapshotSectionsZstd = 14
 };
 
 enum class BlockActionType : uint8_t
@@ -142,6 +143,7 @@ std::vector<uint8_t> encodeChunkDrop(const ChunkDropMessage &message);
 bool decodeChunkDrop(const uint8_t *data, size_t size, ChunkDropMessage &message);
 
 std::vector<uint8_t> encodeChunkSnapshot(const VoxelChunkData &chunk);
+std::vector<uint8_t> encodeChunkSnapshotNetwork(const VoxelChunkData &chunk);
 bool decodeChunkSnapshot(const uint8_t *data, size_t size, DecodedChunkSnapshot &message);
 
 std::vector<uint8_t> encodeBlockActionRequest(const BlockActionRequestMessage &message);
