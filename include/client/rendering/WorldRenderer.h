@@ -36,6 +36,9 @@ struct WorldVisibilitySet
 class WorldRenderer
 {
 public:
+	static void initGlobalResources();
+	static void cleanupGlobalResources();
+
 	static bool usesIndirectRendering(TerrainRenderArchitecture architecture);
 	static float computeFarPlane(const RenderSettings &settings);
 	static void computeFogRange(const RenderSettings &settings,
@@ -57,6 +60,7 @@ public:
 											   const RenderFrameContext &frameContext,
 											   bool sortVisibleChunksFrontToBack);
 	static float drawVisibleWorld(Shader &shader,
+								  const RenderFrameContext &frameContext,
 								  const WorldVisibilitySet &visibility,
 								  ChunkIndirectRenderer &indirectRenderer,
 								  TerrainRenderArchitecture architecture);

@@ -10,6 +10,7 @@ struct ChunkGpuResources
 {
 	GLuint ssbo = 0;
 	GLuint vao = 0;
+	GLuint occlusionQueryId = 0;
 	std::vector<uint32_t> packedFacesCpu;
 };
 

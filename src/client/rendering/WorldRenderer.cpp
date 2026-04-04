@@ -1,7 +1,97 @@
 #include <client/rendering/WorldRenderer.h>
 
+#include <glad/glad.h>
 #include <algorithm>
 #include <chrono>
+
+static GLuint s_aabbVao = 0;
+static GLuint s_aabbVbo = 0;
+static Shader* s_aabbShader = nullptr;
+
+void WorldRenderer::initGlobalResources()
+{
+	if (s_aabbShader == nullptr)
+	{
+		s_aabbShader = new Shader("src/shader/aabb.vs", "src/shader/aabb.fs");
+	}
+
+	if (s_aabbVao == 0)
+	{
+		float vertices[] = {
+			// Front face
+			0.0f, 0.0f, 1.0f,
+			1.0f, 0.0f, 1.0f,
+			1.0f, 1.0f, 1.0f,
+			1.0f, 1.0f, 1.0f,
+			0.0f, 1.0f, 1.0f,
+			0.0f, 0.0f, 1.0f,
+			// Back face
+			0.0f, 0.0f, 0.0f,
+			0.0f, 1.0f, 0.0f,
+			1.0f, 1.0f, 0.0f,
+			1.0f, 1.0f, 0.0f,
+			1.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 0.0f,
+			// Left face
+			0.0f, 1.0f, 1.0f,
+			0.0f, 1.0f, 0.0f,
+			0.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 1.0f,
+			0.0f, 1.0f, 1.0f,
+			// Right face
+			1.0f, 1.0f, 1.0f,
+			1.0f, 0.0f, 1.0f,
+			1.0f, 0.0f, 0.0f,
+			1.0f, 0.0f, 0.0f,
+			1.0f, 1.0f, 0.0f,
+			1.0f, 1.0f, 1.0f,
+			// Bottom face
+			0.0f, 0.0f, 0.0f,
+			1.0f, 0.0f, 0.0f,
+			1.0f, 0.0f, 1.0f,
+			1.0f, 0.0f, 1.0f,
+			0.0f, 0.0f, 1.0f,
+			0.0f, 0.0f, 0.0f,
+			// Top face
+			0.0f, 1.0f, 0.0f,
+			0.0f, 1.0f, 1.0f,
+			1.0f, 1.0f, 1.0f,
+			1.0f, 1.0f, 1.0f,
+			1.0f, 1.0f, 0.0f,
+			0.0f, 1.0f, 0.0f
+		};
+
+		glGenVertexArrays(1, &s_aabbVao);
+		glGenBuffers(1, &s_aabbVbo);
+		
+		glBindVertexArray(s_aabbVao);
+		glBindBuffer(GL_ARRAY_BUFFER, s_aabbVbo);
+		glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+		
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+		glEnableVertexAttribArray(0);
+		
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glBindVertexArray(0);
+	}
+}
+
+void WorldRenderer::cleanupGlobalResources()
+{
+	if (s_aabbVao != 0)
+	{
+		glDeleteVertexArrays(1, &s_aabbVao);
+		glDeleteBuffers(1, &s_aabbVbo);
+		s_aabbVao = 0;
+		s_aabbVbo = 0;
+	}
+	if (s_aabbShader != nullptr)
+	{
+		delete s_aabbShader;
+		s_aabbShader = nullptr;
+	}
+}
 
 namespace
 {
@@ -176,6 +266,7 @@ WorldVisibilitySet WorldRenderer::collectVisibility(const std::unordered_map<int
 }
 
 float WorldRenderer::drawVisibleWorld(Shader &shader,
+									  const RenderFrameContext &frameContext,
 									  const WorldVisibilitySet &visibility,
 									  ChunkIndirectRenderer &indirectRenderer,
 									  TerrainRenderArchitecture architecture)
@@ -199,13 +290,66 @@ float WorldRenderer::drawVisibleWorld(Shader &shader,
 	}
 	else
 	{
+		// Passe 1 : Récupérer le résultat des queries et dessiner les chunks visibles
 		for (const ChunkDraw &draw : visibility.visibleChunks)
 		{
+			if (draw.chunk->gpuResources.occlusionQueryId != 0 && !draw.chunk->renderState.needsMeshRebuild)
+			{
+				GLuint available = 0;
+				glGetQueryObjectuiv(draw.chunk->gpuResources.occlusionQueryId, GL_QUERY_RESULT_AVAILABLE, &available);
+				if (available)
+				{
+					GLuint samplesPassed = 0;
+					glGetQueryObjectuiv(draw.chunk->gpuResources.occlusionQueryId, GL_QUERY_RESULT, &samplesPassed);
+					draw.chunk->renderState.isVisibleFromOcclusion = (samplesPassed > 0);
+				}
+			}
+
 			shader.setVec3("chunkPos", glm::vec3(
 										 static_cast<float>(draw.chunk->storage.chunkX * CHUNK_SIZE_X),
 										 0.0f,
 										 static_cast<float>(draw.chunk->storage.chunkZ * CHUNK_SIZE_Z)));
-			draw.chunk->render();
+
+			if (draw.chunk->renderState.isVisibleFromOcclusion || draw.chunk->renderState.needsMeshRebuild)
+			{
+				draw.chunk->render();
+			}
+		}
+
+		// Passe 2 : Lancer les requêtes d'occlusion avec la Bounding Box allégée (AABB)
+		if (s_aabbShader != nullptr && s_aabbVao != 0)
+		{
+			s_aabbShader->use();
+			s_aabbShader->setMat4("projection", frameContext.projection);
+			s_aabbShader->setMat4("view", frameContext.view);
+			s_aabbShader->setVec3("chunkSize", glm::vec3(CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z));
+
+			glBindVertexArray(s_aabbVao);
+
+			glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+			glDepthMask(GL_FALSE);
+
+			for (const ChunkDraw &draw : visibility.visibleChunks)
+			{
+				if (draw.chunk->gpuResources.occlusionQueryId != 0 && !draw.chunk->renderState.needsMeshRebuild)
+				{
+					s_aabbShader->setVec3("chunkPos", glm::vec3(
+												 static_cast<float>(draw.chunk->storage.chunkX * CHUNK_SIZE_X),
+												 0.0f,
+												 static_cast<float>(draw.chunk->storage.chunkZ * CHUNK_SIZE_Z)));
+
+					glBeginQuery(GL_ANY_SAMPLES_PASSED, draw.chunk->gpuResources.occlusionQueryId);
+					glDrawArrays(GL_TRIANGLES, 0, 36);
+					glEndQuery(GL_ANY_SAMPLES_PASSED);
+				}
+			}
+
+			glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+			glDepthMask(GL_TRUE);
+			glBindVertexArray(0);
+
+			// Restore the chunk shader for subsequent renders
+			shader.use();
 		}
 	}
 

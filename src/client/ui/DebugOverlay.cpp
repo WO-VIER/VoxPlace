@@ -128,7 +128,7 @@ void renderDebugOverlay(bool visible, const DebugOverlayData &data)
 	ImGui::Text("Fog");
 	if (data.minecraftFogByRenderDistance != nullptr)
 	{
-		ImGui::Checkbox("Minecraft Fog (Render Dist)", data.minecraftFogByRenderDistance);
+		ImGui::Checkbox("Fog (Render Dist)", data.minecraftFogByRenderDistance);
 		if (*data.minecraftFogByRenderDistance)
 		{
 			if (data.minecraftFogStartPercent != nullptr)

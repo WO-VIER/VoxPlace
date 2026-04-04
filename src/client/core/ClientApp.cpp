@@ -215,6 +215,7 @@ namespace
 
 		void startWorldSystems()
 		{
+			WorldRenderer::initGlobalResources();
 			m_runtime.chunkShader = std::make_unique<Shader>("src/shader/chunk2.vs", "src/shader/chunk2.fs");
 			
 			bool isLocal = (m_launchOptions.host == "127.0.0.1" || m_launchOptions.host == "localhost");
@@ -618,6 +619,7 @@ namespace
 
 		void shutdown()
 		{
+			WorldRenderer::cleanupGlobalResources();
 			m_runtime.loginScreen.waitForTask();
 			m_runtime.worldClient.disconnect();
 			m_runtime.chunkMesher.stop();

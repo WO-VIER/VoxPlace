@@ -8,6 +8,7 @@ struct ChunkRenderState
 	uint32_t faceCount = 0;
 	bool needsMeshRebuild = true;
 	bool isEmpty = true;
+	bool isVisibleFromOcclusion = true;
 };
 
 #endif

@@ -82,6 +82,7 @@ ClientFrameRenderResult ClientFrameRenderer::renderWorldFrame(
 	result.totalFaces = WorldRenderer::computeTotalFaces(worldState.chunkMap);
 	result.chunkRenderCpuMs = WorldRenderer::drawVisibleWorld(
 		chunkShader,
+		result.frameContext,
 		result.visibility,
 		chunkIndirectRenderer,
 		gameState.terrainRenderArchitecture);

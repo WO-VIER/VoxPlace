@@ -268,11 +268,17 @@ public:
 		{
 			glDeleteVertexArrays(1, &gpuResources.vao);
 		}
+		if (gpuResources.occlusionQueryId != 0)
+		{
+			glDeleteQueries(1, &gpuResources.occlusionQueryId);
+		}
 		gpuResources.ssbo = 0;
 		gpuResources.vao = 0;
+		gpuResources.occlusionQueryId = 0;
 		gpuResources.packedFacesCpu.clear();
 		renderState.faceCount = 0;
 		renderState.needsMeshRebuild = true;
+		renderState.isVisibleFromOcclusion = true;
 	}
 
 	ChunkStats getStats() const
@@ -613,6 +619,11 @@ private:
 		if (gpuResources.vao == 0)
 		{
 			glGenVertexArrays(1, &gpuResources.vao);
+		}
+
+		if (gpuResources.occlusionQueryId == 0)
+		{
+			glGenQueries(1, &gpuResources.occlusionQueryId);
 		}
 
 		renderState.faceCount = static_cast<uint32_t>(faces.size() / 2);
