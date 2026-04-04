@@ -43,14 +43,14 @@ public:
 		stop();
 	}
 
-	void start(size_t requestedWorkerCount = 0)
+	void start(size_t requestedWorkerCount = 0, bool isLocalConnection = true)
 	{
 		stop();
 
 		size_t workerCount = requestedWorkerCount;
 		if (workerCount == 0)
 		{
-			workerCount = computeWorkerCount();
+			workerCount = computeWorkerCount(isLocalConnection);
 		}
 
 		{
@@ -140,7 +140,7 @@ public:
 	}
 
 private:
-		static size_t computeWorkerCount()
+	static size_t computeWorkerCount(bool isLocalConnection)
 		{
 			unsigned int reported = std::thread::hardware_concurrency();
 			if (reported == 0)
@@ -148,22 +148,36 @@ private:
 				return 1;
 			}
 
-			// Heuristique mesurée pour le meshing client:
-			// sur une machine locale client+serveur, ajouter plus de workers mesh
-			// n'a pas amélioré le throughput utile. Au contraire, 1 worker est
-			// souvent meilleur ou équivalent à 2/4, avec moins de pression cache.
+			// Heuristique mesurée pour le meshing client (TFE Benchmark):
+			// 1. Sur une machine LOCALE (Client + Serveur sur le même CPU 8 coeurs):
+			//    On reste conservateur pour laisser les ressources à la génération de terrain (FastNoise).
+			//    => 1 worker par défaut sur les machines < 16 threads.
 			//
-			// On reste donc très conservateur par défaut:
-			// - petites et moyennes machines (jusqu'à 16 threads logiques): 1 worker
-			// - machines plus grosses: 2 workers max par défaut
-			//
-			// Si un bench ultérieur montre qu'une machine dédiée client peut monter
-			// plus haut, on garde la possibilité d'override via l'env côté main3.cpp.
-			if (reported <= 16)
+			// 2. Sur une machine DISTANTE (Client Only, Serveur sur VPS):
+			//    On peut utiliser plus de parallélisme. Le benchmark a montré un "Sweet Spot" à 4 workers.
+			//    => Environ 50% des coeurs disponibles (max 4 pour garantir la fluidité du thread de rendu).
+			if (isLocalConnection)
 			{
-				return 1;
+				if (reported <= 16)
+				{
+					return 1;
+				}
+				return 2;
 			}
-			return 2;
+			else
+			{
+				size_t count = static_cast<size_t>(reported) / 2;
+				if (count < 1)
+				{
+					return 1;
+				}
+				
+				if (count > 4)
+				{
+					return 4;
+				}
+				return count;
+			}
 		}
 
 	void workerLoop()

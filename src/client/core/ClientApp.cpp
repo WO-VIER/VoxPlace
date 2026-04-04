@@ -216,7 +216,10 @@ namespace
 		void startWorldSystems()
 		{
 			m_runtime.chunkShader = std::make_unique<Shader>("src/shader/chunk2.vs", "src/shader/chunk2.fs");
-			m_runtime.chunkMesher.start(m_environmentOptions.requestedMeshWorkers);
+			
+			bool isLocal = (m_launchOptions.host == "127.0.0.1" || m_launchOptions.host == "localhost");
+			m_runtime.chunkMesher.start(m_environmentOptions.requestedMeshWorkers, isLocal);
+			
 			m_runtime.chunkIndirectRenderer.init();
 		}
 

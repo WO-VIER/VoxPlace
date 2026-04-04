@@ -21,7 +21,7 @@ native:
 	scripts/build_native.sh
 
 native-release:
-	BUILD_TYPE=Release scripts/build_native.sh
+	BUILD_TYPE=Release CMAKE_ARGS="$(CMAKE_ARGS)" scripts/build_native.sh
 
 chunky:
 	scripts/build_chunky.sh

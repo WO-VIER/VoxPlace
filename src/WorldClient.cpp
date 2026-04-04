@@ -316,8 +316,13 @@ void WorldClient::service()
 	}
 
 	ENetEvent event{};
-	while (enet_host_service(m_impl->host, &event, 0) > 0)
+	for (int i = 0; i < 50; i++)
 	{
+		if (enet_host_service(m_impl->host, &event, 0) <= 0)
+		{
+			break;
+		}
+
 		if (event.type == ENET_EVENT_TYPE_RECEIVE)
 		{
 			handlePacket(event.packet->data, event.packet->dataLength);
@@ -329,6 +334,7 @@ void WorldClient::service()
 			m_impl->peer = nullptr;
 			m_impl->connected = false;
 			pushEvent(WorldClientEvent{WorldClientEvent::Type::Disconnected});
+			break;
 		}
 	}
 }
