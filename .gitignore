@@ -21,7 +21,7 @@ vgcore*
 Analyse
 bench
 build_chunky
-build/
+/build/
 vcpkg/
 vcpkg_installed/
 thirdparty/libsodium/src/libsodium/include/sodium/version.h
