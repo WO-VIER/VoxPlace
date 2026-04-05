@@ -1,0 +1,11 @@
+{
+  "name": "voxplace",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "glfw3",
+    "enet",
+    "libsodium",
+    "sqlite3",
+    "zstd"
+  ]
+}
