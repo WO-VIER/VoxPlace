@@ -25,3 +25,4 @@ build/
 vcpkg/
 vcpkg_installed/
 thirdparty/libsodium/src/libsodium/include/sodium/version.h
+*.tracy
