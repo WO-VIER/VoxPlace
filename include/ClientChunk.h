@@ -278,7 +278,6 @@ public:
 		gpuResources.packedFacesCpu.clear();
 		renderState.faceCount = 0;
 		renderState.needsMeshRebuild = true;
-		renderState.isVisibleFromOcclusion = true;
 	}
 
 	ChunkStats getStats() const
@@ -621,10 +620,6 @@ private:
 			glGenVertexArrays(1, &gpuResources.vao);
 		}
 
-		if (gpuResources.occlusionQueryId == 0)
-		{
-			glGenQueries(1, &gpuResources.occlusionQueryId);
-		}
 
 		renderState.faceCount = static_cast<uint32_t>(faces.size() / 2);
 		renderState.needsMeshRebuild = false;

@@ -21,3 +21,5 @@ vgcore*
 Analyse
 bench
 build_chunky
+build/
+vcpkg_installed/

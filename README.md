@@ -170,4 +170,58 @@ scripts/           Scripts d'aide à la compilation
 
 ## Windows
 
-Les builds natifs Windows ne sont pas supportés. Utilisez WSL2 avec une image Ubuntu ou Arch pour compiler et lancer le projet sous Windows.
+### Méthode simple (recommandée)
+
+Un seul script PowerShell fait tout : vérifie les deps, installe vcpkg, configure et build.
+
+**1. Installer un compilateur (au choix) :**
+
+```powershell
+# Option A : MSVC Build Tools (~500MB, pas besoin de VS)
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools"
+
+# Option B : LLVM/Clang (~200MB)
+winget install LLVM.LLVM
+```
+
+**2. Installer CMake et Ninja (si pas déjà fait) :**
+
+```powershell
+winget install Kitware.CMake Ninja-build.Ninja
+```
+
+**3. Ouvrir un terminal et build :**
+
+```powershell
+# Debug
+.\build.ps1
+
+# Release
+.\build.ps1 -Config Release
+
+# Clean et rebuild
+.\build.ps1 -Clean
+```
+
+Le script clone vcpkg automatiquement s'il n'est pas présent. Aucune configuration manuelle nécessaire.
+
+### Méthode manuelle (CMake presets)
+
+Pour ceux qui veulent contrôler le processus :
+
+```powershell
+# MSVC (depuis x64 Native Tools Command Prompt)
+cmake --preset windows-debug
+cmake --build --preset windows-debug
+
+# Clang
+cmake --preset windows-clang-debug
+cmake --build --preset windows-clang-release
+```
+
+### Utilisation
+
+```powershell
+.\build\win-debug\VoxPlace.exe
+.\build\win-debug\VoxPlaceServer.exe
+```

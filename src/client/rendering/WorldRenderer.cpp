@@ -290,66 +290,26 @@ float WorldRenderer::drawVisibleWorld(Shader &shader,
 	}
 	else
 	{
-		// Passe 1 : Récupérer le résultat des queries et dessiner les chunks visibles
+		// Rendu direct : Frustum Culling + tri front-to-back uniquement.
+		//
+		// L'occlusion culling GPU (GL_ANY_SAMPLES_PASSED) a été retiré car les
+		// queries d'occlusion ont une latence d'une frame : le résultat lu à la
+		// Frame N provient de la matrice VP de la Frame N-1. Pendant un déplacement
+		// rapide de la caméra, cette latence cause des faux-négatifs (chunks visibles
+		// marqués "cachés"), qui se manifestent par des rectangles de clearColor
+		// visibles pendant 1 frame. Même avec un compteur de résultats négatifs
+		// consécutifs (REQUIRED_OCCLUSION_FAILS), le problème persiste car la query
+		// est structurellement en retard d'une frame pendant le mouvement.
+		//
+		// Approche retenue (identique à ourCraft) : frustum culling CPU uniquement,
+		// qui est synchrone et ne souffre d'aucune latence.
 		for (const ChunkDraw &draw : visibility.visibleChunks)
 		{
-			if (draw.chunk->gpuResources.occlusionQueryId != 0 && !draw.chunk->renderState.needsMeshRebuild)
-			{
-				GLuint available = 0;
-				glGetQueryObjectuiv(draw.chunk->gpuResources.occlusionQueryId, GL_QUERY_RESULT_AVAILABLE, &available);
-				if (available)
-				{
-					GLuint samplesPassed = 0;
-					glGetQueryObjectuiv(draw.chunk->gpuResources.occlusionQueryId, GL_QUERY_RESULT, &samplesPassed);
-					draw.chunk->renderState.isVisibleFromOcclusion = (samplesPassed > 0);
-				}
-			}
-
 			shader.setVec3("chunkPos", glm::vec3(
 										 static_cast<float>(draw.chunk->storage.chunkX * CHUNK_SIZE_X),
 										 0.0f,
 										 static_cast<float>(draw.chunk->storage.chunkZ * CHUNK_SIZE_Z)));
-
-			if (draw.chunk->renderState.isVisibleFromOcclusion || draw.chunk->renderState.needsMeshRebuild)
-			{
-				draw.chunk->render();
-			}
-		}
-
-		// Passe 2 : Lancer les requêtes d'occlusion avec la Bounding Box allégée (AABB)
-		if (s_aabbShader != nullptr && s_aabbVao != 0)
-		{
-			s_aabbShader->use();
-			s_aabbShader->setMat4("projection", frameContext.projection);
-			s_aabbShader->setMat4("view", frameContext.view);
-			s_aabbShader->setVec3("chunkSize", glm::vec3(CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z));
-
-			glBindVertexArray(s_aabbVao);
-
-			glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-			glDepthMask(GL_FALSE);
-
-			for (const ChunkDraw &draw : visibility.visibleChunks)
-			{
-				if (draw.chunk->gpuResources.occlusionQueryId != 0 && !draw.chunk->renderState.needsMeshRebuild)
-				{
-					s_aabbShader->setVec3("chunkPos", glm::vec3(
-												 static_cast<float>(draw.chunk->storage.chunkX * CHUNK_SIZE_X),
-												 0.0f,
-												 static_cast<float>(draw.chunk->storage.chunkZ * CHUNK_SIZE_Z)));
-
-					glBeginQuery(GL_ANY_SAMPLES_PASSED, draw.chunk->gpuResources.occlusionQueryId);
-					glDrawArrays(GL_TRIANGLES, 0, 36);
-					glEndQuery(GL_ANY_SAMPLES_PASSED);
-				}
-			}
-
-			glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-			glDepthMask(GL_TRUE);
-			glBindVertexArray(0);
-
-			// Restore the chunk shader for subsequent renders
-			shader.use();
+			draw.chunk->render();
 		}
 	}
 
