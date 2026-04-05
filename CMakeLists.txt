@@ -64,14 +64,38 @@ endif()
 # Dependency resolution
 # ============================================================
 if(WIN32)
-	# Windows: use vcpkg or native find_package
-	find_package(glfw3 CONFIG REQUIRED)
-	find_package(enet CONFIG REQUIRED)
-	find_package(SQLite3 CONFIG REQUIRED)
-	find_package(unofficial-sodium CONFIG REQUIRED)
-	find_package(Zstd CONFIG REQUIRED)
+	# --- GLFW ---
+	set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+	set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+	set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+	set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+	add_subdirectory(thirdparty/glfw)
+
+	# --- ENet ---
+	set(ENET_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+	set(ENET_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+	add_subdirectory(thirdparty/enet)
+
+	# --- Zstd ---
+	set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+	set(ZSTD_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+	set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+	set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+	set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
+	add_subdirectory(thirdparty/zstd/build/cmake)
+
+	# --- libsodium ---
+	set(SODIUM_DISABLE_TESTS ON CACHE BOOL "" FORCE)
+	set(SODIUM_MINIMAL OFF CACHE BOOL "" FORCE)
+	add_subdirectory(thirdparty/libsodium)
+
+	# --- SQLite3 ---
+	add_subdirectory(thirdparty/sqlite3)
+
+	# --- OpenGL ---
 	find_package(OpenGL REQUIRED)
 
+	# --- Create PkgConfig-compatible aliases ---
 	add_library(PkgConfig::GLFW INTERFACE IMPORTED)
 	target_link_libraries(PkgConfig::GLFW INTERFACE glfw)
 
@@ -79,15 +103,15 @@ if(WIN32)
 	target_link_libraries(PkgConfig::ENET INTERFACE enet)
 
 	add_library(PkgConfig::SODIUM INTERFACE IMPORTED)
-	target_link_libraries(PkgConfig::SODIUM INTERFACE unofficial-sodium::sodium)
+	target_link_libraries(PkgConfig::SODIUM INTERFACE sodium)
 
 	add_library(PkgConfig::SQLITE3 INTERFACE IMPORTED)
-	target_link_libraries(PkgConfig::SQLITE3 INTERFACE SQLite::SQLite3)
+	target_link_libraries(PkgConfig::SQLITE3 INTERFACE sqlite3)
 
 	add_library(PkgConfig::ZSTD INTERFACE IMPORTED)
-	target_link_libraries(PkgConfig::ZSTD INTERFACE zstd::libzstd_static)
+	target_link_libraries(PkgConfig::ZSTD INTERFACE libzstd_static)
 else()
-	# Linux / macOS: use pkg-config
+	# Linux / macOS: use pkg-config (original path, unchanged)
 	find_package(PkgConfig REQUIRED)
 	pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
 	pkg_check_modules(ENET QUIET IMPORTED_TARGET libenet)
