@@ -467,7 +467,7 @@ namespace
 		}
 
 		sqlite3 *db = nullptr;
-		if (sqlite3_open(databasePath.c_str(), &db) != SQLITE_OK)
+		if (sqlite3_open(databasePath.string().c_str(), &db) != SQLITE_OK)
 		{
 			if (db != nullptr)
 			{

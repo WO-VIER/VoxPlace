@@ -6,7 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(ENABLE_GL_DEBUG "Enable OpenGL debug output for native builds" ON)
 option(ENABLE_ASAN "Enable Address Sanitizer for debugging" OFF)
-option(ENABLE_TRACY "Enable Tracy Profiler" ON)
+if(WIN32)
+	option(ENABLE_TRACY "Enable Tracy Profiler" OFF)
+else()
+	option(ENABLE_TRACY "Enable Tracy Profiler" ON)
+endif()
 
 # ============================================================
 # Compiler-specific flags
@@ -139,6 +143,7 @@ target_include_directories(voxplace_core PUBLIC
 	${CMAKE_SOURCE_DIR}/src
 	${CMAKE_SOURCE_DIR}/dependencies
 	${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
+	${CMAKE_SOURCE_DIR}/thirdparty/glm
 )
 
 target_link_libraries(voxplace_core PUBLIC
