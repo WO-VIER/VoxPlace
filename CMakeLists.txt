@@ -115,6 +115,18 @@ if(WIN32)
 	if(NOT sodium_POPULATED)
 		FetchContent_Populate(sodium)
 	endif()
+
+	# Generate version.h (normally done by ./configure)
+	file(WRITE "${sodium_SOURCE_DIR}/src/libsodium/include/sodium/version.h"
+		"#ifndef sodium_version_H\n"
+		"#define sodium_version_H\n"
+		"#include \"export.h\"\n"
+		"#define SODIUM_VERSION_STRING \"1.0.21\"\n"
+		"#define SODIUM_LIBRARY_VERSION_MAJOR 26\n"
+		"#define SODIUM_LIBRARY_VERSION_MINOR 3\n"
+		"#endif\n"
+	)
+
 	file(GLOB_RECURSE sodium_sources "${sodium_SOURCE_DIR}/src/libsodium/*.c")
 	add_library(sodium STATIC ${sodium_sources})
 	target_include_directories(sodium PUBLIC
