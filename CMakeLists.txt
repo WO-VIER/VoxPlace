@@ -200,6 +200,7 @@ target_include_directories(VoxPlace PRIVATE
 	${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
 	${CMAKE_SOURCE_DIR}/thirdparty/imgui
 	${CMAKE_SOURCE_DIR}/thirdparty/imgui/backends
+	${CMAKE_SOURCE_DIR}/thirdparty/enet/include
 )
 
 target_link_libraries(VoxPlace PRIVATE voxplace_core)
@@ -285,6 +286,7 @@ target_include_directories(VoxPlacePregen PRIVATE
 	${CMAKE_SOURCE_DIR}/src
 	${CMAKE_SOURCE_DIR}/dependencies
 	${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
+	${CMAKE_SOURCE_DIR}/thirdparty/enet/include
 )
 
 target_link_libraries(VoxPlacePregen PRIVATE

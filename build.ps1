@@ -48,11 +48,21 @@ if (-not (Test-Command "cmake")) {
 }
 
 # ============================================================
-# Clean if requested
+# Clean if requested or if CMakeLists.txt changed
 # ============================================================
+$cacheFile = Join-Path $buildDir "CMakeCache.txt"
+$rootCMake = Join-Path $projectRoot "CMakeLists.txt"
+
 if ($Clean -and (Test-Path $buildDir)) {
     Write-Step "Cleaning build directory..."
     Remove-Item -Recurse -Force $buildDir
+} elseif ((Test-Path $cacheFile) -and (Test-Path $rootCMake)) {
+    $cacheTime = (Get-Item $cacheFile).LastWriteTime
+    $cmakeTime = (Get-Item $rootCMake).LastWriteTime
+    if ($cmakeTime -gt $cacheTime) {
+        Write-Step "CMakeLists.txt changed, cleaning build directory..."
+        Remove-Item -Recurse -Force $buildDir
+    }
 }
 
 # ============================================================
