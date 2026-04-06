@@ -189,6 +189,16 @@ endif()
 
 add_executable(VoxPlace ${CLIENT_SOURCES})
 
+# Copy assets to output directory
+add_custom_command(TARGET VoxPlace POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E copy_directory
+		"${CMAKE_SOURCE_DIR}/assets"
+		"$<TARGET_FILE_DIR:VoxPlace>/assets"
+	COMMAND ${CMAKE_COMMAND} -E copy_directory
+		"${CMAKE_SOURCE_DIR}/src/shader"
+		"$<TARGET_FILE_DIR:VoxPlace>/shader"
+)
+
 if(ENABLE_GL_DEBUG)
 	target_compile_definitions(VoxPlace PRIVATE ENABLE_GL_DEBUG)
 endif()
