@@ -22,9 +22,6 @@ uniform vec3 fogColor;
 uniform int useAO;
 uniform int debugSunblockOnly;
 
-// ============================================================================
-// FACE SHADING — facteurs BetterSpades (chunk.c:555-560)
-// ============================================================================
 
 const float FACE_BRIGHTNESS[6] = float[6](
     1.000,  // 0: TOP

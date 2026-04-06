@@ -6,35 +6,55 @@
 #include <cstddef>
 #include <cstdint>
 
-constexpr size_t PLAYER_COLOR_PALETTE_SIZE = 32;
+constexpr size_t PLAYER_COLOR_PALETTE_SIZE = 64;
 
-inline uint32_t playerPaletteEntry(uint32_t packedColor)
+inline uint32_t playerPaletteEntryRgb(int red, int green, int blue)
 {
-	return VoxelChunkData::makeColor(
-		VoxelChunkData::colorR(packedColor),
-		VoxelChunkData::colorG(packedColor),
-		VoxelChunkData::colorB(packedColor));
+	return VoxelChunkData::makeColor(red, green, blue);
 }
 
 inline const std::array<uint32_t, PLAYER_COLOR_PALETTE_SIZE> &playerColorPalette()
 {
 	static const std::array<uint32_t, PLAYER_COLOR_PALETTE_SIZE> palette = {
-		playerPaletteEntry(0x0019016B), playerPaletteEntry(0x003700BD),
-		playerPaletteEntry(0x000045FF), playerPaletteEntry(0x0000A8FE),
-		playerPaletteEntry(0x0035D4FF), playerPaletteEntry(0x00B9F8FE),
-		playerPaletteEntry(0x0067A201), playerPaletteEntry(0x0076CC09),
-		playerPaletteEntry(0x0057EC7E), playerPaletteEntry(0x006D7502),
-		playerPaletteEntry(0x00AA9D00), playerPaletteEntry(0x00BECC00),
-		playerPaletteEntry(0x00A44F24), playerPaletteEntry(0x00EA9037),
-		playerPaletteEntry(0x00F3E852), playerPaletteEntry(0x00BF3948),
-		playerPaletteEntry(0x00FF5B69), playerPaletteEntry(0x00FFB394),
-		playerPaletteEntry(0x009F1D80), playerPaletteEntry(0x00BF49B4),
-		playerPaletteEntry(0x00FDABE4), playerPaletteEntry(0x007E11DD),
-		playerPaletteEntry(0x008137FE), playerPaletteEntry(0x00A999FE),
-		playerPaletteEntry(0x002F466D), playerPaletteEntry(0x0026699B),
-		playerPaletteEntry(0x0070B4FE), playerPaletteEntry(0x00010101),
-		playerPaletteEntry(0x00525252), playerPaletteEntry(0x00908D88),
-		playerPaletteEntry(0x00D8D6D5), playerPaletteEntry(0x00FFFFFF)
+		playerPaletteEntryRgb(15, 15, 15), playerPaletteEntryRgb(47, 47, 47),
+		playerPaletteEntryRgb(79, 79, 79), playerPaletteEntryRgb(111, 111, 111),
+		playerPaletteEntryRgb(143, 143, 143), playerPaletteEntryRgb(175, 175, 175),
+		playerPaletteEntryRgb(207, 207, 207), playerPaletteEntryRgb(239, 239, 239),
+
+		playerPaletteEntryRgb(31, 0, 0), playerPaletteEntryRgb(95, 0, 0),
+		playerPaletteEntryRgb(159, 0, 0), playerPaletteEntryRgb(223, 0, 0),
+		playerPaletteEntryRgb(255, 31, 31), playerPaletteEntryRgb(255, 95, 95),
+		playerPaletteEntryRgb(255, 159, 159), playerPaletteEntryRgb(255, 223, 223),
+
+		playerPaletteEntryRgb(31, 15, 0), playerPaletteEntryRgb(95, 47, 0),
+		playerPaletteEntryRgb(159, 79, 0), playerPaletteEntryRgb(223, 111, 0),
+		playerPaletteEntryRgb(255, 143, 31), playerPaletteEntryRgb(255, 175, 95),
+		playerPaletteEntryRgb(255, 207, 159), playerPaletteEntryRgb(255, 239, 223),
+
+		playerPaletteEntryRgb(31, 31, 0), playerPaletteEntryRgb(95, 95, 0),
+		playerPaletteEntryRgb(159, 159, 0), playerPaletteEntryRgb(223, 223, 0),
+		playerPaletteEntryRgb(255, 255, 31), playerPaletteEntryRgb(255, 255, 95),
+		playerPaletteEntryRgb(255, 255, 159), playerPaletteEntryRgb(255, 255, 223),
+
+		playerPaletteEntryRgb(0, 31, 0), playerPaletteEntryRgb(0, 95, 0),
+		playerPaletteEntryRgb(0, 159, 0), playerPaletteEntryRgb(0, 223, 0),
+		playerPaletteEntryRgb(31, 255, 31), playerPaletteEntryRgb(95, 255, 95),
+		playerPaletteEntryRgb(159, 255, 159), playerPaletteEntryRgb(223, 255, 223),
+
+		playerPaletteEntryRgb(0, 31, 31), playerPaletteEntryRgb(0, 95, 95),
+		playerPaletteEntryRgb(0, 159, 159), playerPaletteEntryRgb(0, 223, 223),
+		playerPaletteEntryRgb(31, 255, 255), playerPaletteEntryRgb(95, 255, 255),
+		playerPaletteEntryRgb(159, 255, 255), playerPaletteEntryRgb(223, 255, 255),
+
+		playerPaletteEntryRgb(0, 0, 31), playerPaletteEntryRgb(0, 0, 95),
+		playerPaletteEntryRgb(0, 0, 159), playerPaletteEntryRgb(0, 0, 223),
+		playerPaletteEntryRgb(31, 31, 255), playerPaletteEntryRgb(95, 95, 255),
+		playerPaletteEntryRgb(159, 159, 255), playerPaletteEntryRgb(223, 223, 255),
+
+		playerPaletteEntryRgb(31, 0, 31), playerPaletteEntryRgb(95, 0, 95),
+		playerPaletteEntryRgb(159, 0, 159), playerPaletteEntryRgb(223, 0, 223),
+		playerPaletteEntryRgb(255, 31, 255), playerPaletteEntryRgb(255, 95, 255),
+		playerPaletteEntryRgb(255, 159, 255), playerPaletteEntryRgb(255, 223, 255)
 	};
 	return palette;
 }
