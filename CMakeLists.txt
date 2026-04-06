@@ -68,17 +68,29 @@ endif()
 # Dependency resolution
 # ============================================================
 if(WIN32)
+	include(FetchContent)
+
 	# --- GLFW ---
 	set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 	set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 	set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 	set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-	add_subdirectory(thirdparty/glfw)
+	FetchContent_Declare(glfw
+		GIT_REPOSITORY https://github.com/glfw/glfw.git
+		GIT_TAG 3.4
+		GIT_SHALLOW TRUE
+	)
+	FetchContent_MakeAvailable(glfw)
 
 	# --- ENet ---
 	set(ENET_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
 	set(ENET_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
-	add_subdirectory(thirdparty/enet)
+	FetchContent_Declare(enet
+		GIT_REPOSITORY https://github.com/lsalzman/enet.git
+		GIT_TAG v1.3.18
+		GIT_SHALLOW TRUE
+	)
+	FetchContent_MakeAvailable(enet)
 
 	# --- Zstd ---
 	set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
@@ -86,15 +98,42 @@ if(WIN32)
 	set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 	set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 	set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
-	add_subdirectory(thirdparty/zstd/build/cmake)
+	FetchContent_Declare(zstd
+		GIT_REPOSITORY https://github.com/facebook/zstd.git
+		GIT_TAG v1.5.6
+		GIT_SHALLOW TRUE
+	)
+	FetchContent_MakeAvailable(zstd)
+	# zstd CMake is in build/cmake subdirectory
+	add_subdirectory(${zstd_SOURCE_DIR}/build/cmake ${zstd_BINARY_DIR}/build_cmake EXCLUDE_FROM_ALL)
 
 	# --- libsodium ---
-	set(SODIUM_DISABLE_TESTS ON CACHE BOOL "" FORCE)
-	set(SODIUM_MINIMAL OFF CACHE BOOL "" FORCE)
-	add_subdirectory(thirdparty/libsodium)
+	FetchContent_Declare(sodium
+		GIT_REPOSITORY https://github.com/robinlinden/libsodium-cmake.git
+		GIT_TAG master
+		GIT_SHALLOW TRUE
+	)
+	FetchContent_MakeAvailable(sodium)
 
-	# --- SQLite3 ---
-	add_subdirectory(thirdparty/sqlite3)
+	# --- SQLite3 (amalgamation) ---
+	FetchContent_Declare(sqlite3
+		URL https://www.sqlite.org/2024/sqlite-amalgamation-3450300.zip
+	)
+	FetchContent_GetProperties(sqlite3)
+	if(NOT sqlite3_POPULATED)
+		FetchContent_Populate(sqlite3)
+	endif()
+	add_library(sqlite3 STATIC ${sqlite3_SOURCE_DIR}/sqlite3.c)
+	target_include_directories(sqlite3 PUBLIC ${sqlite3_SOURCE_DIR})
+	target_compile_definitions(sqlite3 PRIVATE SQLITE_THREADSAFE=1 SQLITE_DEFAULT_MEMSTATUS=0 SQLITE_OMIT_DEPRECATED)
+
+	# --- GLM ---
+	FetchContent_Declare(glm
+		GIT_REPOSITORY https://github.com/g-truc/glm.git
+		GIT_TAG 1.0.1
+		GIT_SHALLOW TRUE
+	)
+	FetchContent_MakeAvailable(glm)
 
 	# --- OpenGL ---
 	find_package(OpenGL REQUIRED)
@@ -143,7 +182,6 @@ target_include_directories(voxplace_core PUBLIC
 	${CMAKE_SOURCE_DIR}/src
 	${CMAKE_SOURCE_DIR}/dependencies
 	${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
-	${CMAKE_SOURCE_DIR}/thirdparty/glm
 )
 
 target_link_libraries(voxplace_core PUBLIC
@@ -189,16 +227,6 @@ endif()
 
 add_executable(VoxPlace ${CLIENT_SOURCES})
 
-# Copy assets to output directory
-add_custom_command(TARGET VoxPlace POST_BUILD
-	COMMAND ${CMAKE_COMMAND} -E copy_directory
-		"${CMAKE_SOURCE_DIR}/assets"
-		"$<TARGET_FILE_DIR:VoxPlace>/assets"
-	COMMAND ${CMAKE_COMMAND} -E copy_directory
-		"${CMAKE_SOURCE_DIR}/src/shader"
-		"$<TARGET_FILE_DIR:VoxPlace>/shader"
-)
-
 if(ENABLE_GL_DEBUG)
 	target_compile_definitions(VoxPlace PRIVATE ENABLE_GL_DEBUG)
 endif()
@@ -217,6 +245,7 @@ target_include_directories(VoxPlace PRIVATE
 	${CMAKE_SOURCE_DIR}/thirdparty/imgui
 	${CMAKE_SOURCE_DIR}/thirdparty/imgui/backends
 	${CMAKE_SOURCE_DIR}/thirdparty/enet/include
+	${CMAKE_SOURCE_DIR}/thirdparty/glm
 )
 
 target_link_libraries(VoxPlace PRIVATE voxplace_core)
@@ -225,6 +254,16 @@ target_link_libraries(VoxPlace PRIVATE
 	PkgConfig::GLFW
 	PkgConfig::ENET
 	${OPENGL_gl_LIBRARY}
+)
+
+# Copy assets to output directory
+add_custom_command(TARGET VoxPlace POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E copy_directory
+		"${CMAKE_SOURCE_DIR}/assets"
+		"$<TARGET_FILE_DIR:VoxPlace>/assets"
+	COMMAND ${CMAKE_COMMAND} -E copy_directory
+		"${CMAKE_SOURCE_DIR}/src/shader"
+		"$<TARGET_FILE_DIR:VoxPlace>/shader"
 )
 
 # ============================================================
