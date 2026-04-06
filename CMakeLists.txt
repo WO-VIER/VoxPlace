@@ -104,7 +104,7 @@ if(WIN32)
 	target_link_libraries(PkgConfig::GLFW INTERFACE glfw)
 
 	add_library(PkgConfig::ENET INTERFACE IMPORTED)
-	target_link_libraries(PkgConfig::ENET INTERFACE enet)
+	target_link_libraries(PkgConfig::ENET INTERFACE enet ws2_32 winmm)
 
 	add_library(PkgConfig::SODIUM INTERFACE IMPORTED)
 	target_link_libraries(PkgConfig::SODIUM INTERFACE sodium)
@@ -238,6 +238,7 @@ target_include_directories(VoxPlaceServer PRIVATE
 	${CMAKE_SOURCE_DIR}/src
 	${CMAKE_SOURCE_DIR}/dependencies
 	${CMAKE_SOURCE_DIR}/thirdparty/FastNoiseLite/Cpp
+	${CMAKE_SOURCE_DIR}/thirdparty/enet/include
 )
 
 target_link_libraries(VoxPlaceServer PRIVATE
