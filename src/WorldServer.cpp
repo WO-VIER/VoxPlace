@@ -322,8 +322,8 @@ struct WorldServer::Impl
 	{
 		if (!running)
 		{
-			integrateReadyChunks(std::numeric_limits<size_t>::max());
-			flushDirtyChunks(std::numeric_limits<size_t>::max());
+			integrateReadyChunks((std::numeric_limits<size_t>::max)());
+			flushDirtyChunks((std::numeric_limits<size_t>::max)());
 			stopSaveWorker();
 			saveAllAuthenticatedPlayers();
 			cleanupNetwork();
@@ -340,8 +340,8 @@ struct WorldServer::Impl
 			}
 		}
 		workers.clear();
-		integrateReadyChunks(std::numeric_limits<size_t>::max());
-		flushDirtyChunks(std::numeric_limits<size_t>::max());
+		integrateReadyChunks((std::numeric_limits<size_t>::max)());
+		flushDirtyChunks((std::numeric_limits<size_t>::max)());
 		stopSaveWorker();
 		saveAllAuthenticatedPlayers();
 		cleanupNetwork();
