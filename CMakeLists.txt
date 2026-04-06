@@ -203,6 +203,12 @@ if(ENABLE_GL_DEBUG)
 	target_compile_definitions(VoxPlace PRIVATE ENABLE_GL_DEBUG)
 endif()
 
+if(WIN32)
+	target_compile_definitions(VoxPlace PRIVATE SHADER_PATH_PREFIX="shader/")
+else()
+	target_compile_definitions(VoxPlace PRIVATE SHADER_PATH_PREFIX="src/shader/")
+endif()
+
 target_include_directories(VoxPlace PRIVATE
 	${CMAKE_SOURCE_DIR}/include
 	${CMAKE_SOURCE_DIR}/src

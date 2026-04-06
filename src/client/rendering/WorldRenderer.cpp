@@ -12,7 +12,7 @@ void WorldRenderer::initGlobalResources()
 {
 	if (s_aabbShader == nullptr)
 	{
-		s_aabbShader = new Shader("src/shader/aabb.vs", "src/shader/aabb.fs");
+		s_aabbShader = new Shader(SHADER_PATH_PREFIX "aabb.vs", SHADER_PATH_PREFIX "aabb.fs");
 	}
 
 	if (s_aabbVao == 0)
