@@ -6,13 +6,12 @@ Développé en C++23, OpenGL 4.6, et ENet.
 
 ## Prérequis
 
-- Linux (testé sur Arch)
-- CMake >= 3.10
+### Linux
+
+- CMake >= 3.20
 - GCC >= 13 ou Clang >= 17 (support C++23 requis)
 - pkg-config
 - GPU et pilotes compatibles OpenGL 4.6 (Mesa ou propriétaires)
-
-### Dépendances système
 
 Arch / CachyOS / Manjaro :
 
@@ -26,24 +25,47 @@ Ubuntu / Debian (24.04+) :
 sudo apt install cmake g++ pkg-config libglfw3-dev libenet-dev libsodium-dev libsqlite3-dev libzstd-dev libgl-dev
 ```
 
+### Windows
+
+- CMake >= 3.20 : `winget install Kitware.CMake`
+- MSVC Build Tools ou LLVM/Clang
+
+Les dépendances sont téléchargées automatiquement au premier build via CMake FetchContent.
 
 ## Compilation
 
-Build de Debug (par défaut) :
-- Flags : `-g3`, `-O0`, `-DEBUG`
+### Linux
 
 ```bash
-make native
+# Debug (par défaut)
+make debug
+
+# Release
+make release
+
+# Nettoyage
+make clean
+make fclean
 ```
 
-Build de Release (Optimisé) :
-- Flags : `-O3`, `-march=native`, `-flto`, `-DNDEBUG`
+Les exécutables sont générés dans `build_debug/` ou `build_release/`.
 
-```bash
-make native-release
+### Windows
+
+Ouvrir **x64 Native Tools Command Prompt for VS 2022** (ou équivalent Clang) à la racine du projet :
+
+```powershell
+# Debug
+.\build.ps1
+
+# Release
+.\build.ps1 -Config Release
+
+# Clean et rebuild
+.\build.ps1 -Clean
 ```
 
-Les exécutables sont générés dans `build/` ou `build_release/`.
+Les exécutables sont générés dans `build\win-release\Release\`.
 
 ## Utilisation
 
@@ -52,13 +74,12 @@ Les exécutables sont générés dans `build/` ou `build_release/`.
 Lancez d'abord le serveur :
 
 ```bash
-./build/VoxPlaceServer [options]
-```
-
-ou
-
-```bash
+# Linux
+./build_debug/VoxPlaceServer [options]
 ./build_release/VoxPlaceServer [options]
+
+# Windows
+.\build\win-release\Release\VoxPlaceServer.exe
 ```
 
 Options :
@@ -82,7 +103,7 @@ VOXPLACE_PROFILE_WORKERS=1      Active l'affichage du profiling des workers
 Exemple :
 
 ```bash
-./build/VoxPlaceServer --classic-gen --port 28713
+./build_debug/VoxPlaceServer --classic-gen --port 28713
 ```
 
 ### Serveur public
@@ -100,7 +121,11 @@ Mode    : ClassicStreaming
 Pour se connecter à un serveur en cours d'exécution :
 
 ```bash
-./build/VoxPlace
+# Linux
+./build_debug/VoxPlace
+
+# Windows
+.\build\win-release\Release\VoxPlace.exe
 ```
 
 Le client se connecte à `localhost:28713` par défaut. L'adresse du serveur peut être modifiée depuis l'écran de connexion en jeu.
@@ -116,19 +141,13 @@ Le serveur fonctionne avec la règle suivante :
 Connexion au serveur public :
 
 ```bash
-./build/VoxPlace 161.35.214.248 28713 MonPseudo MonMotDePasse
+./build_debug/VoxPlace 161.35.214.248 28713 MonPseudo MonMotDePasse
 ```
 
 Connexion à un serveur local :
 
 ```bash
-./build/VoxPlace 127.0.0.1 28713 MonPseudo MonMotDePasse
-```
-
-Exemple en release :
-
-```bash
-./build_release/VoxPlace 161.35.214.248 28713 MonPseudo MonMotDePasse
+./build_debug/VoxPlace 127.0.0.1 28713 MonPseudo MonMotDePasse
 ```
 
 ### Persistance SQLite
@@ -162,43 +181,8 @@ src/
   client/          Code côté client (rendu, entrées, UI)
   server/          Code côté serveur (génération, réseau, persistance)
 include/           Headers publics
-thirdparty/        Bibliothèques tierces intégrées (imgui, FastNoiseLite)
+thirdparty/        Bibliothèques tierces intégrées (imgui, FastNoiseLite, Tracy)
 dependencies/      Chargeur OpenGL (glad, KHR)
 assets/            Textures et shaders
-scripts/           Scripts d'aide à la compilation
+scripts/           Scripts d'aide à la compilation et déploiement
 ```
-
-## Windows
-
-Toutes les dépendances sont incluses dans le repo (vendored). Aucun package manager externe requis.
-
-### Prérequis
-
-- **CMake** >= 3.20 : `winget install Kitware.CMake`
-- **Un compilateur C++** (au choix) :
-  - MSVC Build Tools : `winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools"`
-  - LLVM/Clang : `winget install LLVM.LLVM`
-
-### Compilation
-
-Ouvrir PowerShell à la racine du projet :
-
-```powershell
-# Debug
-.\build.ps1
-
-# Release
-.\build.ps1 -Config Release
-
-# Clean et rebuild
-.\build.ps1 -Clean
-```
-
-### Utilisation
-
-```powershell
-.\build\win-debug\VoxPlace.exe
-.\build\win-debug\VoxPlaceServer.exe
-```
-
-> **Note** : Pour MSVC, ouvrir "x64 Native Tools Command Prompt for VS 2022" avant de lancer le script.
