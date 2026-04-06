@@ -110,11 +110,9 @@ if(WIN32)
 	# --- libsodium ---
 	FetchContent_Declare(sodium
 		URL https://download.libsodium.org/libsodium/releases/libsodium-1.0.21-stable.tar.gz
+		DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 	)
-	FetchContent_GetProperties(sodium)
-	if(NOT sodium_POPULATED)
-		FetchContent_Populate(sodium)
-	endif()
+	FetchContent_MakeAvailable(sodium)
 
 	# Generate version.h (normally done by ./configure)
 	file(WRITE "${sodium_SOURCE_DIR}/src/libsodium/include/sodium/version.h"
@@ -135,7 +133,7 @@ if(WIN32)
 	target_include_directories(sodium PRIVATE
 		${sodium_SOURCE_DIR}/src/libsodium/include/sodium
 	)
-target_compile_definitions(sodium PUBLIC SODIUM_STATIC)
+	target_compile_definitions(sodium PUBLIC SODIUM_STATIC)
 	target_compile_definitions(sodium PRIVATE CONFIGURED _CRT_SECURE_NO_WARNINGS)
 	if(WIN32)
 		target_link_libraries(sodium PRIVATE bcrypt advapi32)
@@ -144,11 +142,9 @@ target_compile_definitions(sodium PUBLIC SODIUM_STATIC)
 	# --- SQLite3 (amalgamation) ---
 	FetchContent_Declare(sqlite3
 		URL https://www.sqlite.org/2024/sqlite-amalgamation-3450300.zip
+		DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 	)
-	FetchContent_GetProperties(sqlite3)
-	if(NOT sqlite3_POPULATED)
-		FetchContent_Populate(sqlite3)
-	endif()
+	FetchContent_MakeAvailable(sqlite3)
 	add_library(sqlite3 STATIC ${sqlite3_SOURCE_DIR}/sqlite3.c)
 	target_include_directories(sqlite3 PUBLIC ${sqlite3_SOURCE_DIR})
 	target_compile_definitions(sqlite3 PRIVATE SQLITE_THREADSAFE=1 SQLITE_DEFAULT_MEMSTATUS=0 SQLITE_OMIT_DEPRECATED)
