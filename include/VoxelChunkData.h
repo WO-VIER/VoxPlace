@@ -12,6 +12,8 @@ constexpr uint8_t CHUNK_SIZE_Z = 16;
 constexpr uint8_t BEDROCK_LAYER = 0;
 constexpr uint8_t CHUNK_SECTION_HEIGHT = 16;
 constexpr uint8_t CHUNK_SECTION_COUNT = CHUNK_SIZE_Y / CHUNK_SECTION_HEIGHT;
+constexpr uint32_t VOXEL_AIR = 0;
+constexpr uint32_t VOXEL_SOLID_COLOR_FLAG = 0x01000000u;
 
 static_assert(CHUNK_SIZE_Y % CHUNK_SECTION_HEIGHT == 0,
 			  "CHUNK_SIZE_Y must stay divisible by CHUNK_SECTION_HEIGHT");
@@ -144,15 +146,15 @@ struct VoxelChunkData
 	{
 		if (x < 0 || x >= CHUNK_SIZE_X)
 		{
-			return 0;
+			return VOXEL_AIR;
 		}
 		if (y < 0 || y >= CHUNK_SIZE_Y)
 		{
-			return 0;
+			return VOXEL_AIR;
 		}
 		if (z < 0 || z >= CHUNK_SIZE_Z)
 		{
-			return 0;
+			return VOXEL_AIR;
 		}
 		return blocks[x][y][z];
 	}
@@ -171,7 +173,7 @@ struct VoxelChunkData
 		{
 			return false;
 		}
-		if (y == BEDROCK_LAYER && color == 0)
+		if (y == BEDROCK_LAYER && color == VOXEL_AIR)
 		{
 			return false;
 		}
@@ -182,7 +184,7 @@ struct VoxelChunkData
 		blocks[x][y][z] = color;
 		int sectionIndex = sectionIndexFromY(y);
 		uint8_t sectionBit = static_cast<uint8_t>(1u << sectionIndex);
-		if (color != 0)
+		if (color != VOXEL_AIR)
 		{
 			nonEmptySectionMask |= sectionBit;
 		}
@@ -236,7 +238,8 @@ struct VoxelChunkData
 		red = std::clamp(red, 0, 255);
 		green = std::clamp(green, 0, 255);
 		blue = std::clamp(blue, 0, 255);
-		return static_cast<uint32_t>(red)
+		return VOXEL_SOLID_COLOR_FLAG
+			| static_cast<uint32_t>(red)
 			| (static_cast<uint32_t>(green) << 8)
 			| (static_cast<uint32_t>(blue) << 16);
 	}
@@ -257,7 +260,7 @@ private:
 			{
 				for (int z = 0; z < CHUNK_SIZE_Z; z++)
 				{
-					if (blocks[x][y][z] != 0)
+					if (blocks[x][y][z] != VOXEL_AIR)
 					{
 						return true;
 					}

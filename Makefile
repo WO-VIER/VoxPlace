@@ -26,6 +26,8 @@ clean:
 	rm -rf build_debug build_release
 
 fclean:
-	rm -rf build_debug build_release
-	find . -name "*.sqlite3*" -delete
-	find . -name "*.tracy" -delete
+	rm -rf build_debug build_release build build_chunky build_asan build_relwithdebinfo build_minsizerel
+	rm -rf build/win-debug build/win-release
+	rm -rf vcpkg_installed
+	find . -maxdepth 1 -name "*.sqlite3*" -delete
+	find . -maxdepth 1 -name "*.tracy" -delete

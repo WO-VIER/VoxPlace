@@ -3,11 +3,7 @@
 .PVS-Studio/
 .agents/
 notes/
-build
-build_asan
-build_release/
-build_relwithdebinfo/
-build_minsizerel/
+build*
 *.pdf
 *.sqlite3*
 valgrind*.txt

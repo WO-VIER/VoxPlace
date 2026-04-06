@@ -59,9 +59,6 @@ struct DebugOverlayData
 	int *terrainArchitectureIndex = nullptr;
 	int terrainArchitectureMin = 0;
 	int terrainArchitectureMax = 0;
-	int *selectedPaletteIndex = nullptr;
-	int paletteMax = 1;
-	ImVec4 previewColor = ImVec4(1, 1, 1, 1);
 	bool *crosshairVisible = nullptr;
 };
 

@@ -222,6 +222,7 @@ set(CLIENT_SOURCES
 	src/client/gameplay/CameraBoundsSystem.cpp
 	src/client/rendering/ClientFrameRenderer.cpp
 	src/client/rendering/WorldRenderer.cpp
+	src/client/ui/ColorPaletteHud.cpp
 	src/client/ui/CooldownHud.cpp
 	src/client/ui/DebugOverlayBuilder.cpp
 	src/client/ui/DebugOverlay.cpp

@@ -24,6 +24,7 @@
 #include <client/rendering/Crosshair.h>
 #include <client/rendering/Shader.h>
 #include <client/rendering/WorldRenderer.h>
+#include <client/ui/ColorPaletteHud.h>
 #include <client/ui/CooldownHud.h>
 #include <client/ui/DebugOverlayBuilder.h>
 #include <client/ui/DebugOverlay.h>
@@ -61,6 +62,7 @@ namespace
 		ClientChunkMesher chunkMesher;
 		ChunkIndirectRenderer chunkIndirectRenderer;
 		LoginScreen loginScreen;
+		ColorPaletteHud colorPaletteHud;
 		CooldownHud cooldownHud;
 		ClientProfilerState profilerState;
 		Crosshair crosshair;
@@ -207,6 +209,7 @@ namespace
 			ImGui::StyleColorsDark();
 
 			m_runtime.loginScreen.loadAssets();
+			m_runtime.colorPaletteHud.loadAssets();
 			m_runtime.cooldownHud.loadAssets();
 			ImGui_ImplGlfw_InitForOpenGL(m_runtime.window, true);
 			ImGui_ImplOpenGL3_Init("#version 460");
@@ -519,6 +522,9 @@ namespace
 
 			DebugOverlayData debugOverlayData = buildDebugOverlayData(debugOverlayInputs);
 			renderDebugOverlay(m_runtime.gameState.debugOverlayVisible, debugOverlayData);
+			m_runtime.colorPaletteHud.render(
+				m_runtime.gameState.appState == ClientAppState::InGame,
+				m_runtime.gameState.render.selectedPaletteIndex);
 			m_runtime.cooldownHud.render(
 				m_runtime.gameState.appState == ClientAppState::InGame,
 				m_runtime.worldClient.remainingBlockActionCooldownMs());
@@ -624,6 +630,7 @@ namespace
 			m_runtime.worldClient.disconnect();
 			m_runtime.chunkMesher.stop();
 			m_runtime.loginScreen.cleanup();
+			m_runtime.colorPaletteHud.cleanup();
 			destroyLoadedChunks();
 			m_runtime.worldState.pendingMeshRevisions.clear();
 			m_runtime.worldState.streamedChunkKeys.clear();

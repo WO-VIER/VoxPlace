@@ -30,13 +30,6 @@ DebugOverlayData buildDebugOverlayData(const DebugOverlayBuildInputs &inputs)
 	const Crosshair &crosshair = *inputs.crosshair;
 	const RenderFrameContext &frameContext = *inputs.frameContext;
 
-	const uint32_t selectedColor = playerPaletteColor(
-		static_cast<uint8_t>(gameState.render.selectedPaletteIndex - 1));
-	const ImVec4 previewColor(
-		static_cast<float>(VoxelChunkData::colorR(selectedColor)) / 255.0f,
-		static_cast<float>(VoxelChunkData::colorG(selectedColor)) / 255.0f,
-		static_cast<float>(VoxelChunkData::colorB(selectedColor)) / 255.0f,
-		1.0f);
 	const bool usingIndirectRendering = WorldRenderer::usesIndirectRendering(
 		gameState.terrainRenderArchitecture);
 
@@ -94,9 +87,6 @@ DebugOverlayData buildDebugOverlayData(const DebugOverlayBuildInputs &inputs)
 	data.terrainArchitectureIndex = inputs.terrainArchitectureIndex;
 	data.terrainArchitectureMin = 0;
 	data.terrainArchitectureMax = 1;
-	data.selectedPaletteIndex = const_cast<int *>(&gameState.render.selectedPaletteIndex);
-	data.paletteMax = static_cast<int>(PLAYER_COLOR_PALETTE_SIZE);
-	data.previewColor = previewColor;
 	data.crosshairVisible = const_cast<bool *>(&crosshair.visible);
 	return data;
 }

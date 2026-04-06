@@ -1,9 +1,51 @@
 #include <client/core/InputSystem.h>
 
+#include <ChunkPalette.h>
+
 namespace
 {
 	GameState *gInputGameState = nullptr;
 	Camera *gInputCamera = nullptr;
+
+	void queuePaletteScroll(GameState &gameState, float yoffset)
+	{
+		gameState.input.paletteScrollAccumulator += yoffset;
+		while (gameState.input.paletteScrollAccumulator >= 1.0f)
+		{
+			gameState.input.paletteScrollDelta += 1;
+			gameState.input.paletteScrollAccumulator -= 1.0f;
+		}
+		while (gameState.input.paletteScrollAccumulator <= -1.0f)
+		{
+			gameState.input.paletteScrollDelta -= 1;
+			gameState.input.paletteScrollAccumulator += 1.0f;
+		}
+	}
+
+	int wrapPaletteIndex(int paletteIndex)
+	{
+		const int paletteSize = static_cast<int>(PLAYER_COLOR_PALETTE_SIZE);
+		while (paletteIndex < 1)
+		{
+			paletteIndex += paletteSize;
+		}
+		while (paletteIndex > paletteSize)
+		{
+			paletteIndex -= paletteSize;
+		}
+		return paletteIndex;
+	}
+
+	void applyPaletteScroll(GameState &gameState)
+	{
+		if (gameState.input.paletteScrollDelta == 0)
+		{
+			return;
+		}
+		gameState.render.selectedPaletteIndex = wrapPaletteIndex(
+			gameState.render.selectedPaletteIndex - gameState.input.paletteScrollDelta);
+		gameState.input.paletteScrollDelta = 0;
+	}
 
 	void framebufferSizeCallback(GLFWwindow *, int width, int height)
 	{
@@ -58,13 +100,21 @@ namespace
 		}
 	}
 
-	void scrollCallback(GLFWwindow *, double, double yoffset)
+	void scrollCallback(GLFWwindow *window, double, double yoffset)
 	{
-		if (gInputCamera == nullptr)
+		if (gInputGameState == nullptr)
 		{
 			return;
 		}
-		gInputCamera->ProcessMouseScroll(static_cast<float>(yoffset));
+		if (gInputGameState->appState != ClientAppState::InGame)
+		{
+			return;
+		}
+		if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL)
+		{
+			return;
+		}
+		queuePaletteScroll(*gInputGameState, static_cast<float>(yoffset));
 	}
 }
 
@@ -112,6 +162,16 @@ void processGameplayInput(GLFWwindow *window, GameState &gameState, Camera &came
 	bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
 	bool rightDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 	bool cursorCaptured = glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED;
+
+	if (cursorCaptured)
+	{
+		applyPaletteScroll(gameState);
+	}
+	else
+	{
+		gameState.input.paletteScrollDelta = 0;
+		gameState.input.paletteScrollAccumulator = 0.0f;
+	}
 
 	if (leftDown && !previousLeftDown && cursorCaptured)
 	{

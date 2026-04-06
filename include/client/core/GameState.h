@@ -54,6 +54,8 @@ struct ClientInputState
 	bool firstMouse = true;
 	bool placeBlockRequested = false;
 	bool breakBlockRequested = false;
+	int paletteScrollDelta = 0;
+	float paletteScrollAccumulator = 0.0f;
 };
 
 struct GameState

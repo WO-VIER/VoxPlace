@@ -174,11 +174,6 @@ void renderDebugOverlay(bool visible, const DebugOverlayData &data)
 			data.terrainArchitectureMin,
 			data.terrainArchitectureMax);
 	}
-	if (data.selectedPaletteIndex != nullptr)
-	{
-		ImGui::SliderInt("Palette index", data.selectedPaletteIndex, 1, data.paletteMax);
-	}
-	ImGui::ColorButton("Palette preview", data.previewColor);
 	if (data.crosshairVisible != nullptr)
 	{
 		ImGui::Checkbox("Crosshair", data.crosshairVisible);
