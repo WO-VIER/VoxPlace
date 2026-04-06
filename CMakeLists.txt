@@ -135,7 +135,8 @@ if(WIN32)
 	target_include_directories(sodium PRIVATE
 		${sodium_SOURCE_DIR}/src/libsodium/include/sodium
 	)
-	target_compile_definitions(sodium PRIVATE CONFIGURED SODIUM_STATIC _CRT_SECURE_NO_WARNINGS)
+target_compile_definitions(sodium PUBLIC SODIUM_STATIC)
+	target_compile_definitions(sodium PRIVATE CONFIGURED _CRT_SECURE_NO_WARNINGS)
 	if(WIN32)
 		target_link_libraries(sodium PRIVATE bcrypt advapi32)
 	endif()
