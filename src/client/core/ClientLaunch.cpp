@@ -227,6 +227,7 @@ ClientEnvironmentOptions loadClientEnvironmentOptions(GameState &gameState)
 	}
 
 	options.profileWorkersEnabled = envFlagEnabled("VOXPLACE_PROFILE_WORKERS");
+	options.profileJsonOutputEnabled = envFlagEnabled("VOXPLACE_PROFILE_JSON");
 	options.benchFlyEnabled = envFlagEnabled("VOXPLACE_BENCH_FLY");
 
 	float envBenchFlySpeed = 0.0f;

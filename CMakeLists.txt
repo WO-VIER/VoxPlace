@@ -227,6 +227,7 @@ set(CLIENT_SOURCES
 	src/client/ui/DebugOverlayBuilder.cpp
 	src/client/ui/DebugOverlay.cpp
 	src/client/ui/LoginScreen.cpp
+	src/client/ui/ProfilerWindows.cpp
 	src/client/gameplay/BlockInteractionSystem.cpp
 	src/client/gameplay/ClientWorldSystem.cpp
 	src/client/gameplay/ChunkStreamingSystem.cpp

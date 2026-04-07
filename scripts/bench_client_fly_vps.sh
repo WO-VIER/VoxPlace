@@ -7,14 +7,15 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 HOST=${HOST:-161.35.214.248}
 PORT=${PORT:-28713}
-USER="BenchGenSpawn"
+USER="BenchStatic"
 PASS="BenchPass123"
-DURATION=${DURATION:-30}
+DURATION=${DURATION:-45}
+SPEED=${SPEED:-40}
 RENDER_DIST=${RENDER_DIST:-32}
 WORKERS=${WORKERS:-0} # 0 = Auto
 TIMESTAMP=${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}
-RUN_LABEL=${RUN_LABEL:-spawn_${TIMESTAMP}}
-OUTPUT_ROOT=${OUTPUT_ROOT:-"$PROJECT_ROOT/benchlocal"}
+RUN_LABEL=${RUN_LABEL:-fly_vps_${TIMESTAMP}}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"$PROJECT_ROOT/benchvps"}
 OUTPUT_DIR="$OUTPUT_ROOT/$RUN_LABEL"
 LOG_FILE="$OUTPUT_DIR/client.log"
 PROFILE_JSON_FILE="$OUTPUT_DIR/profile.jsonl"
@@ -24,12 +25,13 @@ print_usage() {
 	cat <<EOF
 Usage: $(basename "$0") [--help]
 
-Benchmark client au spawn.
+Benchmark client fly contre le VPS.
 
 Variables d'environnement:
   HOST=$HOST
   PORT=$PORT
   DURATION=$DURATION
+  SPEED=$SPEED
   RENDER_DIST=$RENDER_DIST
   WORKERS=$WORKERS
   TIMESTAMP=$TIMESTAMP
@@ -42,7 +44,7 @@ Sorties:
   analyse      : \$OUTPUT_ROOT/<run>/analysis.txt
 
 Exemple:
-  HOST=127.0.0.1 DURATION=20 RENDER_DIST=16 ./scripts/$(basename "$0")
+  HOST=1.2.3.4 DURATION=60 SPEED=50 ./scripts/$(basename "$0")
 EOF
 }
 
@@ -68,22 +70,23 @@ fi
 mkdir -p "$OUTPUT_DIR"
 
 echo "======================================================="
-echo "   BENCHMARK SPAWN (Test de Charge au Démarrage)"
+echo "   BENCHMARK FLY VPS (Test de Charge en Mouvement)"
 echo "======================================================="
 echo "Host            : $HOST:$PORT"
 echo "Duration        : ${DURATION}s"
+echo "Speed           : $SPEED units/sec"
 echo "Render Distance : $RENDER_DIST chunks"
 echo "Mesh Workers    : ${WORKERS} (0=Auto)"
 echo "Output Dir      : $OUTPUT_DIR"
 echo "-------------------------------------------------------"
-echo "Lancement du client statique... (Patientez ${DURATION}s)"
+echo "Lancement du client en arrière-plan... (Patientez ${DURATION}s)"
 
 (
 	cd "$PROJECT_ROOT"
 	stdbuf -oL -eL env \
 		VOXPLACE_MESH_WORKERS="$WORKERS" \
 		VOXPLACE_BENCH_FLY=1 \
-		VOXPLACE_BENCH_FLY_SPEED=0.000001 \
+		VOXPLACE_BENCH_FLY_SPEED="$SPEED" \
 		VOXPLACE_BENCH_SECONDS="$DURATION" \
 		VOXPLACE_PROFILE_WORKERS=1 \
 		VOXPLACE_PROFILE_JSON=1 \
@@ -98,7 +101,7 @@ echo "Client log      : $LOG_FILE"
 echo "Profile JSONL   : $PROFILE_JSON_FILE"
 
 if [[ -f "$SCRIPT_DIR/analyze_client_bottleneck.py" ]]; then
-	python3 "$SCRIPT_DIR/analyze_client_bottleneck.py" "$LOG_FILE" "spawn" | tee "$ANALYSIS_FILE"
+	python3 "$SCRIPT_DIR/analyze_client_bottleneck.py" "$LOG_FILE" "fly_vps" | tee "$ANALYSIS_FILE"
 else
 	echo "Analyse ignorée: $SCRIPT_DIR/analyze_client_bottleneck.py introuvable" | tee "$ANALYSIS_FILE"
 fi

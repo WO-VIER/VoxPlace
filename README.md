@@ -98,6 +98,8 @@ Variables d'environnement :
 ```text
 VOXPLACE_SERVER_WORKERS=<n>     Change le nombre de threads de calcul
 VOXPLACE_PROFILE_WORKERS=1      Active l'affichage du profiling des workers
+VOXPLACE_PROFILE_JSON=1         Client: émet des snapshots JSON combinés client+serveur dans stdout et logs/voxplace_profile.jsonl
+VOXPLACE_PROFILE_JSON_PATH=<p>  Client: remplace le chemin du fichier JSONL de profiling
 ```
 
 Exemple :

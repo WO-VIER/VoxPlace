@@ -6,7 +6,9 @@
 void ClientWorldSystem::clear(ClientWorldState &worldState, ChunkIndirectRenderer &indirectRenderer)
 {
 	worldState.hasWorldFrontier = false;
+	worldState.hasServerProfile = false;
 	worldState.frontier = WorldFrontier{};
+	worldState.serverProfile = ServerProfileMessage{};
 	worldState.pendingMeshRevisions.clear();
 	worldState.profileChunkRequestsWindow = 0;
 	worldState.profileChunkDropsWindow = 0;
@@ -72,6 +74,12 @@ void ClientWorldSystem::handleEvents(WorldClient &worldClient,
 				event.blockUpdate.worldY,
 				event.blockUpdate.worldZ,
 				event.blockUpdate.finalColor);
+			continue;
+		}
+		if (event.type == WorldClientEvent::Type::ServerProfileUpdated)
+		{
+			worldState.serverProfile = event.serverProfile;
+			worldState.hasServerProfile = true;
 		}
 	}
 }

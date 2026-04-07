@@ -555,5 +555,19 @@ void WorldClient::handlePacket(const uint8_t *data, size_t size)
 		event.type = WorldClientEvent::Type::BlockUpdated;
 		event.blockUpdate = message;
 		pushEvent(event);
+		return;
+	}
+
+	if (type == PacketType::ServerProfile)
+	{
+		ServerProfileMessage message;
+		if (!decodeServerProfile(data, size, message))
+		{
+			return;
+		}
+		WorldClientEvent event;
+		event.type = WorldClientEvent::Type::ServerProfileUpdated;
+		event.serverProfile = message;
+		pushEvent(event);
 	}
 }

@@ -531,6 +531,21 @@ bool decodePlayerMoveUpdate(const uint8_t *data, size_t size, PlayerMoveUpdateMe
 	return readValue(data, size, offset, message);
 }
 
+std::vector<uint8_t> encodeServerProfile(const ServerProfileMessage &message)
+{
+	return encodeWithType(PacketType::ServerProfile, message);
+}
+
+bool decodeServerProfile(const uint8_t *data, size_t size, ServerProfileMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::ServerProfile, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
 const char *packetTypeName(PacketType type)
 {
 	switch (type)
@@ -563,6 +578,8 @@ const char *packetTypeName(PacketType type)
 		return "ChunkSnapshotSections";
 	case PacketType::ChunkSnapshotSectionsZstd:
 		return "ChunkSnapshotSectionsZstd";
+	case PacketType::ServerProfile:
+		return "ServerProfile";
 	}
 	return "Unknown";
 }

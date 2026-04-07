@@ -11,6 +11,7 @@
 struct ClientEnvironmentOptions
 {
 	bool profileWorkersEnabled = false;
+	bool profileJsonOutputEnabled = false;
 	size_t requestedMeshWorkers = 0;
 	size_t classicMaxInflightChunkRequests = 192;
 	size_t classicMaxChunkRequestsPerFrame = 16;

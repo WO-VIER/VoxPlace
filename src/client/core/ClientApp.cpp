@@ -29,6 +29,7 @@
 #include <client/ui/DebugOverlayBuilder.h>
 #include <client/ui/DebugOverlay.h>
 #include <client/ui/LoginScreen.h>
+#include <client/ui/ProfilerWindows.h>
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -37,8 +38,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -96,6 +101,8 @@ namespace
 		ClientLaunchOptions m_launchOptions;
 		ClientEnvironmentOptions m_environmentOptions;
 		std::chrono::steady_clock::time_point m_benchStartTime;
+		std::filesystem::path m_profileJsonLogPath;
+		std::ofstream m_profileJsonLogFile;
 		bool m_glfwInitialized = false;
 		bool m_imguiInitialized = false;
 
@@ -143,9 +150,10 @@ namespace
 			initializeOpenGlState();
 			initializeUi();
 			startWorldSystems();
+			initializeProfileJsonLog();
 			logStartupConfiguration();
 
-			resetClientProfilerWindow(m_runtime.profilerState, std::chrono::steady_clock::now());
+			clearClientProfilerState(m_runtime.profilerState, std::chrono::steady_clock::now());
 			m_benchStartTime = std::chrono::steady_clock::now();
 			return true;
 		}
@@ -237,6 +245,14 @@ namespace
 			if (m_environmentOptions.profileWorkersEnabled)
 			{
 				std::cout << "Client worker profiling enabled" << std::endl;
+			}
+			if (m_environmentOptions.profileJsonOutputEnabled)
+			{
+				std::cout << "Client JSON profile output enabled" << std::endl;
+				if (!m_profileJsonLogPath.empty())
+				{
+					std::cout << "Client JSON profile log: " << m_profileJsonLogPath.string() << std::endl;
+				}
 			}
 			if (m_environmentOptions.benchFlyEnabled)
 			{
@@ -371,6 +387,7 @@ namespace
 		void runInGameFrame()
 		{
 			updateDebugOverlayToggle(m_runtime.window, true, m_runtime.gameState.debugOverlayVisible);
+			updateProfilerWindowsToggle(m_runtime.window, true, m_runtime.gameState.profilerWindowsVisible);
 			processGameplayInput(
 				m_runtime.window,
 				m_runtime.gameState,
@@ -522,6 +539,17 @@ namespace
 
 			DebugOverlayData debugOverlayData = buildDebugOverlayData(debugOverlayInputs);
 			renderDebugOverlay(m_runtime.gameState.debugOverlayVisible, debugOverlayData);
+
+			ProfilerWindowsData profilerWindowsData;
+			profilerWindowsData.gameState = &m_runtime.gameState;
+			profilerWindowsData.worldState = &m_runtime.worldState;
+			profilerWindowsData.clientProfiler = &m_runtime.profilerState;
+			profilerWindowsData.camera = &m_runtime.camera;
+			profilerWindowsData.frameContext = &frameResult.frameContext;
+			renderProfilerWindows(
+				m_runtime.gameState.profilerWindowsVisible,
+				profilerWindowsData);
+
 			m_runtime.colorPaletteHud.render(
 				m_runtime.gameState.appState == ClientAppState::InGame,
 				m_runtime.gameState.render.selectedPaletteIndex);
@@ -532,11 +560,6 @@ namespace
 
 		void updateProfiler(size_t visibleChunkCount)
 		{
-			if (!m_environmentOptions.profileWorkersEnabled)
-			{
-				return;
-			}
-
 			accumulateClientProfilerSample(
 				m_runtime.profilerState,
 				static_cast<double>(m_runtime.deltaTime) * 1000.0,
@@ -551,7 +574,7 @@ namespace
 				m_runtime.worldState.profileChunkReceivesWindow);
 
 			CameraChunkCoord cameraChunk = cameraChunkCoord(m_runtime.camera);
-			flushClientProfilerWindowIfReady(
+			bool windowReady = flushClientProfilerWindowIfReady(
 				m_runtime.profilerState,
 				std::chrono::steady_clock::now(),
 				m_runtime.worldState.profileMeshedChunkCountWindow,
@@ -566,8 +589,166 @@ namespace
 				m_runtime.worldState.profileChunkReceivesWindow,
 				m_runtime.worldState.profileChunkUnloadsWindow,
 				m_runtime.worldState.profileMeshedChunkCountWindow,
-				m_runtime.worldState.profileMeshedSectionCountWindow);
-		}
+				m_runtime.worldState.profileMeshedSectionCountWindow,
+				m_environmentOptions.profileWorkersEnabled);
+				if (windowReady && m_environmentOptions.profileJsonOutputEnabled)
+				{
+					emitProfileJsonSnapshot();
+				}
+			}
+
+			void initializeProfileJsonLog()
+			{
+				if (!m_environmentOptions.profileJsonOutputEnabled)
+				{
+					return;
+				}
+
+				const char *overridePath = std::getenv("VOXPLACE_PROFILE_JSON_PATH");
+				if (overridePath != nullptr && overridePath[0] != '\0')
+				{
+					m_profileJsonLogPath = overridePath;
+				}
+				else
+				{
+					m_profileJsonLogPath = std::filesystem::path("logs") / "voxplace_profile.jsonl";
+				}
+
+				std::filesystem::path parentDirectory = m_profileJsonLogPath.parent_path();
+				if (!parentDirectory.empty())
+				{
+					std::error_code error;
+					std::filesystem::create_directories(parentDirectory, error);
+					if (error)
+					{
+						std::cerr << "Failed to create profile log directory: "
+								  << error.message() << std::endl;
+						m_profileJsonLogPath.clear();
+						return;
+					}
+				}
+
+				m_profileJsonLogFile.open(m_profileJsonLogPath, std::ios::app);
+				if (!m_profileJsonLogFile.is_open())
+				{
+					std::cerr << "Failed to open profile JSON log file: "
+							  << m_profileJsonLogPath.string() << std::endl;
+					m_profileJsonLogPath.clear();
+				}
+			}
+
+			void emitProfileJsonSnapshot()
+			{
+			const ClientProfilerWindowSummary &clientSummary = m_runtime.profilerState.latestWindow;
+			if (!clientSummary.valid)
+			{
+				return;
+			}
+
+			auto now = std::chrono::system_clock::now().time_since_epoch();
+			uint64_t nowMs = static_cast<uint64_t>(
+				std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+
+			std::ostringstream stream;
+			stream << std::fixed << std::setprecision(3);
+			stream << "[profile-json] {";
+			stream << "\"type\":\"voxplace_profile_snapshot\",";
+			stream << "\"timestamp_ms\":" << nowMs << ",";
+			stream << "\"client\":{";
+			stream << "\"window_seconds\":" << clientSummary.windowSeconds << ",";
+			stream << "\"avg_fps\":" << clientSummary.avgFps << ",";
+			stream << "\"avg_frame_ms\":" << clientSummary.avgFrameMs << ",";
+			stream << "\"max_frame_ms\":" << clientSummary.maxFrameMs << ",";
+			stream << "\"avg_render_cpu_ms\":" << clientSummary.avgRenderMs << ",";
+			stream << "\"mesh_workers\":" << clientSummary.meshWorkerCount << ",";
+			stream << "\"tracked_avg\":" << clientSummary.avgTracked << ",";
+			stream << "\"tracked_max\":" << clientSummary.maxTracked << ",";
+			stream << "\"queued_avg\":" << clientSummary.avgQueued << ",";
+			stream << "\"queued_max\":" << clientSummary.maxQueued << ",";
+			stream << "\"ready_avg\":" << clientSummary.avgReady << ",";
+			stream << "\"ready_max\":" << clientSummary.maxReady << ",";
+			stream << "\"visible_avg\":" << clientSummary.avgVisible << ",";
+			stream << "\"visible_max\":" << clientSummary.maxVisible << ",";
+			stream << "\"streamed_avg\":" << clientSummary.avgStreamed << ",";
+			stream << "\"streamed_max\":" << clientSummary.maxStreamed << ",";
+			stream << "\"requests_window\":" << clientSummary.requestsWindow << ",";
+			stream << "\"requests_per_second\":" << clientSummary.requestsPerSecond << ",";
+			stream << "\"drops_window\":" << clientSummary.dropsWindow << ",";
+			stream << "\"drops_per_second\":" << clientSummary.dropsPerSecond << ",";
+			stream << "\"receives_window\":" << clientSummary.receivesWindow << ",";
+			stream << "\"receives_per_second\":" << clientSummary.receivesPerSecond << ",";
+			stream << "\"unloads_window\":" << clientSummary.unloadsWindow << ",";
+			stream << "\"unloads_per_second\":" << clientSummary.unloadsPerSecond << ",";
+			stream << "\"receive_request_ratio\":" << clientSummary.receiveRequestRatio << ",";
+			stream << "\"meshed_chunks\":" << clientSummary.meshedChunks << ",";
+			stream << "\"avg_meshed_sections\":" << clientSummary.avgMeshedSections << ",";
+			stream << "\"render_distance_chunks\":" << clientSummary.renderDistanceChunks << ",";
+			stream << "\"sort_visible_chunks\":";
+			if (clientSummary.sortVisibleChunksFrontToBack)
+			{
+				stream << "true";
+			}
+			else
+			{
+				stream << "false";
+			}
+			stream << ",";
+			stream << "\"camera_chunk_x\":" << clientSummary.cameraChunkX << ",";
+			stream << "\"camera_chunk_z\":" << clientSummary.cameraChunkZ;
+			stream << "},";
+			stream << "\"server\":";
+			if (!m_runtime.worldState.hasServerProfile)
+			{
+				stream << "null";
+			}
+			else
+			{
+				const ServerProfileMessage &serverProfile = m_runtime.worldState.serverProfile;
+				stream << "{";
+				stream << "\"mode\":\"" << worldGenerationModeName(serverProfile.mode) << "\",";
+				stream << "\"window_seconds\":" << serverProfile.windowSeconds << ",";
+				stream << "\"ticks_per_second\":" << serverProfile.ticksPerSecond << ",";
+				stream << "\"worker_count\":" << serverProfile.workerCount << ",";
+				stream << "\"client_count\":" << serverProfile.clientCount << ",";
+				stream << "\"world_chunk_count\":" << serverProfile.worldChunkCount << ",";
+				stream << "\"ready_window\":" << serverProfile.readyWindow << ",";
+				stream << "\"loaded_window\":" << serverProfile.loadedWindow << ",";
+				stream << "\"generated_fresh_window\":" << serverProfile.generatedFreshWindow << ",";
+				stream << "\"load_errors_window\":" << serverProfile.loadErrorsWindow << ",";
+				stream << "\"integrated_window\":" << serverProfile.integratedWindow << ",";
+				stream << "\"integrated_loaded_window\":" << serverProfile.integratedLoadedWindow << ",";
+				stream << "\"integrated_generated_window\":" << serverProfile.integratedGeneratedWindow << ",";
+				stream << "\"unloaded_window\":" << serverProfile.unloadedWindow << ",";
+				stream << "\"queued_for_send_window\":" << serverProfile.queuedForSendWindow << ",";
+				stream << "\"send_queue_now\":" << serverProfile.sendQueueNow << ",";
+				stream << "\"dirty_marked_window\":" << serverProfile.dirtyMarkedWindow << ",";
+				stream << "\"dirty_queue_now\":" << serverProfile.dirtyQueueNow << ",";
+				stream << "\"save_queue_jobs_now\":" << serverProfile.saveQueueJobsNow << ",";
+				stream << "\"tasks_now\":" << serverProfile.tasksNow << ",";
+				stream << "\"tasks_avg\":" << serverProfile.tasksAvg << ",";
+				stream << "\"tasks_max\":" << serverProfile.tasksMax << ",";
+				stream << "\"ready_now\":" << serverProfile.readyNow << ",";
+				stream << "\"ready_avg\":" << serverProfile.readyAvg << ",";
+				stream << "\"ready_max\":" << serverProfile.readyMax << ",";
+				stream << "\"snapshot_count\":" << serverProfile.snapshotCount << ",";
+				stream << "\"snapshot_avg_bytes\":" << serverProfile.snapshotAvgBytes << ",";
+				stream << "\"snapshot_avg_raw_bytes\":" << serverProfile.snapshotAvgRawBytes << ",";
+				stream << "\"snapshot_avg_sections\":" << serverProfile.snapshotAvgSections << ",";
+				stream << "\"snapshot_ratio\":" << serverProfile.snapshotRatio << ",";
+				stream << "\"saved_chunks_window\":" << serverProfile.savedChunksWindow << ",";
+				stream << "\"save_batches_window\":" << serverProfile.saveBatchesWindow << ",";
+				stream << "\"save_avg_chunks\":" << serverProfile.saveAvgChunks;
+				stream << "}";
+			}
+				stream << "}";
+				std::string line = stream.str();
+				std::cout << line << std::endl;
+				if (m_profileJsonLogFile.is_open())
+				{
+					m_profileJsonLogFile << line << '\n';
+					m_profileJsonLogFile.flush();
+				}
+			}
 
 		void maybeStopBenchRun()
 		{
@@ -608,6 +789,7 @@ namespace
 		void clearClientWorldState()
 		{
 			ClientWorldSystem::clear(m_runtime.worldState, m_runtime.chunkIndirectRenderer);
+			clearClientProfilerState(m_runtime.profilerState, std::chrono::steady_clock::now());
 		}
 
 		void beginImGuiFrame()
@@ -637,6 +819,10 @@ namespace
 			m_runtime.chunkIndirectRenderer.cleanup();
 			m_runtime.chunkShader.reset();
 			m_runtime.crosshair.cleanup();
+			if (m_profileJsonLogFile.is_open())
+			{
+				m_profileJsonLogFile.close();
+			}
 
 			if (m_imguiInitialized)
 			{

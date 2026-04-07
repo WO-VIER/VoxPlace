@@ -69,6 +69,7 @@ struct GameState
 	TerrainRenderArchitecture terrainRenderArchitecture = TerrainRenderArchitecture::ChunkSsboDirect;
 	TerrainRenderArchitecture previousTerrainRenderArchitecture = TerrainRenderArchitecture::ChunkSsboDirect;
 	bool debugOverlayVisible = false;
+	bool profilerWindowsVisible = false;
 };
 
 #endif

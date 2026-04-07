@@ -42,9 +42,7 @@ namespace
 	constexpr int SERVER_TICK_MS = 50;
 	constexpr size_t DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK = 4;
 	constexpr size_t DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 100;
-	constexpr size_t MAX_PENDING_CHUNK_SNAPSHOTS_PER_CLIENT = 6;
-	constexpr size_t MAX_CACHED_SHARED_CHUNK_SNAPSHOT_PAYLOAD_BYTES =
-		8 * 1024 * 1024;
+	constexpr size_t MAX_PENDING_CHUNK_SNAPSHOTS_PER_CLIENT = 512;
 	constexpr size_t DEFAULT_MAX_CHUNK_SAVES_PER_TICK = 8;
 	constexpr size_t DEFAULT_MAX_CHUNK_UNLOADS_PER_TICK = 8;
 	constexpr size_t CLASSIC_MIN_INTEGRATED_CHUNKS_PER_TICK = 8;
@@ -174,7 +172,6 @@ struct WorldServer::Impl
 		uint64_t revision = 0;
 		uint8_t sectionCount = 0;
 		size_t rawBytes = 0;
-		uint64_t lastAccessAtMs = 0;
 		std::vector<uint8_t> payload;
 	};
 
@@ -194,8 +191,6 @@ struct WorldServer::Impl
 	WorldFrontier frontier;
 	std::unordered_map<int64_t, VoxelChunkData> worldChunks;
 	std::unordered_map<int64_t, CachedChunkSnapshotPayload> chunkSnapshotPayloadCache;
-	size_t chunkSnapshotPayloadCacheBytes = 0;
-	std::unordered_map<int64_t, uint16_t> wantedChunkClientCounts;
 	std::unordered_set<int64_t> activeChunkKeys;
 	std::unordered_map<ENetPeer *, ClientSession> clients;
 	std::unordered_map<ENetPacket *, PendingChunkPacket> pendingChunkPackets;
@@ -390,9 +385,6 @@ struct WorldServer::Impl
 		}
 		worldTable.close();
 		playerTable.close();
-		chunkSnapshotPayloadCache.clear();
-		chunkSnapshotPayloadCacheBytes = 0;
-		wantedChunkClientCounts.clear();
 	}
 
 	int run()
@@ -606,12 +598,15 @@ struct WorldServer::Impl
 
 	bool isChunkWantedByAnyClient(int64_t key) const
 	{
-		auto wantedIt = wantedChunkClientCounts.find(key);
-		if (wantedIt == wantedChunkClientCounts.end())
+		for (const auto &entry : clients)
 		{
-			return false;
+			const ClientSession &session = entry.second;
+			if (session.chunkStream.wantedChunks.find(key) != session.chunkStream.wantedChunks.end())
+			{
+				return true;
+			}
 		}
-		return wantedIt->second > 0;
+		return false;
 	}
 
 		bool canUnloadChunkNow(int64_t key) const
@@ -727,11 +722,6 @@ struct WorldServer::Impl
 
 	void logWorkerProfileWindowIfNeeded()
 	{
-		if (!profileWorkers)
-		{
-			return;
-		}
-
 		size_t generationTaskCount = 0;
 		{
 			std::lock_guard<std::mutex> taskLock(taskMutex);
@@ -764,6 +754,7 @@ struct WorldServer::Impl
 			return;
 		}
 
+		double elapsedSeconds = static_cast<double>(elapsed.count()) / 1000.0;
 		double avgTasks = 0.0;
 		double avgReady = 0.0;
 		if (profileTickCount > 0)
@@ -791,46 +782,56 @@ struct WorldServer::Impl
 			saveQueueJobsNow = saveJobs.size();
 		}
 
-		std::cout << "[server-profile] workers=" << workerCount
-				  << " mode=" << worldGenerationModeName(generationMode)
-				  << " clients=" << clients.size()
-				  << " world_chunks=" << worldChunks.size()
-				  << " ready_window=" << readyWindow
-				  << " loaded_window=" << loadedWindow
-				  << " generated_fresh_window=" << generatedFreshWindow
-				  << " load_errors_window=" << loadErrorsWindow
-				  << " integrated_window=" << profileIntegratedChunks
-				  << " integrated_loaded_window=" << profileIntegratedLoadedChunks
-				  << " integrated_generated_window=" << profileIntegratedGeneratedChunks
-				  << " unloaded_window=" << profileUnloadedChunks
-				  << " queued_for_send_window=" << profileQueuedForSendChunks
-				  << " send_queue_now=" << queuedSendCount
-				  << " dirty_marked_window=" << profileMarkedDirtyChunks
-				  << " dirty_queue_now=" << dirtyChunkQueue.size()
-				  << " save_queue_jobs_now=" << saveQueueJobsNow
-				  << " tasks_now=" << generationTaskCount
-				  << " tasks_avg=" << avgTasks
-				  << " tasks_max=" << profileMaxGenerationTasks
-				  << " ready_now=" << readyChunkCount
-				  << " ready_avg=" << avgReady
-				  << " ready_max=" << profileMaxReadyChunks;
+		ServerProfileMessage message;
+		message.mode = generationMode;
+		message.workerCount = static_cast<uint16_t>(workerCount);
+		message.clientCount = static_cast<uint16_t>(clients.size());
+		message.worldChunkCount = static_cast<uint32_t>(worldChunks.size());
+		message.readyWindow = static_cast<uint32_t>(readyWindow);
+		message.loadedWindow = static_cast<uint32_t>(loadedWindow);
+		message.generatedFreshWindow = static_cast<uint32_t>(generatedFreshWindow);
+		message.loadErrorsWindow = static_cast<uint32_t>(loadErrorsWindow);
+		message.integratedWindow = static_cast<uint32_t>(profileIntegratedChunks);
+		message.integratedLoadedWindow = static_cast<uint32_t>(profileIntegratedLoadedChunks);
+		message.integratedGeneratedWindow = static_cast<uint32_t>(profileIntegratedGeneratedChunks);
+		message.unloadedWindow = static_cast<uint32_t>(profileUnloadedChunks);
+		message.queuedForSendWindow = static_cast<uint32_t>(profileQueuedForSendChunks);
+		message.sendQueueNow = static_cast<uint32_t>(queuedSendCount);
+		message.dirtyMarkedWindow = static_cast<uint32_t>(profileMarkedDirtyChunks);
+		message.dirtyQueueNow = static_cast<uint32_t>(dirtyChunkQueue.size());
+		message.saveQueueJobsNow = static_cast<uint32_t>(saveQueueJobsNow);
+		message.tasksNow = static_cast<uint32_t>(generationTaskCount);
+		message.tasksAvg = static_cast<float>(avgTasks);
+		message.tasksMax = static_cast<uint32_t>(profileMaxGenerationTasks);
+		message.readyNow = static_cast<uint32_t>(readyChunkCount);
+		message.readyAvg = static_cast<float>(avgReady);
+		message.readyMax = static_cast<uint32_t>(profileMaxReadyChunks);
+		message.windowSeconds = static_cast<float>(elapsedSeconds);
+		if (elapsedSeconds > 0.0)
+		{
+			message.ticksPerSecond =
+				static_cast<float>(static_cast<double>(profileTickCount) / elapsedSeconds);
+		}
 
+		double avgSnapshotBytes = 0.0;
+		double avgRawBytes = 0.0;
+		double avgSections = 0.0;
+		double snapshotRatio = 1.0;
 		if (profileSnapshotCount > 0)
 		{
-			double avgSnapshotBytes = static_cast<double>(profileSnapshotPayloadBytes) / static_cast<double>(profileSnapshotCount);
-			double avgRawBytes = static_cast<double>(profileSnapshotRawBytes) / static_cast<double>(profileSnapshotCount);
-			double avgSections = static_cast<double>(profileSnapshotSectionCount) / static_cast<double>(profileSnapshotCount);
-			double ratio = 1.0;
+			avgSnapshotBytes = static_cast<double>(profileSnapshotPayloadBytes) / static_cast<double>(profileSnapshotCount);
+			avgRawBytes = static_cast<double>(profileSnapshotRawBytes) / static_cast<double>(profileSnapshotCount);
+			avgSections = static_cast<double>(profileSnapshotSectionCount) / static_cast<double>(profileSnapshotCount);
 			if (profileSnapshotRawBytes > 0)
 			{
-				ratio = static_cast<double>(profileSnapshotPayloadBytes) /
-						static_cast<double>(profileSnapshotRawBytes);
+				snapshotRatio = static_cast<double>(profileSnapshotPayloadBytes) /
+								static_cast<double>(profileSnapshotRawBytes);
 			}
-			std::cout << " snapshot_count=" << profileSnapshotCount
-					  << " snapshot_avg_bytes=" << avgSnapshotBytes
-					  << " snapshot_avg_raw_bytes=" << avgRawBytes
-					  << " snapshot_avg_sections=" << avgSections
-					  << " snapshot_ratio=" << ratio;
+			message.snapshotCount = static_cast<uint32_t>(profileSnapshotCount);
+			message.snapshotAvgBytes = static_cast<float>(avgSnapshotBytes);
+			message.snapshotAvgRawBytes = static_cast<float>(avgRawBytes);
+			message.snapshotAvgSections = static_cast<float>(avgSections);
+			message.snapshotRatio = static_cast<float>(snapshotRatio);
 		}
 
 		double saveAvgChunks = 0.0;
@@ -840,12 +841,55 @@ struct WorldServer::Impl
 				static_cast<double>(savedChunksWindow) /
 				static_cast<double>(saveBatchWindow);
 		}
-		std::cout << " saved_chunks_window=" << savedChunksWindow
-				  << " save_batches_window=" << saveBatchWindow
-				  << " save_avg_chunks=" << saveAvgChunks;
+		message.savedChunksWindow = static_cast<uint32_t>(savedChunksWindow);
+		message.saveBatchesWindow = static_cast<uint32_t>(saveBatchWindow);
+		message.saveAvgChunks = static_cast<float>(saveAvgChunks);
 
-		std::cout
-			<< std::endl;
+		for (auto &entry : clients)
+		{
+			sendServerProfile(entry.second, message);
+		}
+
+		if (profileWorkers)
+		{
+			std::cout << "[server-profile] workers=" << workerCount
+					  << " mode=" << worldGenerationModeName(generationMode)
+					  << " clients=" << clients.size()
+					  << " world_chunks=" << worldChunks.size()
+					  << " ready_window=" << readyWindow
+					  << " loaded_window=" << loadedWindow
+					  << " generated_fresh_window=" << generatedFreshWindow
+					  << " load_errors_window=" << loadErrorsWindow
+					  << " integrated_window=" << profileIntegratedChunks
+					  << " integrated_loaded_window=" << profileIntegratedLoadedChunks
+					  << " integrated_generated_window=" << profileIntegratedGeneratedChunks
+					  << " unloaded_window=" << profileUnloadedChunks
+					  << " queued_for_send_window=" << profileQueuedForSendChunks
+					  << " send_queue_now=" << queuedSendCount
+					  << " dirty_marked_window=" << profileMarkedDirtyChunks
+					  << " dirty_queue_now=" << dirtyChunkQueue.size()
+					  << " save_queue_jobs_now=" << saveQueueJobsNow
+					  << " tasks_now=" << generationTaskCount
+					  << " tasks_avg=" << avgTasks
+					  << " tasks_max=" << profileMaxGenerationTasks
+					  << " ready_now=" << readyChunkCount
+					  << " ready_avg=" << avgReady
+					  << " ready_max=" << profileMaxReadyChunks;
+
+			if (profileSnapshotCount > 0)
+			{
+				std::cout << " snapshot_count=" << profileSnapshotCount
+						  << " snapshot_avg_bytes=" << avgSnapshotBytes
+						  << " snapshot_avg_raw_bytes=" << avgRawBytes
+						  << " snapshot_avg_sections=" << avgSections
+						  << " snapshot_ratio=" << snapshotRatio;
+			}
+
+			std::cout << " saved_chunks_window=" << savedChunksWindow
+					  << " save_batches_window=" << saveBatchWindow
+					  << " save_avg_chunks=" << saveAvgChunks
+					  << std::endl;
+		}
 
 		profileWindowStart = now;
 		profileIntegratedChunks = 0;
@@ -910,7 +954,6 @@ struct WorldServer::Impl
 		auto sessionIt = clients.find(peer);
 		if (sessionIt != clients.end())
 		{
-			removeAllWantedChunks(sessionIt->second.chunkStream);
 			savePlayerForSession(sessionIt->second);
 			if (!sessionIt->second.playerContext.usernameKey.empty())
 			{
@@ -936,6 +979,16 @@ struct WorldServer::Impl
 		message.blockActionReadyAtMs = session.playerContext.player.state.blockActionReadyAtMs;
 		message.serverNowMs = systemNowMs();
 		sendReliable(session.peer, encodePlayerState(message));
+	}
+
+	void sendServerProfile(ClientSession &session, const ServerProfileMessage &message)
+	{
+		if (!session.playerContext.playerSession.authenticated)
+		{
+			return;
+		}
+
+		sendReliable(session.peer, encodeServerProfile(message));
 	}
 
 	bool savePlayerForSession(ClientSession &session)
@@ -1417,7 +1470,7 @@ struct WorldServer::Impl
 
 		int64_t key = chunkKey(request.chunkX, request.chunkZ);
 		ClientSession &session = sessionIt->second;
-		markChunkWanted(session.chunkStream, key);
+		session.chunkStream.wantedChunks.insert(key);
 
 		auto worldIt = worldChunks.find(key);
 		if (worldIt != worldChunks.end())
@@ -1439,7 +1492,7 @@ struct WorldServer::Impl
 
 		int64_t key = chunkKey(drop.chunkX, drop.chunkZ);
 		ClientSession &session = sessionIt->second;
-		markChunkDropped(session.chunkStream, key);
+		session.chunkStream.wantedChunks.erase(key);
 		session.chunkStream.loadedChunks.erase(key);
 		session.chunkStream.queuedChunks.erase(key);
 	}
@@ -1664,190 +1717,31 @@ struct WorldServer::Impl
 		profileQueuedForSendChunks++;
 	}
 
-	size_t interestedClientCountForChunk(int64_t key) const
-	{
-		auto wantedIt = wantedChunkClientCounts.find(key);
-		if (wantedIt == wantedChunkClientCounts.end())
-		{
-			return 0;
-		}
-		return wantedIt->second;
-	}
-
-	bool shouldCacheChunkSnapshotPayload(int64_t key) const
-	{
-		return interestedClientCountForChunk(key) > 1;
-	}
-
-	void markChunkWanted(ClientSession::ClientChunkStreamState &chunkStream, int64_t key)
-	{
-		auto insertResult = chunkStream.wantedChunks.insert(key);
-		if (!insertResult.second)
-		{
-			return;
-		}
-
-		auto wantedIt = wantedChunkClientCounts.find(key);
-		if (wantedIt == wantedChunkClientCounts.end())
-		{
-			wantedChunkClientCounts[key] = 1;
-			return;
-		}
-
-		if (wantedIt->second < std::numeric_limits<uint16_t>::max())
-		{
-			wantedIt->second++;
-		}
-	}
-
-	void markChunkDropped(ClientSession::ClientChunkStreamState &chunkStream, int64_t key)
-	{
-		if (chunkStream.wantedChunks.erase(key) == 0)
-		{
-			return;
-		}
-
-		auto wantedIt = wantedChunkClientCounts.find(key);
-		if (wantedIt == wantedChunkClientCounts.end())
-		{
-			invalidateChunkSnapshotCache(key);
-			return;
-		}
-
-		if (wantedIt->second <= 1)
-		{
-			wantedChunkClientCounts.erase(wantedIt);
-			invalidateChunkSnapshotCache(key);
-			return;
-		}
-
-		wantedIt->second--;
-		if (wantedIt->second < 2)
-		{
-			invalidateChunkSnapshotCache(key);
-		}
-	}
-
-	void removeAllWantedChunks(ClientSession::ClientChunkStreamState &chunkStream)
-	{
-		std::vector<int64_t> wantedKeys;
-		wantedKeys.reserve(chunkStream.wantedChunks.size());
-		for (int64_t key : chunkStream.wantedChunks)
-		{
-			wantedKeys.push_back(key);
-		}
-
-		for (int64_t key : wantedKeys)
-		{
-			markChunkDropped(chunkStream, key);
-		}
-	}
-
-	void eraseChunkSnapshotCacheEntry(
-		std::unordered_map<int64_t, CachedChunkSnapshotPayload>::iterator entryIt)
-	{
-		if (entryIt == chunkSnapshotPayloadCache.end())
-		{
-			return;
-		}
-
-		size_t payloadBytes = entryIt->second.payload.size();
-		if (payloadBytes <= chunkSnapshotPayloadCacheBytes)
-		{
-			chunkSnapshotPayloadCacheBytes -= payloadBytes;
-		}
-		else
-		{
-			chunkSnapshotPayloadCacheBytes = 0;
-		}
-		chunkSnapshotPayloadCache.erase(entryIt);
-	}
-
 	void invalidateChunkSnapshotCache(int64_t key)
 	{
-		auto cacheIt = chunkSnapshotPayloadCache.find(key);
-		if (cacheIt == chunkSnapshotPayloadCache.end())
-		{
-			return;
-		}
-		eraseChunkSnapshotCacheEntry(cacheIt);
+		chunkSnapshotPayloadCache.erase(key);
 	}
 
-	void evictChunkSnapshotPayloadCacheToBudget(int64_t protectedKey)
-	{
-		while (chunkSnapshotPayloadCacheBytes > MAX_CACHED_SHARED_CHUNK_SNAPSHOT_PAYLOAD_BYTES &&
-			   !chunkSnapshotPayloadCache.empty())
-		{
-			auto oldestIt = chunkSnapshotPayloadCache.end();
-			for (auto cacheIt = chunkSnapshotPayloadCache.begin();
-				 cacheIt != chunkSnapshotPayloadCache.end();
-				 ++cacheIt)
-			{
-				if (cacheIt->first == protectedKey)
-				{
-					continue;
-				}
-
-				if (oldestIt == chunkSnapshotPayloadCache.end())
-				{
-					oldestIt = cacheIt;
-					continue;
-				}
-
-				if (cacheIt->second.lastAccessAtMs < oldestIt->second.lastAccessAtMs)
-				{
-					oldestIt = cacheIt;
-				}
-			}
-
-			if (oldestIt == chunkSnapshotPayloadCache.end())
-			{
-				break;
-			}
-
-			eraseChunkSnapshotCacheEntry(oldestIt);
-		}
-	}
-
-	const CachedChunkSnapshotPayload *findCachedChunkSnapshotPayload(
+	const CachedChunkSnapshotPayload &cachedChunkSnapshotPayload(
 		int64_t key,
 		const VoxelChunkData &chunk)
 	{
 		auto cacheIt = chunkSnapshotPayloadCache.find(key);
-		if (cacheIt == chunkSnapshotPayloadCache.end())
+		if (cacheIt != chunkSnapshotPayloadCache.end())
 		{
-			return nullptr;
+			if (cacheIt->second.revision == chunk.revision)
+			{
+				return cacheIt->second;
+			}
+			chunkSnapshotPayloadCache.erase(cacheIt);
 		}
 
-		if (cacheIt->second.revision != chunk.revision)
-		{
-			eraseChunkSnapshotCacheEntry(cacheIt);
-			return nullptr;
-		}
-
-		cacheIt->second.lastAccessAtMs = systemNowMs();
-		return &cacheIt->second;
-	}
-
-	void cacheChunkSnapshotPayload(
-		int64_t key,
-		const VoxelChunkData &chunk,
-		uint8_t sectionCount,
-		size_t rawBytes,
-		std::vector<uint8_t> &&payload)
-	{
-		invalidateChunkSnapshotCache(key);
-
-		CachedChunkSnapshotPayload cachedPayload;
+		CachedChunkSnapshotPayload &cachedPayload = chunkSnapshotPayloadCache[key];
 		cachedPayload.revision = chunk.revision;
-		cachedPayload.sectionCount = sectionCount;
-		cachedPayload.rawBytes = rawBytes;
-		cachedPayload.lastAccessAtMs = systemNowMs();
-		cachedPayload.payload = std::move(payload);
-
-		chunkSnapshotPayloadCacheBytes += cachedPayload.payload.size();
-		chunkSnapshotPayloadCache[key] = std::move(cachedPayload);
-		evictChunkSnapshotPayloadCacheToBudget(key);
+		cachedPayload.sectionCount = static_cast<uint8_t>(chunk.nonEmptySectionCount());
+		cachedPayload.rawBytes = chunkSnapshotRawPayloadBytes(chunk);
+		cachedPayload.payload = encodeChunkSnapshotNetwork(chunk);
+		return cachedPayload;
 	}
 
 	void sendQueuedChunks(ClientSession &session)
@@ -1874,56 +1768,18 @@ struct WorldServer::Impl
 				continue;
 			}
 
-			size_t rawBytes = chunkSnapshotRawPayloadBytes(worldIt->second);
-			uint8_t sectionCount = static_cast<uint8_t>(worldIt->second.nonEmptySectionCount());
-			bool useSharedPayloadCache = shouldCacheChunkSnapshotPayload(key);
-			const CachedChunkSnapshotPayload *cachedPayload = nullptr;
-			std::vector<uint8_t> localPayload;
-
-			if (useSharedPayloadCache)
-			{
-				cachedPayload = findCachedChunkSnapshotPayload(key, worldIt->second);
-			}
-
-			if (cachedPayload == nullptr)
-			{
-				localPayload = encodeChunkSnapshotNetwork(worldIt->second);
-			}
-
-			const std::vector<uint8_t> *payloadToSend = nullptr;
-			if (cachedPayload != nullptr)
-			{
-				payloadToSend = &cachedPayload->payload;
-				sectionCount = cachedPayload->sectionCount;
-				rawBytes = cachedPayload->rawBytes;
-			}
-			else
-			{
-				payloadToSend = &localPayload;
-			}
-
-			if (!sendChunkSnapshot(session, *payloadToSend))
+			const CachedChunkSnapshotPayload &cachedPayload =
+				cachedChunkSnapshotPayload(key, worldIt->second);
+			if (!sendChunkSnapshot(session, cachedPayload.payload))
 			{
 				session.chunkStream.sendQueue.push_front(key);
 				session.chunkStream.queuedChunks.insert(key);
 				break;
 			}
-
-			size_t payloadBytes = payloadToSend->size();
-			if (useSharedPayloadCache && cachedPayload == nullptr)
-			{
-				cacheChunkSnapshotPayload(
-					key,
-					worldIt->second,
-					sectionCount,
-					rawBytes,
-					std::move(localPayload));
-			}
-
 			profileSnapshotCount++;
-			profileSnapshotPayloadBytes += payloadBytes;
-			profileSnapshotSectionCount += sectionCount;
-			profileSnapshotRawBytes += rawBytes;
+			profileSnapshotPayloadBytes += cachedPayload.payload.size();
+			profileSnapshotSectionCount += cachedPayload.sectionCount;
+			profileSnapshotRawBytes += cachedPayload.rawBytes;
 			session.chunkStream.loadedChunks.insert(key);
 			sentCount++;
 		}

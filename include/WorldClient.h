@@ -15,13 +15,15 @@ struct WorldClientEvent
 		Disconnected,
 		FrontierUpdated,
 		ChunkReceived,
-		BlockUpdated
+		BlockUpdated,
+		ServerProfileUpdated
 	};
 
 	Type type = Type::Disconnected;
 	WorldFrontier frontier;
 	VoxelChunkData chunk;
 	BlockUpdateBroadcastMessage blockUpdate;
+	ServerProfileMessage serverProfile;
 };
 
 class WorldClient

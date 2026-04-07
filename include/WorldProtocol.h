@@ -27,7 +27,8 @@ enum class PacketType : uint8_t
 	LoginResponse = 11,
 	PlayerState = 12,
 	PlayerMoveUpdate = 13,
-	ChunkSnapshotSectionsZstd = 14
+	ChunkSnapshotSectionsZstd = 14,
+	ServerProfile = 15
 };
 
 enum class BlockActionType : uint8_t
@@ -119,6 +120,43 @@ struct PlayerMoveUpdateMessage
 	float lookZ = -1.0f;
 };
 
+struct ServerProfileMessage
+{
+	WorldGenerationMode mode = WorldGenerationMode::ActivityFrontier;
+	uint16_t workerCount = 0;
+	uint16_t clientCount = 0;
+	uint32_t worldChunkCount = 0;
+	uint32_t readyWindow = 0;
+	uint32_t loadedWindow = 0;
+	uint32_t generatedFreshWindow = 0;
+	uint32_t loadErrorsWindow = 0;
+	uint32_t integratedWindow = 0;
+	uint32_t integratedLoadedWindow = 0;
+	uint32_t integratedGeneratedWindow = 0;
+	uint32_t unloadedWindow = 0;
+	uint32_t queuedForSendWindow = 0;
+	uint32_t sendQueueNow = 0;
+	uint32_t dirtyMarkedWindow = 0;
+	uint32_t dirtyQueueNow = 0;
+	uint32_t saveQueueJobsNow = 0;
+	uint32_t tasksNow = 0;
+	float tasksAvg = 0.0f;
+	uint32_t tasksMax = 0;
+	uint32_t readyNow = 0;
+	float readyAvg = 0.0f;
+	uint32_t readyMax = 0;
+	uint32_t snapshotCount = 0;
+	float snapshotAvgBytes = 0.0f;
+	float snapshotAvgRawBytes = 0.0f;
+	float snapshotAvgSections = 0.0f;
+	float snapshotRatio = 1.0f;
+	uint32_t savedChunksWindow = 0;
+	uint32_t saveBatchesWindow = 0;
+	float saveAvgChunks = 0.0f;
+	float ticksPerSecond = 0.0f;
+	float windowSeconds = 0.0f;
+};
+
 struct DecodedChunkSnapshot
 {
 	VoxelChunkData chunk;
@@ -157,6 +195,9 @@ bool decodePlayerState(const uint8_t *data, size_t size, PlayerStateMessage &mes
 
 std::vector<uint8_t> encodePlayerMoveUpdate(const PlayerMoveUpdateMessage &message);
 bool decodePlayerMoveUpdate(const uint8_t *data, size_t size, PlayerMoveUpdateMessage &message);
+
+std::vector<uint8_t> encodeServerProfile(const ServerProfileMessage &message);
+bool decodeServerProfile(const uint8_t *data, size_t size, ServerProfileMessage &message);
 
 const char *packetTypeName(PacketType type);
 
