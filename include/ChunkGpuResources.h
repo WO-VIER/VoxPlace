@@ -3,6 +3,7 @@
 
 #include <glad/glad.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -11,6 +12,7 @@ struct ChunkGpuResources
 	GLuint ssbo = 0;
 	GLuint vao = 0;
 	GLuint occlusionQueryId = 0;
+	size_t ssboCapacityWords = 0;
 	std::vector<uint32_t> packedFacesCpu;
 };
 

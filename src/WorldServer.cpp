@@ -109,6 +109,20 @@ namespace
 		return static_cast<uint64_t>(
 			std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
 	}
+
+	size_t chunkSnapshotRawPayloadBytes(const VoxelChunkData &chunk)
+	{
+		size_t rawBytes = sizeof(PacketType);
+		rawBytes += sizeof(chunk.chunkX);
+		rawBytes += sizeof(chunk.chunkZ);
+		rawBytes += sizeof(chunk.revision);
+		rawBytes += sizeof(uint8_t);
+		rawBytes +=
+			chunk.nonEmptySectionCount() *
+			CHUNK_SECTION_BLOCK_COUNT *
+			sizeof(uint32_t);
+		return rawBytes;
+	}
 }
 
 struct WorldServer::Impl
@@ -153,6 +167,14 @@ struct WorldServer::Impl
 		uint64_t packetId = 0;
 	};
 
+	struct CachedChunkSnapshotPayload
+	{
+		uint64_t revision = 0;
+		uint8_t sectionCount = 0;
+		size_t rawBytes = 0;
+		std::vector<uint8_t> payload;
+	};
+
 		uint16_t port = 0;
 			std::string playerDatabasePath;
 			std::string worldDatabasePath;
@@ -168,6 +190,7 @@ struct WorldServer::Impl
 
 	WorldFrontier frontier;
 	std::unordered_map<int64_t, VoxelChunkData> worldChunks;
+	std::unordered_map<int64_t, CachedChunkSnapshotPayload> chunkSnapshotPayloadCache;
 	std::unordered_set<int64_t> activeChunkKeys;
 	std::unordered_map<ENetPeer *, ClientSession> clients;
 	std::unordered_map<ENetPacket *, PendingChunkPacket> pendingChunkPackets;
@@ -638,6 +661,7 @@ struct WorldServer::Impl
 				continue;
 			}
 
+			invalidateChunkSnapshotCache(key);
 			it = worldChunks.erase(it);
 			unloadedCount++;
 		}
@@ -664,6 +688,7 @@ struct WorldServer::Impl
 				VoxelChunkData chunk = std::move(readyChunk.chunk);
 
 					int64_t key = chunkKey(chunk.chunkX, chunk.chunkZ);
+					invalidateChunkSnapshotCache(key);
 					worldChunks[key] = std::move(chunk);
 					if (readyChunk.loadedFromStorage)
 					{
@@ -1470,6 +1495,7 @@ struct WorldServer::Impl
 			return;
 		}
 
+		invalidateChunkSnapshotCache(key);
 		markChunkDirty(key);
 		session.playerContext.player.state.blockActionReadyAtMs = nowMs + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
 
@@ -1632,6 +1658,33 @@ struct WorldServer::Impl
 		profileQueuedForSendChunks++;
 	}
 
+	void invalidateChunkSnapshotCache(int64_t key)
+	{
+		chunkSnapshotPayloadCache.erase(key);
+	}
+
+	const CachedChunkSnapshotPayload &cachedChunkSnapshotPayload(
+		int64_t key,
+		const VoxelChunkData &chunk)
+	{
+		auto cacheIt = chunkSnapshotPayloadCache.find(key);
+		if (cacheIt != chunkSnapshotPayloadCache.end())
+		{
+			if (cacheIt->second.revision == chunk.revision)
+			{
+				return cacheIt->second;
+			}
+			chunkSnapshotPayloadCache.erase(cacheIt);
+		}
+
+		CachedChunkSnapshotPayload &cachedPayload = chunkSnapshotPayloadCache[key];
+		cachedPayload.revision = chunk.revision;
+		cachedPayload.sectionCount = static_cast<uint8_t>(chunk.nonEmptySectionCount());
+		cachedPayload.rawBytes = chunkSnapshotRawPayloadBytes(chunk);
+		cachedPayload.payload = encodeChunkSnapshotNetwork(chunk);
+		return cachedPayload;
+	}
+
 	void sendQueuedChunks(ClientSession &session)
 	{
 		size_t sentCount = 0;
@@ -1656,22 +1709,18 @@ struct WorldServer::Impl
 				continue;
 			}
 
-			std::vector<uint8_t> payload = encodeChunkSnapshotNetwork(worldIt->second);
-			if (!sendChunkSnapshot(session, payload))
+			const CachedChunkSnapshotPayload &cachedPayload =
+				cachedChunkSnapshotPayload(key, worldIt->second);
+			if (!sendChunkSnapshot(session, cachedPayload.payload))
 			{
 				session.chunkStream.sendQueue.push_front(key);
 				session.chunkStream.queuedChunks.insert(key);
 				break;
 			}
 			profileSnapshotCount++;
-			profileSnapshotPayloadBytes += payload.size();
-			profileSnapshotSectionCount += worldIt->second.nonEmptySectionCount();
-			profileSnapshotRawBytes +=
-				sizeof(PacketType) +
-				sizeof(worldIt->second.chunkX) +
-				sizeof(worldIt->second.chunkZ) +
-				sizeof(worldIt->second.revision) +
-				sizeof(worldIt->second.blocks);
+			profileSnapshotPayloadBytes += cachedPayload.payload.size();
+			profileSnapshotSectionCount += cachedPayload.sectionCount;
+			profileSnapshotRawBytes += cachedPayload.rawBytes;
 			session.chunkStream.loadedChunks.insert(key);
 			sentCount++;
 		}

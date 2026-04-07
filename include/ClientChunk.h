@@ -275,6 +275,7 @@ public:
 		gpuResources.ssbo = 0;
 		gpuResources.vao = 0;
 		gpuResources.occlusionQueryId = 0;
+		gpuResources.ssboCapacityWords = 0;
 		gpuResources.packedFacesCpu.clear();
 		renderState.faceCount = 0;
 		renderState.needsMeshRebuild = true;
@@ -591,14 +592,40 @@ private:
 		return chunk.blocks[x][y][z];
 	}
 
-	void uploadMesh(const std::vector<uint32_t> &faces)
+	void ensureMeshBuffer(size_t requiredWords)
 	{
-		if (gpuResources.ssbo != 0)
+		if (gpuResources.ssbo == 0)
 		{
-			glDeleteBuffers(1, &gpuResources.ssbo);
-			gpuResources.ssbo = 0;
+			glGenBuffers(1, &gpuResources.ssbo);
 		}
 
+		if (requiredWords <= gpuResources.ssboCapacityWords)
+		{
+			return;
+		}
+
+		size_t newCapacity = gpuResources.ssboCapacityWords;
+		if (newCapacity == 0)
+		{
+			newCapacity = requiredWords;
+		}
+		while (newCapacity < requiredWords)
+		{
+			newCapacity *= 2;
+		}
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, gpuResources.ssbo);
+		glBufferData(
+			GL_SHADER_STORAGE_BUFFER,
+			static_cast<GLsizeiptr>(newCapacity * sizeof(uint32_t)),
+			nullptr,
+			GL_DYNAMIC_DRAW);
+		gpuResources.ssboCapacityWords = newCapacity;
+	}
+
+	void uploadMesh(const std::vector<uint32_t> &faces)
+	{
+		size_t faceWordCount = faces.size();
 		if (faces.empty())
 		{
 			gpuResources.packedFacesCpu.clear();
@@ -608,12 +635,13 @@ private:
 		}
 
 		gpuResources.packedFacesCpu = faces;
-
-		glGenBuffers(1, &gpuResources.ssbo);
+		ensureMeshBuffer(faceWordCount);
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, gpuResources.ssbo);
-		glBufferData(GL_SHADER_STORAGE_BUFFER,
-					 faces.size() * sizeof(uint32_t),
-					 faces.data(), GL_STATIC_DRAW);
+		glBufferSubData(
+			GL_SHADER_STORAGE_BUFFER,
+			0,
+			static_cast<GLsizeiptr>(faceWordCount * sizeof(uint32_t)),
+			faces.data());
 
 		if (gpuResources.vao == 0)
 		{
