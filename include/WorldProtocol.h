@@ -150,6 +150,12 @@ struct ServerProfileMessage
 	float snapshotAvgRawBytes = 0.0f;
 	float snapshotAvgSections = 0.0f;
 	float snapshotRatio = 1.0f;
+	float sqliteLoadChunkMsTotal = 0.0f;
+	float sqliteLoadChunkMsAvg = 0.0f;
+	float sqliteLoadChunkMsMax = 0.0f;
+	float terrainGenChunkMsTotal = 0.0f;
+	float terrainGenChunkMsAvg = 0.0f;
+	float terrainGenChunkMsMax = 0.0f;
 	uint32_t savedChunksWindow = 0;
 	uint32_t saveBatchesWindow = 0;
 	float saveAvgChunks = 0.0f;

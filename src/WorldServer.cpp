@@ -110,6 +110,22 @@ namespace
 			std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
 	}
 
+	void updateAtomicMax(std::atomic<uint64_t> &target, uint64_t value)
+	{
+		uint64_t current = target.load(std::memory_order_relaxed);
+		while (value > current)
+		{
+			if (target.compare_exchange_weak(
+					current,
+					value,
+					std::memory_order_relaxed,
+					std::memory_order_relaxed))
+			{
+				return;
+			}
+		}
+	}
+
 	size_t chunkSnapshotRawPayloadBytes(const VoxelChunkData &chunk)
 	{
 		size_t rawBytes = sizeof(PacketType);
@@ -222,6 +238,10 @@ struct WorldServer::Impl
 	std::atomic<size_t> profileLoadedChunks = 0;
 	std::atomic<size_t> profileGeneratedFreshChunks = 0;
 	std::atomic<size_t> profileLoadErrorChunks = 0;
+	std::atomic<uint64_t> profileLoadedChunkMicros = 0;
+	std::atomic<uint64_t> profileLoadedChunkMicrosMax = 0;
+	std::atomic<uint64_t> profileGeneratedChunkMicros = 0;
+	std::atomic<uint64_t> profileGeneratedChunkMicrosMax = 0;
 	size_t profileIntegratedChunks = 0;
 	size_t profileIntegratedLoadedChunks = 0;
 	size_t profileIntegratedGeneratedChunks = 0;
@@ -511,6 +531,7 @@ struct WorldServer::Impl
 					{
 						std::string loadError;
 						WorldTableLoadChunkResult loadResult;
+						auto loadStart = std::chrono::steady_clock::now();
 						{
 							ZoneScopedN("SQLite: Load Chunk");
 							loadResult = worldTable.loadChunkResult(
@@ -519,10 +540,17 @@ struct WorldServer::Impl
 								readyChunk.chunk,
 								&loadError);
 						}
+						auto loadEnd = std::chrono::steady_clock::now();
+						uint64_t loadMicros = static_cast<uint64_t>(
+							std::chrono::duration_cast<std::chrono::microseconds>(
+								loadEnd - loadStart)
+								.count());
 
 						if (loadResult == WorldTableLoadChunkResult::Loaded)
 						{
 							loadedFromStorage = true;
+							profileLoadedChunkMicros.fetch_add(loadMicros, std::memory_order_relaxed);
+							updateAtomicMax(profileLoadedChunkMicrosMax, loadMicros);
 						}
 						else if (loadResult == WorldTableLoadChunkResult::Error)
 						{
@@ -540,12 +568,20 @@ struct WorldServer::Impl
 					}
 					else
 					{
+						auto generationStart = std::chrono::steady_clock::now();
 						{
 							ZoneScopedN("CPU: FastNoise Gen Terrain");
 							generator->fillChunk(readyChunk.chunk);
 						}
-					profileGeneratedFreshChunks.fetch_add(1, std::memory_order_relaxed);
-				}
+						auto generationEnd = std::chrono::steady_clock::now();
+						uint64_t generationMicros = static_cast<uint64_t>(
+							std::chrono::duration_cast<std::chrono::microseconds>(
+								generationEnd - generationStart)
+								.count());
+						profileGeneratedChunkMicros.fetch_add(generationMicros, std::memory_order_relaxed);
+						updateAtomicMax(profileGeneratedChunkMicrosMax, generationMicros);
+						profileGeneratedFreshChunks.fetch_add(1, std::memory_order_relaxed);
+					}
 
 				std::lock_guard<std::mutex> readyLock(readyMutex);
 				readyChunks.push_back(std::move(readyChunk));
@@ -767,6 +803,10 @@ struct WorldServer::Impl
 		size_t loadedWindow = profileLoadedChunks.exchange(0, std::memory_order_relaxed);
 		size_t generatedFreshWindow = profileGeneratedFreshChunks.exchange(0, std::memory_order_relaxed);
 		size_t loadErrorsWindow = profileLoadErrorChunks.exchange(0, std::memory_order_relaxed);
+		uint64_t loadedMicrosWindow = profileLoadedChunkMicros.exchange(0, std::memory_order_relaxed);
+		uint64_t loadedMicrosMaxWindow = profileLoadedChunkMicrosMax.exchange(0, std::memory_order_relaxed);
+		uint64_t generatedMicrosWindow = profileGeneratedChunkMicros.exchange(0, std::memory_order_relaxed);
+		uint64_t generatedMicrosMaxWindow = profileGeneratedChunkMicrosMax.exchange(0, std::memory_order_relaxed);
 		size_t saveBatchWindow = profileSaveBatchCount.exchange(0, std::memory_order_relaxed);
 		size_t savedChunksWindow = profileSavedChunkCount.exchange(0, std::memory_order_relaxed);
 
@@ -811,6 +851,24 @@ struct WorldServer::Impl
 		{
 			message.ticksPerSecond =
 				static_cast<float>(static_cast<double>(profileTickCount) / elapsedSeconds);
+		}
+		message.sqliteLoadChunkMsTotal = static_cast<float>(static_cast<double>(loadedMicrosWindow) / 1000.0);
+		message.sqliteLoadChunkMsMax = static_cast<float>(static_cast<double>(loadedMicrosMaxWindow) / 1000.0);
+		if (loadedWindow > 0)
+		{
+			message.sqliteLoadChunkMsAvg =
+				static_cast<float>(
+					(static_cast<double>(loadedMicrosWindow) / 1000.0) /
+					static_cast<double>(loadedWindow));
+		}
+		message.terrainGenChunkMsTotal = static_cast<float>(static_cast<double>(generatedMicrosWindow) / 1000.0);
+		message.terrainGenChunkMsMax = static_cast<float>(static_cast<double>(generatedMicrosMaxWindow) / 1000.0);
+		if (generatedFreshWindow > 0)
+		{
+			message.terrainGenChunkMsAvg =
+				static_cast<float>(
+					(static_cast<double>(generatedMicrosWindow) / 1000.0) /
+					static_cast<double>(generatedFreshWindow));
 		}
 
 		double avgSnapshotBytes = 0.0;
@@ -874,7 +932,11 @@ struct WorldServer::Impl
 					  << " tasks_max=" << profileMaxGenerationTasks
 					  << " ready_now=" << readyChunkCount
 					  << " ready_avg=" << avgReady
-					  << " ready_max=" << profileMaxReadyChunks;
+					  << " ready_max=" << profileMaxReadyChunks
+					  << " sqlite_load_ms_avg=" << message.sqliteLoadChunkMsAvg
+					  << " sqlite_load_ms_max=" << message.sqliteLoadChunkMsMax
+					  << " terrain_gen_ms_avg=" << message.terrainGenChunkMsAvg
+					  << " terrain_gen_ms_max=" << message.terrainGenChunkMsMax;
 
 			if (profileSnapshotCount > 0)
 			{

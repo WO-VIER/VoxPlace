@@ -73,8 +73,6 @@ void renderDebugOverlay(bool visible, const DebugOverlayData &data)
 				data.trackedJobs,
 				data.queuedJobs,
 				data.readyJobs);
-	ImGui::Text("Total faces: %llu", static_cast<unsigned long long>(data.totalFaces));
-	ImGui::Text("Total vertices: %llu", static_cast<unsigned long long>(data.totalFaces * 6));
 
 	if (data.renderDistanceChunks != nullptr)
 	{

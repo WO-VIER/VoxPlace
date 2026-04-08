@@ -46,8 +46,8 @@ int main(int argc, char **argv)
 		std::cout << "Server worker profiling requested via environment" << std::endl;
 	}
 	std::cout << "World DB: " << launchOptions.worldDatabasePath << std::endl;
-	std::cout << "Persist generated chunks: "
-			  << (launchOptions.persistGeneratedChunks ? "yes" : "modified-only")
+	std::cout << "Persistence mode: "
+			  << (launchOptions.persistGeneratedChunks ? "full-db" : "modified-only")
 			  << std::endl;
 
 	WorldServer server(

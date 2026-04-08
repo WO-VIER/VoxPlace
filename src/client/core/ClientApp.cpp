@@ -735,6 +735,12 @@ namespace
 				stream << "\"snapshot_avg_raw_bytes\":" << serverProfile.snapshotAvgRawBytes << ",";
 				stream << "\"snapshot_avg_sections\":" << serverProfile.snapshotAvgSections << ",";
 				stream << "\"snapshot_ratio\":" << serverProfile.snapshotRatio << ",";
+				stream << "\"sqlite_load_chunk_ms_total\":" << serverProfile.sqliteLoadChunkMsTotal << ",";
+				stream << "\"sqlite_load_chunk_ms_avg\":" << serverProfile.sqliteLoadChunkMsAvg << ",";
+				stream << "\"sqlite_load_chunk_ms_max\":" << serverProfile.sqliteLoadChunkMsMax << ",";
+				stream << "\"terrain_gen_chunk_ms_total\":" << serverProfile.terrainGenChunkMsTotal << ",";
+				stream << "\"terrain_gen_chunk_ms_avg\":" << serverProfile.terrainGenChunkMsAvg << ",";
+				stream << "\"terrain_gen_chunk_ms_max\":" << serverProfile.terrainGenChunkMsMax << ",";
 				stream << "\"saved_chunks_window\":" << serverProfile.savedChunksWindow << ",";
 				stream << "\"save_batches_window\":" << serverProfile.saveBatchesWindow << ",";
 				stream << "\"save_avg_chunks\":" << serverProfile.saveAvgChunks;

@@ -12,7 +12,7 @@ PASS="BenchPass123"
 DURATION=${DURATION:-45}
 SPEED=${SPEED:-40}
 RENDER_DIST=${RENDER_DIST:-32}
-WORKERS=${WORKERS:-0} # 0 = Auto
+WORKERS=${WORKERS:-0}
 TIMESTAMP=${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}
 RUN_LABEL=${RUN_LABEL:-fly_vps_${TIMESTAMP}}
 OUTPUT_ROOT=${OUTPUT_ROOT:-"$PROJECT_ROOT/benchvps"}
@@ -25,7 +25,7 @@ print_usage() {
 	cat <<EOF
 Usage: $(basename "$0") [--help]
 
-Benchmark client fly contre le VPS.
+Benchmark client fly contre le VPS existant.
 
 Variables d'environnement:
   HOST=$HOST
@@ -100,8 +100,8 @@ echo "Terminé. Analyse des résultats..."
 echo "Client log      : $LOG_FILE"
 echo "Profile JSONL   : $PROFILE_JSON_FILE"
 
-if [[ -f "$SCRIPT_DIR/analyze_client_bottleneck.py" ]]; then
-	python3 "$SCRIPT_DIR/analyze_client_bottleneck.py" "$LOG_FILE" "fly_vps" | tee "$ANALYSIS_FILE"
+if [[ -f "$SCRIPT_DIR/analyze_profile_jsonl.py" ]]; then
+	python3 "$SCRIPT_DIR/analyze_profile_jsonl.py" "$PROFILE_JSON_FILE" | tee "$ANALYSIS_FILE"
 else
-	echo "Analyse ignorée: $SCRIPT_DIR/analyze_client_bottleneck.py introuvable" | tee "$ANALYSIS_FILE"
+	echo "Analyse ignorée: $SCRIPT_DIR/analyze_profile_jsonl.py introuvable" | tee "$ANALYSIS_FILE"
 fi

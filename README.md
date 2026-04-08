@@ -89,7 +89,7 @@ Options :
 --port <port>           Change le port d'écoute du serveur (défaut : 28713)
 --db <path>             Fichier SQLite pour la persistance des joueurs
 --world-db <path>       Fichier SQLite pour la persistance des chunks du monde
---modified-only-world   Ne persiste que les chunks effectivement modifiés par les joueurs
+--full-db               Persiste aussi les chunks générés (défaut : mode modified-only)
 --help                  Affiche l'aide
 ```
 
@@ -107,6 +107,13 @@ Exemple :
 ```bash
 ./build_debug/VoxPlaceServer --classic-gen --port 28713
 ```
+
+Mode de persistance du monde :
+
+- **modified-only** par défaut
+  - seuls les chunks effectivement modifiés par les joueurs sont persistés
+- **full-db** avec `--full-db`
+  - les chunks générés sont aussi persistés dans la DB monde
 
 ### Serveur public
 
@@ -165,6 +172,10 @@ Le projet utilise actuellement SQLite pour deux choses distinctes :
   - chunks du monde persistés
   - payload compressé en `Zstd` niveau 3
   - stratégie `load or generate`
+
+Par défaut, le serveur fonctionne en mode **modified-only**.
+
+Si vous voulez persister aussi les chunks générés, lancez le serveur avec `--full-db`.
 
 En `classic-gen`, les chemins par défaut sont :
 

@@ -433,6 +433,14 @@ namespace
 					profile.snapshotAvgRawBytes);
 		ImGui::Text("Snapshot avg sections: %.2f", profile.snapshotAvgSections);
 		ImGui::Text("Snapshot ratio: %.3f", profile.snapshotRatio);
+		ImGui::Text("Load DB total/avg/max: %.2f / %.3f / %.3f ms",
+					profile.sqliteLoadChunkMsTotal,
+					profile.sqliteLoadChunkMsAvg,
+					profile.sqliteLoadChunkMsMax);
+		ImGui::Text("Gen total/avg/max: %.2f / %.3f / %.3f ms",
+					profile.terrainGenChunkMsTotal,
+					profile.terrainGenChunkMsAvg,
+					profile.terrainGenChunkMsMax);
 		ImGui::Text("Saved chunks window: %u", profile.savedChunksWindow);
 		ImGui::Text("Save batches window: %u", profile.saveBatchesWindow);
 		ImGui::Text("Avg chunks per save batch: %.2f", profile.saveAvgChunks);

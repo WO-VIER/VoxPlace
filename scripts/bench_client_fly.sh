@@ -101,8 +101,8 @@ echo "Terminé. Analyse des résultats..."
 echo "Client log      : $LOG_FILE"
 echo "Profile JSONL   : $PROFILE_JSON_FILE"
 
-if [[ -f "$SCRIPT_DIR/analyze_client_bottleneck.py" ]]; then
-	python3 "$SCRIPT_DIR/analyze_client_bottleneck.py" "$LOG_FILE" "fly" | tee "$ANALYSIS_FILE"
+if [[ -f "$SCRIPT_DIR/analyze_profile_jsonl.py" ]]; then
+	python3 "$SCRIPT_DIR/analyze_profile_jsonl.py" "$PROFILE_JSON_FILE" | tee "$ANALYSIS_FILE"
 else
-	echo "Analyse ignorée: $SCRIPT_DIR/analyze_client_bottleneck.py introuvable" | tee "$ANALYSIS_FILE"
+	echo "Analyse ignorée: $SCRIPT_DIR/analyze_profile_jsonl.py introuvable" | tee "$ANALYSIS_FILE"
 fi
