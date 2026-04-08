@@ -194,7 +194,7 @@ struct WorldServer::Impl
 		uint16_t port = 0;
 			std::string playerDatabasePath;
 			std::string worldDatabasePath;
-			bool persistGeneratedChunks = true;
+			bool persistGeneratedChunks = false;
 		ServerEnvironmentOptions environmentOptions;
 	bool enetInitialized = false;
 	ENetHost *host = nullptr;
