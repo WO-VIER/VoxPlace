@@ -134,25 +134,33 @@ void ChunkStreamingSystem::syncChunkStreaming(
 	size_t maxNewRequestsThisFrame = requestCandidates.size();
 	if (usesClassicStreaming(hasWorldFrontier, frontier))
 	{
+		size_t frustumMissingChunks = 0;
+		for (const auto& candidate : requestCandidates)
+		{
+			if (candidate.inFrustum) frustumMissingChunks++;
+			else break; // requestCandidates is sorted by inFrustum
+		}
+
 		size_t inflightRequests = inflightChunkRequestCount(streamedChunkKeys, chunkMap);
-		size_t inflightBudget = 0;
+		size_t backgroundBudget = 0;
 		if (inflightRequests < classicMaxInflightChunkRequests)
 		{
-			inflightBudget = classicMaxInflightChunkRequests - inflightRequests;
+			backgroundBudget = classicMaxInflightChunkRequests - inflightRequests;
 		}
+
+		size_t totalBudget = frustumMissingChunks + backgroundBudget;
+		maxNewRequestsThisFrame = std::min(maxNewRequestsThisFrame, totalBudget);
 
 		static glm::vec3 lastCameraPos = camera.Position;
 		float distanceMoved = glm::distance(camera.Position, lastCameraPos);
 		lastCameraPos = camera.Position;
 
-		maxNewRequestsThisFrame = std::min(maxNewRequestsThisFrame, inflightBudget);
-		
 		if (distanceMoved <= 2.0f)
 		{
-			maxNewRequestsThisFrame = std::min(maxNewRequestsThisFrame, classicMaxChunkRequestsPerFrame);
+			size_t cappedLimit = std::min(maxNewRequestsThisFrame, classicMaxChunkRequestsPerFrame);
+			maxNewRequestsThisFrame = std::max(frustumMissingChunks, cappedLimit);
 		}
 	}
-
 	size_t sentRequestsThisFrame = 0;
 	for (const ChunkRequestCandidate &candidate : requestCandidates)
 	{
