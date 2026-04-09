@@ -157,7 +157,9 @@ bool WorldClient::connectToServer(const std::string &hostName,
 		return false;
 	}
 
-	enet_peer_throttle_configure(m_impl->peer, 5000, 2, 2);
+	// On désactive le bridage par défaut (throttle) d'ENet pour le transfert massif de chunks
+	// Paramètres : intervalle (5000ms), accélération rapide (6), décélération rapide (3)
+	enet_peer_throttle_configure(m_impl->peer, 5000, 6, 3);
 
 	ENetEvent event{};
 	if (enet_host_service(m_impl->host, &event, 5000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT)

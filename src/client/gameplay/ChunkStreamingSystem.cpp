@@ -141,8 +141,16 @@ void ChunkStreamingSystem::syncChunkStreaming(
 			inflightBudget = classicMaxInflightChunkRequests - inflightRequests;
 		}
 
+		static glm::vec3 lastCameraPos = camera.Position;
+		float distanceMoved = glm::distance(camera.Position, lastCameraPos);
+		lastCameraPos = camera.Position;
+
 		maxNewRequestsThisFrame = std::min(maxNewRequestsThisFrame, inflightBudget);
-		maxNewRequestsThisFrame = std::min(maxNewRequestsThisFrame, classicMaxChunkRequestsPerFrame);
+		
+		if (distanceMoved <= 2.0f)
+		{
+			maxNewRequestsThisFrame = std::min(maxNewRequestsThisFrame, classicMaxChunkRequestsPerFrame);
+		}
 	}
 
 	size_t sentRequestsThisFrame = 0;
@@ -158,10 +166,22 @@ void ChunkStreamingSystem::syncChunkStreaming(
 		sentRequestsThisFrame++;
 	}
 
+	int dropDistanceChunks = streamDistanceChunks;
+	if (usesClassicStreaming(hasWorldFrontier, frontier))
+	{
+		dropDistanceChunks += classicStreamingPaddingChunks;
+	}
+	int dropRadiusSq = dropDistanceChunks * dropDistanceChunks;
+
 	std::vector<int64_t> keysToDrop;
 	for (int64_t key : streamedChunkKeys)
 	{
-		if (desiredKeys.find(key) == desiredKeys.end())
+		int cx = static_cast<int>(key >> 32);
+		int cz = static_cast<int>(key & 0xFFFFFFFF);
+		int dx = cx - cameraChunkX;
+		int dz = cz - cameraChunkZ;
+
+		if (dx * dx + dz * dz > dropRadiusSq || !canStreamChunk(hasWorldFrontier, frontier, cx, cz))
 		{
 			keysToDrop.push_back(key);
 		}
