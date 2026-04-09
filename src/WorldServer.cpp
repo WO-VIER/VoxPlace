@@ -1911,10 +1911,16 @@ struct WorldServer::Impl
 
 	bool sendChunkSnapshot(ClientSession &session, const std::vector<uint8_t> &payload)
 	{
+		// On envoie les chunks en mode UNRELIABLE_FRAGMENT au lieu de RELIABLE.
+		// Explication : Si un paquet UDP contenant un morceau de chunk se perd,
+		// ENet (en RELIABLE) bloque toute la file d'attente (Head-of-Line Blocking)
+		// le temps qu'il soit renvoyé, ce qui gèle tout le stream.
+		// En UNRELIABLE, on ne bloque jamais la file. Si un chunk n'arrive pas,
+		// le client (avec son Frustum Priority) va simplement le redemander.
 		ENetPacket *packet = enet_packet_create(
 			payload.data(),
 			payload.size(),
-			ENET_PACKET_FLAG_RELIABLE);
+			ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 		if (packet == nullptr)
 		{
 			return false;
