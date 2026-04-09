@@ -1004,6 +1004,8 @@ struct WorldServer::Impl
 
 	void handleConnect(ENetPeer *peer)
 	{
+		enet_peer_throttle_configure(peer, 5000, 2, 2);
+		
 		ClientSession session;
 		session.peer = peer;
 		session.playerContext.playerSession.lastSeenAtMs = systemNowMs();
