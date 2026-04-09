@@ -45,7 +45,8 @@ public:
 		ClientChunkMesher &chunkMesher,
 		ChunkIndirectRenderer &chunkIndirectRenderer,
 		const ClientFrameRendererConfig &config,
-		const glm::vec3 &fogColor);
+		const glm::vec3 &fogColor,
+		float deltaTime);
 };
 
 #endif

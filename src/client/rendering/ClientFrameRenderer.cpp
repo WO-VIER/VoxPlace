@@ -18,7 +18,8 @@ ClientFrameRenderResult ClientFrameRenderer::renderWorldFrame(
 	ClientChunkMesher &chunkMesher,
 	ChunkIndirectRenderer &chunkIndirectRenderer,
 	const ClientFrameRendererConfig &config,
-	const glm::vec3 &fogColor)
+	const glm::vec3 &fogColor,
+	float deltaTime)
 {
 	ClientFrameRenderResult result;
 
@@ -42,9 +43,22 @@ ClientFrameRenderResult ClientFrameRenderer::renderWorldFrame(
 		camera.Position,
 		gameState.render);
 
+	glm::vec3 cameraVelocity = glm::vec3(0.0f);
+	if (worldState.hasPreviousCameraPosition && deltaTime > 0.0f)
+	{
+		cameraVelocity = (camera.Position - worldState.previousCameraPosition) / deltaTime;
+	}
+	worldState.previousCameraPosition = camera.Position;
+	worldState.hasPreviousCameraPosition = true;
+
 	ChunkStreamingSystem::syncChunkStreaming(
 		worldClient,
 		camera,
+		cameraVelocity,
+		worldClient.getRoundTripTime(),
+		worldState.serverProfile.terrainGenChunkMsAvg,
+		worldState.serverProfile.sqliteLoadChunkMsAvg,
+		deltaTime,
 		result.frameContext.frustum,
 		worldState.hasWorldFrontier,
 		worldState.frontier,

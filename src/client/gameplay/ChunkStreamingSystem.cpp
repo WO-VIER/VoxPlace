@@ -4,12 +4,12 @@
 
 namespace
 {
-	float chunkCenterDistanceSqToCamera(const Camera &camera, int chunkX, int chunkZ)
+	float chunkCenterDistanceSqToPos(const glm::vec3 &pos, int chunkX, int chunkZ)
 	{
 		float centerX = chunkX * CHUNK_SIZE_X + CHUNK_SIZE_X * 0.5f;
 		float centerZ = chunkZ * CHUNK_SIZE_Z + CHUNK_SIZE_Z * 0.5f;
-		float dx = centerX - camera.Position.x;
-		float dz = centerZ - camera.Position.z;
+		float dx = centerX - pos.x;
+		float dz = centerZ - pos.z;
 		return dx * dx + dz * dz;
 	}
 }
@@ -53,6 +53,11 @@ size_t ChunkStreamingSystem::inflightChunkRequestCount(
 void ChunkStreamingSystem::syncChunkStreaming(
 	WorldClient &worldClient,
 	const Camera &camera,
+	const glm::vec3 &cameraVelocity,
+	uint32_t roundTripTimeMs,
+	float serverTerrainGenMsAvg,
+	float serverSqliteLoadMsAvg,
+	float deltaTime,
 	const Frustum &streamFrustum,
 	bool hasWorldFrontier,
 	const WorldFrontier &frontier,
@@ -77,11 +82,20 @@ void ChunkStreamingSystem::syncChunkStreaming(
 		streamDistanceChunks += classicStreamingPaddingChunks;
 	}
 
-	int cameraChunkX = floorDiv(static_cast<int>(std::floor(camera.Position.x)), CHUNK_SIZE_X);
-	int cameraChunkZ = floorDiv(static_cast<int>(std::floor(camera.Position.z)), CHUNK_SIZE_Z);
+	float roundTripSec = roundTripTimeMs / 1000.0f;
+	float serverChunkReadyMs = std::max(serverTerrainGenMsAvg, serverSqliteLoadMsAvg);
+	float serverChunkReadySec = serverChunkReadyMs / 1000.0f;
+	// On prend le chemin serveur le plus lent entre lecture DB et génération.
+	// Cela évite de sous-estimer l'avance nécessaire quand les chunks viennent du disque.
+	float predictionTimeSec = (roundTripSec * 1.2f) + serverChunkReadySec;
+
+	// On anticipe la position du joueur avec la latence totale estimée
+	glm::vec3 predictedCameraPos = camera.Position + (cameraVelocity * predictionTimeSec);
+
+	int cameraChunkX = floorDiv(static_cast<int>(std::floor(predictedCameraPos.x)), CHUNK_SIZE_X);
+	int cameraChunkZ = floorDiv(static_cast<int>(std::floor(predictedCameraPos.z)), CHUNK_SIZE_Z);
 	int radiusSq = streamDistanceChunks * streamDistanceChunks;
 
-	std::unordered_set<int64_t> desiredKeys;
 	struct ChunkRequestCandidate
 	{
 		int chunkX = 0;
@@ -108,13 +122,12 @@ void ChunkStreamingSystem::syncChunkStreaming(
 			}
 
 			int64_t key = chunkKey(cx, cz);
-			desiredKeys.insert(key);
 			if (streamedChunkKeys.find(key) == streamedChunkKeys.end())
 			{
 				ChunkRequestCandidate candidate;
 				candidate.chunkX = cx;
 				candidate.chunkZ = cz;
-				candidate.distSq = chunkCenterDistanceSqToCamera(camera, cx, cz);
+				candidate.distSq = chunkCenterDistanceSqToPos(predictedCameraPos, cx, cz);
 				candidate.inFrustum = streamFrustum.isChunkVisible(cx, cz);
 				requestCandidates.push_back(candidate);
 			}
@@ -135,10 +148,13 @@ void ChunkStreamingSystem::syncChunkStreaming(
 	if (usesClassicStreaming(hasWorldFrontier, frontier))
 	{
 		size_t frustumMissingChunks = 0;
-		for (const auto& candidate : requestCandidates)
+		for (const auto &candidate : requestCandidates)
 		{
-			if (candidate.inFrustum) frustumMissingChunks++;
-			else break; // requestCandidates is sorted by inFrustum
+			if (!candidate.inFrustum)
+			{
+				break;
+			}
+			frustumMissingChunks++;
 		}
 
 		size_t inflightRequests = inflightChunkRequestCount(streamedChunkKeys, chunkMap);
@@ -151,9 +167,11 @@ void ChunkStreamingSystem::syncChunkStreaming(
 		size_t totalBudget = frustumMissingChunks + backgroundBudget;
 		maxNewRequestsThisFrame = std::min(maxNewRequestsThisFrame, totalBudget);
 
-		static glm::vec3 lastCameraPos = camera.Position;
-		float distanceMoved = glm::distance(camera.Position, lastCameraPos);
-		lastCameraPos = camera.Position;
+		float distanceMoved = 0.0f;
+		if (deltaTime > 0.0f)
+		{
+			distanceMoved = glm::length(cameraVelocity) * deltaTime;
+		}
 
 		if (distanceMoved <= 2.0f)
 		{

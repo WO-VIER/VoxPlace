@@ -7,6 +7,8 @@ void ClientWorldSystem::clear(ClientWorldState &worldState, ChunkIndirectRendere
 {
 	worldState.hasWorldFrontier = false;
 	worldState.hasServerProfile = false;
+	worldState.hasPreviousCameraPosition = false;
+	worldState.previousCameraPosition = glm::vec3(0.0f);
 	worldState.frontier = WorldFrontier{};
 	worldState.serverProfile = ServerProfileMessage{};
 	worldState.pendingMeshRevisions.clear();

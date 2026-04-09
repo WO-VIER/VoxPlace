@@ -40,6 +40,7 @@ public:
 	void service();
 	bool popEvent(WorldClientEvent &event);
 	bool isConnected() const;
+	uint32_t getRoundTripTime() const;
 	const Player &localPlayer() const;
 	uint64_t remainingBlockActionCooldownMs() const;
 	const std::string &lastConnectionError() const;

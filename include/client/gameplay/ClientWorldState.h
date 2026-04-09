@@ -14,6 +14,8 @@ struct ClientWorldState
 	WorldFrontier frontier;
 	bool hasWorldFrontier = false;
 	bool hasServerProfile = false;
+	bool hasPreviousCameraPosition = false;
+	glm::vec3 previousCameraPosition = glm::vec3(0.0f);
 	std::unordered_map<int64_t, ClientChunk *> chunkMap;
 	std::unordered_set<int64_t> streamedChunkKeys;
 	std::unordered_map<int64_t, uint64_t> pendingMeshRevisions;

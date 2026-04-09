@@ -35,7 +35,7 @@ void renderDebugOverlay(bool visible, const DebugOverlayData &data)
 	}
 	ImGui::Text("Server: %s:%d", data.serverHost, data.serverPort);
 	ImGui::Text("Username: %s", data.username);
-	ImGui::Text("Network: %s", data.connected ? "Connected" : "Disconnected");
+	ImGui::Text("Network: %s (%u ms ping)", data.connected ? "Connected" : "Disconnected", data.roundTripTimeMs);
 	if (data.hasWorldFrontier && data.frontier != nullptr)
 	{
 		ImGui::Text("World mode: %s", worldGenerationModeName(data.frontier->mode));

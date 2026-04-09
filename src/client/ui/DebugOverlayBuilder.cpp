@@ -36,6 +36,7 @@ DebugOverlayData buildDebugOverlayData(const DebugOverlayBuildInputs &inputs)
 	data.deltaTime = inputs.deltaTime;
 	data.serverHost = gameState.connection.serverHost.c_str();
 	data.serverPort = static_cast<int>(gameState.connection.serverPort);
+	data.roundTripTimeMs = worldClient.getRoundTripTime();
 	data.username = worldClient.localPlayer().profile.username.c_str();
 	data.connected = worldClient.isConnected();
 	data.hasWorldFrontier = worldState.hasWorldFrontier;

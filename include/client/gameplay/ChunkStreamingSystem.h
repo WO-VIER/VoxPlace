@@ -20,6 +20,11 @@ public:
 	static void syncChunkStreaming(
 		WorldClient &worldClient,
 		const Camera &camera,
+		const glm::vec3 &cameraVelocity,
+		uint32_t roundTripTimeMs,
+		float serverTerrainGenMsAvg,
+		float serverSqliteLoadMsAvg,
+		float deltaTime,
 		const Frustum &streamFrustum,
 		bool hasWorldFrontier,
 		const WorldFrontier &frontier,

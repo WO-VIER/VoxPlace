@@ -1004,8 +1004,8 @@ struct WorldServer::Impl
 
 	void handleConnect(ENetPeer *peer)
 	{
-		// On désactive le bridage par défaut (throttle) d'ENet pour le transfert massif de chunks
-		// Paramètres : intervalle (5000ms), accélération rapide (6), décélération rapide (3)
+		// Ce réglage agit surtout sur les envois non fiables d'ENet.
+		// On le garde aligné avec le client pour les essais de streaming agressif.
 		enet_peer_throttle_configure(peer, 5000, 6, 3);
 		
 		ClientSession session;

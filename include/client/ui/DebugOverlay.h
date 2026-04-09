@@ -14,6 +14,7 @@ struct DebugOverlayData
 	float deltaTime = 0.0f;
 	const char *serverHost = "";
 	int serverPort = 0;
+	uint32_t roundTripTimeMs = 0;
 	const char *username = "";
 	bool connected = false;
 	bool hasWorldFrontier = false;

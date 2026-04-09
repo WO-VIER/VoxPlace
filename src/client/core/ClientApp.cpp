@@ -484,7 +484,8 @@ namespace
 				m_runtime.chunkMesher,
 				m_runtime.chunkIndirectRenderer,
 				renderConfig,
-				FOG_COLOR);
+				FOG_COLOR,
+				m_runtime.deltaTime);
 			m_runtime.chunkRenderCpuMs = frameResult.chunkRenderCpuMs;
 
 			beginImGuiFrame();
