@@ -14,7 +14,10 @@ namespace
 
 	constexpr uint8_t VALID_CHUNK_SECTION_MASK =
 		static_cast<uint8_t>((1u << CHUNK_SECTION_COUNT) - 1u);
-	constexpr int CHUNK_SNAPSHOT_NETWORK_ZSTD_LEVEL = 1;
+	// On augmente le niveau de compression Zstd pour le réseau (de 1 à 3).
+	// Le CPU du VPS (serveur) a de la marge, on échange donc un peu de temps CPU
+	// contre une réduction de la taille des paquets pour repousser la limite de bande passante.
+	constexpr int CHUNK_SNAPSHOT_NETWORK_ZSTD_LEVEL = 3;
 
 	template <typename T>
 	void appendValue(std::vector<uint8_t> &buffer, const T &value)
