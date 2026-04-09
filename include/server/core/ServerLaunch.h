@@ -22,7 +22,7 @@ struct ServerEnvironmentOptions
 {
 	bool profileWorkersEnabled = false;
 	size_t requestedWorkerCount = 0;
-	uint32_t streamTickMs = 10;
+	uint32_t streamTickMs = 8;
 };
 
 enum class ServerLaunchParseResult

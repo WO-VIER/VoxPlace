@@ -41,7 +41,7 @@ namespace
 	constexpr size_t WORLD_CHANNEL_RELIABLE = 0;
 	constexpr size_t WORLD_CHANNEL_CHUNK = 1;
 	constexpr int SERVER_TICK_MS = 50;
-	constexpr uint32_t DEFAULT_STREAM_TICK_MS = 10;
+	constexpr uint32_t DEFAULT_STREAM_TICK_MS = 8;
 	constexpr size_t DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK = 4;
 	constexpr size_t DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 100;
 	constexpr size_t MAX_PENDING_CHUNK_SNAPSHOTS_PER_CLIENT = 512;
