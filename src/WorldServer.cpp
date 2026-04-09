@@ -41,6 +41,7 @@ namespace
 	constexpr size_t WORLD_CHANNEL_RELIABLE = 0;
 	constexpr size_t WORLD_CHANNEL_CHUNK = 1;
 	constexpr int SERVER_TICK_MS = 50;
+	constexpr uint32_t DEFAULT_STREAM_TICK_MS = 10;
 	constexpr size_t DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK = 4;
 	constexpr size_t DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 100;
 	constexpr size_t MAX_PENDING_CHUNK_SNAPSHOTS_PER_CLIENT = 512;
@@ -125,6 +126,17 @@ namespace
 				return;
 			}
 		}
+	}
+
+	size_t scaleBudgetForStreamTick(size_t budget, uint32_t streamTickMs)
+	{
+		size_t scaledBudget = (budget * static_cast<size_t>(streamTickMs)) /
+			static_cast<size_t>(SERVER_TICK_MS);
+		if (scaledBudget == 0 && budget > 0)
+		{
+			return 1;
+		}
+		return scaledBudget;
 	}
 
 	size_t chunkSnapshotRawPayloadBytes(const VoxelChunkData &chunk)
@@ -277,10 +289,14 @@ struct WorldServer::Impl
 				  worldDatabasePath(std::move(selectedWorldDatabasePath)),
 				  persistGeneratedChunks(shouldPersistGeneratedChunks),
 			  environmentOptions(selectedEnvironmentOptions),
-		  generator(std::move(worldGenerator)),
+			  generator(std::move(worldGenerator)),
 		  generationMode(selectedGenerationMode),
 		  profileWorkers(environmentOptions.profileWorkersEnabled)
 	{
+		if (environmentOptions.streamTickMs == 0)
+		{
+			environmentOptions.streamTickMs = DEFAULT_STREAM_TICK_MS;
+		}
 		frontier.playableBounds = makeSquareBounds(INITIAL_PLAYABLE_RADIUS);
 		frontier.paddingChunks = INITIAL_PADDING_CHUNKS;
 		frontier.generatedBounds = frontier.playableBounds.expanded(frontier.paddingChunks);
@@ -349,6 +365,7 @@ struct WorldServer::Impl
 					  << " with " << workerCount << " generation worker(s)"
 					  << " in " << worldGenerationModeName(generationMode)
 					  << " mode" << std::endl;
+			std::cout << "Chunk stream tick: " << environmentOptions.streamTickMs << " ms" << std::endl;
 				std::cout << "World DB path: " << worldDatabasePath << std::endl;
 			if (!persistGeneratedChunks)
 			{
@@ -415,6 +432,7 @@ struct WorldServer::Impl
 	{
 		using clock = std::chrono::steady_clock;
 		auto nextTick = clock::now();
+		auto nextStreamTick = nextTick;
 
 		while (running)
 		{
@@ -425,8 +443,31 @@ struct WorldServer::Impl
 				break;
 			}
 
-			serviceNetwork(1);
 			auto now = clock::now();
+			auto nextNetworkDeadline = nextTick;
+			if (nextStreamTick < nextNetworkDeadline)
+			{
+				nextNetworkDeadline = nextStreamTick;
+			}
+
+			uint32_t networkWaitMs = 0;
+			if (nextNetworkDeadline > now)
+			{
+				auto waitMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+					nextNetworkDeadline - now);
+				if (waitMicros.count() > 0)
+				{
+					networkWaitMs = static_cast<uint32_t>((waitMicros.count() + 999) / 1000);
+				}
+			}
+
+			serviceNetwork(networkWaitMs);
+			now = clock::now();
+			if (now >= nextStreamTick)
+			{
+				streamTick();
+				nextStreamTick = now + std::chrono::milliseconds(environmentOptions.streamTickMs);
+			}
 			if (now >= nextTick)
 			{
 				tick();
@@ -634,15 +675,21 @@ struct WorldServer::Impl
 	void tick()
 	{
 		ZoneScopedN("Server Tick");
-		integrateReadyChunks(integratedChunksBudgetForTick());
-		for (auto &entry : clients)
-		{
-			sendQueuedChunks(entry.second);
-		}
 		flushDirtyChunks(DEFAULT_MAX_CHUNK_SAVES_PER_TICK);
 		unloadColdChunks(unloadChunksBudgetForTick());
-		enet_host_flush(host);
 		logWorkerProfileWindowIfNeeded();
+	}
+
+	void streamTick()
+	{
+		integrateReadyChunks(integratedChunksBudgetForStreamTick());
+		for (auto &entry : clients)
+		{
+			sendQueuedChunks(entry.second, chunkSendBudgetForClientStreamTick(entry.second.chunkStream));
+		}
+		// On pousse les snapshots plus souvent que le tick gameplay pour réduire
+		// le temps passé en file d'attente avant l'émission réseau.
+		enet_host_flush(host);
 	}
 
 	bool isChunkWantedByAnyClient(int64_t key) const
@@ -1029,6 +1076,11 @@ struct WorldServer::Impl
 			budget = CLASSIC_MAX_INTEGRATED_CHUNKS_PER_TICK;
 		}
 		return budget;
+	}
+
+	size_t integratedChunksBudgetForStreamTick()
+	{
+		return scaleBudgetForStreamTick(integratedChunksBudgetForTick(), environmentOptions.streamTickMs);
 	}
 
 	void handleConnect(ENetPeer *peer)
@@ -1839,10 +1891,9 @@ struct WorldServer::Impl
 		return cachedPayload;
 	}
 
-	void sendQueuedChunks(ClientSession &session)
+	void sendQueuedChunks(ClientSession &session, size_t sendBudget)
 	{
 		size_t sentCount = 0;
-		size_t sendBudget = chunkSendBudgetForClient(session.chunkStream);
 
 		while (sentCount < sendBudget &&
 			   pendingChunkPacketCountForClient(session.chunkStream) < MAX_PENDING_CHUNK_SNAPSHOTS_PER_CLIENT &&
@@ -1878,6 +1929,11 @@ struct WorldServer::Impl
 			session.chunkStream.loadedChunks.insert(key);
 			sentCount++;
 		}
+	}
+
+	size_t chunkSendBudgetForClientStreamTick(const ClientSession::ClientChunkStreamState &chunkStream)
+	{
+		return scaleBudgetForStreamTick(chunkSendBudgetForClient(chunkStream), environmentOptions.streamTickMs);
 	}
 
 	size_t chunkSendBudgetForClient(const ClientSession::ClientChunkStreamState &chunkStream)

@@ -45,6 +45,7 @@ int main(int argc, char **argv)
 	{
 		std::cout << "Server worker profiling requested via environment" << std::endl;
 	}
+	std::cout << "Stream tick: " << environmentOptions.streamTickMs << " ms" << std::endl;
 	std::cout << "World DB: " << launchOptions.worldDatabasePath << std::endl;
 	std::cout << "Persistence mode: "
 			  << (launchOptions.persistGeneratedChunks ? "full-db" : "modified-only")

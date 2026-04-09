@@ -1,5 +1,6 @@
 #include <server/core/ServerLaunch.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
@@ -208,6 +209,13 @@ ServerEnvironmentOptions loadServerEnvironmentOptions()
 		{
 			options.requestedWorkerCount = static_cast<size_t>(overrideWorkers);
 		}
+	}
+
+	int overrideStreamTickMs = 0;
+	if (tryReadEnvInt("VOXPLACE_STREAM_TICK_MS", overrideStreamTickMs))
+	{
+		overrideStreamTickMs = std::clamp(overrideStreamTickMs, 5, 25);
+		options.streamTickMs = static_cast<uint32_t>(overrideStreamTickMs);
 	}
 
 	return options;
