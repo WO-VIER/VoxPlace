@@ -12,6 +12,7 @@
 namespace
 {
 	constexpr size_t WORLD_CHANNEL_RELIABLE = 0;
+	constexpr size_t WORLD_CHANNEL_CHUNK = 1;
 
 	uint64_t systemNowMs()
 	{
@@ -400,7 +401,7 @@ void WorldClient::sendChunkRequest(int chunkX, int chunkZ)
 	message.chunkZ = chunkZ;
 	std::vector<uint8_t> payload = encodeChunkRequest(message);
 	ENetPacket *packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
-	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
+	enet_peer_send(m_impl->peer, WORLD_CHANNEL_CHUNK, packet);
 }
 
 void WorldClient::sendChunkDrop(int chunkX, int chunkZ)
@@ -415,7 +416,7 @@ void WorldClient::sendChunkDrop(int chunkX, int chunkZ)
 	message.chunkZ = chunkZ;
 	std::vector<uint8_t> payload = encodeChunkDrop(message);
 	ENetPacket *packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
-	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
+	enet_peer_send(m_impl->peer, WORLD_CHANNEL_CHUNK, packet);
 }
 
 void WorldClient::sendPlaceBlock(int worldX, int worldY, int worldZ, uint8_t paletteIndex)

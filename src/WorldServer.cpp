@@ -39,6 +39,7 @@
 namespace
 {
 	constexpr size_t WORLD_CHANNEL_RELIABLE = 0;
+	constexpr size_t WORLD_CHANNEL_CHUNK = 1;
 	constexpr int SERVER_TICK_MS = 50;
 	constexpr size_t DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK = 4;
 	constexpr size_t DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK = 100;
@@ -170,6 +171,9 @@ struct WorldServer::Impl
 	{
 		VoxelChunkData chunk;
 		bool loadedFromStorage = false;
+		uint8_t snapshotSectionCount = 0;
+		size_t snapshotRawBytes = 0;
+		std::vector<uint8_t> snapshotPayload;
 	};
 
 	struct SaveBatchJob
@@ -578,10 +582,19 @@ struct WorldServer::Impl
 							std::chrono::duration_cast<std::chrono::microseconds>(
 								generationEnd - generationStart)
 								.count());
-						profileGeneratedChunkMicros.fetch_add(generationMicros, std::memory_order_relaxed);
-						updateAtomicMax(profileGeneratedChunkMicrosMax, generationMicros);
-						profileGeneratedFreshChunks.fetch_add(1, std::memory_order_relaxed);
-					}
+					profileGeneratedChunkMicros.fetch_add(generationMicros, std::memory_order_relaxed);
+					updateAtomicMax(profileGeneratedChunkMicrosMax, generationMicros);
+					profileGeneratedFreshChunks.fetch_add(1, std::memory_order_relaxed);
+				}
+
+				if (workerCount > 1)
+				{
+					// Sur les machines plus larges, on fait l'encodage dans les workers déjà
+					// existants pour sortir Zstd de la boucle d'envoi ENet sans ajouter de thread.
+					readyChunk.snapshotSectionCount = static_cast<uint8_t>(readyChunk.chunk.nonEmptySectionCount());
+					readyChunk.snapshotRawBytes = chunkSnapshotRawPayloadBytes(readyChunk.chunk);
+					readyChunk.snapshotPayload = encodeChunkSnapshotNetwork(readyChunk.chunk);
+				}
 
 				std::lock_guard<std::mutex> readyLock(readyMutex);
 				readyChunks.push_back(std::move(readyChunk));
@@ -723,12 +736,28 @@ struct WorldServer::Impl
 				}
 				VoxelChunkData chunk = std::move(readyChunk.chunk);
 
-					int64_t key = chunkKey(chunk.chunkX, chunk.chunkZ);
-					invalidateChunkSnapshotCache(key);
-					worldChunks[key] = std::move(chunk);
-					if (readyChunk.loadedFromStorage)
-					{
-						profileIntegratedLoadedChunks++;
+				int64_t key = chunkKey(chunk.chunkX, chunk.chunkZ);
+				worldChunks[key] = std::move(chunk);
+				VoxelChunkData &storedChunk = worldChunks[key];
+				CachedChunkSnapshotPayload &cachedPayload = chunkSnapshotPayloadCache[key];
+				cachedPayload.revision = storedChunk.revision;
+				if (readyChunk.snapshotPayload.empty())
+				{
+					// Sur les petites machines, on laisse le worker se concentrer sur la
+					// production du chunk, puis on pré-encode ici avant la boucle d'envoi.
+					cachedPayload.sectionCount = static_cast<uint8_t>(storedChunk.nonEmptySectionCount());
+					cachedPayload.rawBytes = chunkSnapshotRawPayloadBytes(storedChunk);
+					cachedPayload.payload = encodeChunkSnapshotNetwork(storedChunk);
+				}
+				else
+				{
+					cachedPayload.sectionCount = readyChunk.snapshotSectionCount;
+					cachedPayload.rawBytes = readyChunk.snapshotRawBytes;
+					cachedPayload.payload = std::move(readyChunk.snapshotPayload);
+				}
+				if (readyChunk.loadedFromStorage)
+				{
+					profileIntegratedLoadedChunks++;
 					}
 					else
 					{
@@ -1936,17 +1965,17 @@ struct WorldServer::Impl
 		pendingChunkPackets[packet] = pendingPacket;
 		session.chunkStream.pendingPacketIds.insert(packetId);
 
-		int sendResult = enet_peer_send(session.peer, WORLD_CHANNEL_RELIABLE, packet);
-		if (sendResult != 0)
+		int sendResult = enet_peer_send(session.peer, WORLD_CHANNEL_CHUNK, packet);
+		if (sendResult == 0)
 		{
-			pendingChunkPackets.erase(packet);
-			session.chunkStream.pendingPacketIds.erase(packetId);
-			packet->freeCallback = nullptr;
-			packet->userData = nullptr;
-			enet_packet_destroy(packet);
-			return false;
+			return true;
 		}
-		return true;
+		pendingChunkPackets.erase(packet);
+		session.chunkStream.pendingPacketIds.erase(packetId);
+		packet->freeCallback = nullptr;
+		packet->userData = nullptr;
+		enet_packet_destroy(packet);
+		return false;
 	}
 
 	bool sendReliable(ENetPeer *peer, const std::vector<uint8_t> &payload)
