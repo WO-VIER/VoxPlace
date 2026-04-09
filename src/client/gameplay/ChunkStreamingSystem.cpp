@@ -158,10 +158,18 @@ void ChunkStreamingSystem::syncChunkStreaming(
 		sentRequestsThisFrame++;
 	}
 
+	int dropDistanceChunks = streamDistanceChunks + 4;
+	int dropRadiusSq = dropDistanceChunks * dropDistanceChunks;
+
 	std::vector<int64_t> keysToDrop;
 	for (int64_t key : streamedChunkKeys)
 	{
-		if (desiredKeys.find(key) == desiredKeys.end())
+		int cx = static_cast<int>(key >> 32);
+		int cz = static_cast<int>(key & 0xFFFFFFFF);
+		int dx = cx - cameraChunkX;
+		int dz = cz - cameraChunkZ;
+		
+		if (dx * dx + dz * dz > dropRadiusSq || !canStreamChunk(hasWorldFrontier, frontier, cx, cz))
 		{
 			keysToDrop.push_back(key);
 		}
