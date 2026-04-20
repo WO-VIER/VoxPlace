@@ -131,9 +131,21 @@ void installClientInputCallbacks(GLFWwindow *window, GameState &gameState, Camer
 
 void processGameplayInput(GLFWwindow *window, GameState &gameState, Camera &camera, float deltaTime)
 {
-	if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+	if (gameState.input.suppressEscapeRelease)
+	{
+		gameState.input.suppressEscapeRelease = false;
+	}
+	else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
 	{
 		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+	}
+	if (gameState.command.open)
+	{
+		gameState.input.placeBlockRequested = false;
+		gameState.input.breakBlockRequested = false;
+		gameState.input.paletteScrollDelta = 0;
+		gameState.input.paletteScrollAccumulator = 0.0f;
+		return;
 	}
 
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)

@@ -11,6 +11,8 @@
 #include <vector>
 
 constexpr size_t PLAYER_PASSWORD_MAX_LENGTH = 128;
+constexpr size_t COMMAND_REQUEST_TEXT_MAX_LENGTH = 127;
+constexpr size_t SERVER_CHAT_TEXT_MAX_LENGTH = 255;
 
 enum class PacketType : uint8_t
 {
@@ -28,7 +30,10 @@ enum class PacketType : uint8_t
 	PlayerState = 12,
 	PlayerMoveUpdate = 13,
 	ChunkSnapshotSectionsZstd = 14,
-	ServerProfile = 15
+	ServerProfile = 15,
+	CommandRequest = 16,
+	ServerChatMessage = 17,
+	ExpansionStatus = 18
 };
 
 enum class BlockActionType : uint8_t
@@ -120,6 +125,26 @@ struct PlayerMoveUpdateMessage
 	float lookZ = -1.0f;
 };
 
+struct CommandRequestMessage
+{
+	char text[COMMAND_REQUEST_TEXT_MAX_LENGTH + 1] = {};
+};
+
+struct ServerChatMessage
+{
+	char text[SERVER_CHAT_TEXT_MAX_LENGTH + 1] = {};
+};
+
+struct ExpansionStatusMessage
+{
+	uint64_t cooldownReadyAtMs = 0;
+	uint64_t serverNowMs = 0;
+	uint32_t votesCast = 0;
+	uint32_t yesVotes = 0;
+	uint32_t eligiblePlayers = 0;
+	uint8_t voteActive = 0;
+};
+
 struct ServerProfileMessage
 {
 	WorldGenerationMode mode = WorldGenerationMode::ActivityFrontier;
@@ -201,6 +226,15 @@ bool decodePlayerState(const uint8_t *data, size_t size, PlayerStateMessage &mes
 
 std::vector<uint8_t> encodePlayerMoveUpdate(const PlayerMoveUpdateMessage &message);
 bool decodePlayerMoveUpdate(const uint8_t *data, size_t size, PlayerMoveUpdateMessage &message);
+
+std::vector<uint8_t> encodeCommandRequest(const CommandRequestMessage &message);
+bool decodeCommandRequest(const uint8_t *data, size_t size, CommandRequestMessage &message);
+
+std::vector<uint8_t> encodeServerChatMessage(const ServerChatMessage &message);
+bool decodeServerChatMessage(const uint8_t *data, size_t size, ServerChatMessage &message);
+
+std::vector<uint8_t> encodeExpansionStatus(const ExpansionStatusMessage &message);
+bool decodeExpansionStatus(const uint8_t *data, size_t size, ExpansionStatusMessage &message);
 
 std::vector<uint8_t> encodeServerProfile(const ServerProfileMessage &message);
 bool decodeServerProfile(const uint8_t *data, size_t size, ServerProfileMessage &message);

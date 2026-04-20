@@ -5,11 +5,13 @@
 
 #include <glm/vec3.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
 constexpr uint16_t CLIENT_DEFAULT_SERVER_PORT = 28713;
 constexpr const char *CLIENT_DEFAULT_SERVER_HOST = "127.0.0.1";
+constexpr size_t CLIENT_COMMAND_INPUT_MAX_LENGTH = 128;
 
 enum class ClientAppState
 {
@@ -56,12 +58,23 @@ struct ClientInputState
 	bool breakBlockRequested = false;
 	int paletteScrollDelta = 0;
 	float paletteScrollAccumulator = 0.0f;
+	bool commandToggleHeld = false;
+	bool commandCancelHeld = false;
+	bool suppressEscapeRelease = false;
+};
+
+struct ClientCommandState
+{
+	bool open = false;
+	bool focusRequested = false;
+	char inputBuffer[CLIENT_COMMAND_INPUT_MAX_LENGTH + 1] = {};
 };
 
 struct GameState
 {
 	ClientDisplayState display;
 	ClientInputState input;
+	ClientCommandState command;
 	ClientConnectionState connection;
 	MovementSyncState movementSync;
 	ClientAppState appState = ClientAppState::Login;

@@ -33,6 +33,8 @@ struct DebugOverlayData
 	size_t indirectArenaUsedFaces = 0;
 	size_t indirectLargestFreeSpan = 0;
 	bool *compactArenaRequested = nullptr;
+	bool *resetExpansionCooldownRequested = nullptr;
+	bool *resetBlockCooldownRequested = nullptr;
 	size_t meshWorkerCount = 0;
 	size_t trackedJobs = 0;
 	size_t queuedJobs = 0;

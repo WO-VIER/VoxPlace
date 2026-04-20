@@ -13,17 +13,23 @@ struct WorldClientEvent
 	{
 		Connected,
 		Disconnected,
+		PlayerStateUpdated,
 		FrontierUpdated,
 		ChunkReceived,
 		BlockUpdated,
+		ServerMessageReceived,
+		ExpansionStatusUpdated,
 		ServerProfileUpdated
 	};
 
 	Type type = Type::Disconnected;
+	PlayerStateMessage playerState;
 	WorldFrontier frontier;
 	VoxelChunkData chunk;
 	BlockUpdateBroadcastMessage blockUpdate;
+	ExpansionStatusMessage expansionStatus;
 	ServerProfileMessage serverProfile;
+	std::string serverMessage;
 };
 
 class WorldClient
@@ -43,12 +49,14 @@ public:
 	uint32_t getRoundTripTime() const;
 	const Player &localPlayer() const;
 	uint64_t remainingBlockActionCooldownMs() const;
+	uint64_t remainingServerCooldownMs(uint64_t readyAtMs) const;
 	const std::string &lastConnectionError() const;
 
 	void sendChunkRequest(int chunkX, int chunkZ);
 	void sendChunkDrop(int chunkX, int chunkZ);
 	void sendPlaceBlock(int worldX, int worldY, int worldZ, uint8_t paletteIndex);
 	void sendBreakBlock(int worldX, int worldY, int worldZ);
+	void sendCommand(const std::string &commandText);
 	void sendPlayerMoveUpdate(const glm::vec3 &position, const glm::vec3 &lookDirection);
 	void updateLocalPlayerTransform(const glm::vec3 &position, const glm::vec3 &lookDirection);
 

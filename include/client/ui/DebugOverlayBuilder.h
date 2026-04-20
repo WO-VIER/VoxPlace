@@ -29,6 +29,8 @@ struct DebugOverlayBuildInputs
 	uint64_t totalFaces = 0;
 	int *terrainArchitectureIndex = nullptr;
 	bool *compactArenaRequested = nullptr;
+	bool *resetExpansionCooldownRequested = nullptr;
+	bool *resetBlockCooldownRequested = nullptr;
 };
 
 DebugOverlayData buildDebugOverlayData(const DebugOverlayBuildInputs &inputs);

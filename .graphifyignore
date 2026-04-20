@@ -1,0 +1,26 @@
+# Vendored third-party libraries
+thirdparty/
+dependencies/
+
+# Build artifacts
+build_debug/
+build_release/
+build_tracy_profiler/
+
+# Benchmark raw data
+bench/
+benchvps/
+benchlocal/
+
+# Output/generated files
+output/
+graphify-out/
+
+# Auto-extracted xlsx resources (low-value images)
+Analyse/grille_analyse_projet_UML_2024-2025*/resources/
+
+# Old/legacy code
+old/
+
+# Game assets (textures, not code)
+assets/

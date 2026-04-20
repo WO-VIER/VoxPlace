@@ -14,7 +14,7 @@ struct RenderSettings
 	int classicStreamingPaddingChunks = 4;
 	bool useAO = true;
 	bool debugSunblockOnly = false;
-	int selectedPaletteIndex = 4;
+	int selectedPaletteIndex = 1;
 	float fogStart = 80.0f;
 	float fogEnd = 200.0f;
 	bool minecraftFogByRenderDistance = true;

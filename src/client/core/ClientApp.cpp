@@ -25,6 +25,7 @@
 #include <client/rendering/Shader.h>
 #include <client/rendering/WorldRenderer.h>
 #include <client/ui/ColorPaletteHud.h>
+#include <client/ui/CommandChatHud.h>
 #include <client/ui/CooldownHud.h>
 #include <client/ui/DebugOverlayBuilder.h>
 #include <client/ui/DebugOverlay.h>
@@ -68,6 +69,7 @@ namespace
 		ChunkIndirectRenderer chunkIndirectRenderer;
 		LoginScreen loginScreen;
 		ColorPaletteHud colorPaletteHud;
+		CommandChatHud commandChatHud;
 		CooldownHud cooldownHud;
 		ClientProfilerState profilerState;
 		Crosshair crosshair;
@@ -218,6 +220,7 @@ namespace
 
 			m_runtime.loginScreen.loadAssets();
 			m_runtime.colorPaletteHud.loadAssets();
+			m_runtime.commandChatHud.loadAssets();
 			m_runtime.cooldownHud.loadAssets();
 			ImGui_ImplGlfw_InitForOpenGL(m_runtime.window, true);
 			ImGui_ImplOpenGL3_Init("#version 460");
@@ -388,6 +391,7 @@ namespace
 		{
 			updateDebugOverlayToggle(m_runtime.window, true, m_runtime.gameState.debugOverlayVisible);
 			updateProfilerWindowsToggle(m_runtime.window, true, m_runtime.gameState.profilerWindowsVisible);
+			updateCommandChatToggle();
 			processGameplayInput(
 				m_runtime.window,
 				m_runtime.gameState,
@@ -522,6 +526,8 @@ namespace
 							 int &terrainArchitectureIndex,
 							 bool &compactArenaRequested)
 		{
+			bool resetExpansionCooldownRequested = false;
+			bool resetBlockCooldownRequested = false;
 			DebugOverlayBuildInputs debugOverlayInputs;
 			debugOverlayInputs.gameState = &m_runtime.gameState;
 			debugOverlayInputs.worldClient = &m_runtime.worldClient;
@@ -537,9 +543,19 @@ namespace
 			debugOverlayInputs.totalFaces = frameResult.totalFaces;
 			debugOverlayInputs.terrainArchitectureIndex = &terrainArchitectureIndex;
 			debugOverlayInputs.compactArenaRequested = &compactArenaRequested;
+			debugOverlayInputs.resetExpansionCooldownRequested = &resetExpansionCooldownRequested;
+			debugOverlayInputs.resetBlockCooldownRequested = &resetBlockCooldownRequested;
 
 			DebugOverlayData debugOverlayData = buildDebugOverlayData(debugOverlayInputs);
 			renderDebugOverlay(m_runtime.gameState.debugOverlayVisible, debugOverlayData);
+			if (resetExpansionCooldownRequested)
+			{
+				m_runtime.worldClient.sendCommand("/resetexpandcooldown");
+			}
+			if (resetBlockCooldownRequested)
+			{
+				m_runtime.worldClient.sendCommand("/resetcooldown");
+			}
 
 			ProfilerWindowsData profilerWindowsData;
 			profilerWindowsData.gameState = &m_runtime.gameState;
@@ -554,9 +570,108 @@ namespace
 			m_runtime.colorPaletteHud.render(
 				m_runtime.gameState.appState == ClientAppState::InGame,
 				m_runtime.gameState.render.selectedPaletteIndex);
+			uint64_t remainingExpansionCooldownMs = 0;
+			const ExpansionStatusMessage *expansionStatus = nullptr;
+			if (m_runtime.worldState.hasExpansionStatus)
+			{
+				remainingExpansionCooldownMs = m_runtime.worldClient.remainingServerCooldownMs(
+					m_runtime.worldState.expansionStatus.cooldownReadyAtMs);
+				expansionStatus = &m_runtime.worldState.expansionStatus;
+			}
 			m_runtime.cooldownHud.render(
 				m_runtime.gameState.appState == ClientAppState::InGame,
-				m_runtime.worldClient.remainingBlockActionCooldownMs());
+				remainingExpansionCooldownMs,
+				m_runtime.worldClient.remainingBlockActionCooldownMs(),
+				expansionStatus);
+
+			std::string submittedCommand;
+			if (m_runtime.commandChatHud.render(
+					m_runtime.gameState.appState == ClientAppState::InGame,
+					m_runtime.gameState.command.open,
+					m_runtime.gameState.command.focusRequested,
+					m_runtime.worldState.serverMessages,
+					m_runtime.gameState.command.inputBuffer,
+					sizeof(m_runtime.gameState.command.inputBuffer),
+					submittedCommand))
+			{
+				handleSubmittedCommand(submittedCommand);
+				closeCommandChat(true);
+			}
+		}
+
+		void pushCommandMessage(const std::string &message)
+		{
+			if (message.empty())
+			{
+				return;
+			}
+			m_runtime.worldState.serverMessages.push_back(message);
+			while (m_runtime.worldState.serverMessages.size() > 8)
+			{
+				m_runtime.worldState.serverMessages.pop_front();
+			}
+		}
+
+		void openCommandChat()
+		{
+			m_runtime.gameState.command.open = true;
+			m_runtime.gameState.command.focusRequested = true;
+			glfwSetInputMode(m_runtime.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+		}
+
+		void closeCommandChat(bool captureCursor)
+		{
+			m_runtime.gameState.command.open = false;
+			m_runtime.gameState.command.focusRequested = false;
+			m_runtime.gameState.command.inputBuffer[0] = '\0';
+			if (!captureCursor)
+			{
+				return;
+			}
+			m_runtime.gameState.input.suppressEscapeRelease = true;
+			glfwSetInputMode(m_runtime.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+			m_runtime.gameState.input.firstMouse = true;
+		}
+
+		void updateCommandChatToggle()
+		{
+			bool togglePressed = glfwGetKey(m_runtime.window, GLFW_KEY_T) == GLFW_PRESS;
+			if (togglePressed &&
+				!m_runtime.gameState.input.commandToggleHeld &&
+				!m_runtime.gameState.command.open)
+			{
+				openCommandChat();
+			}
+			m_runtime.gameState.input.commandToggleHeld = togglePressed;
+
+			bool cancelPressed = glfwGetKey(m_runtime.window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+			if (cancelPressed &&
+				!m_runtime.gameState.input.commandCancelHeld &&
+				m_runtime.gameState.command.open)
+			{
+				closeCommandChat(true);
+			}
+			m_runtime.gameState.input.commandCancelHeld = cancelPressed;
+		}
+
+		void handleSubmittedCommand(const std::string &commandText)
+		{
+			if (commandText.empty())
+			{
+				return;
+			}
+			if (commandText[0] != '/')
+			{
+				pushCommandMessage("Use /command syntax.");
+				return;
+			}
+			if (commandText == "/clear")
+			{
+				m_runtime.worldState.serverMessages.clear();
+				return;
+			}
+			pushCommandMessage(std::string("> ") + commandText);
+			m_runtime.worldClient.sendCommand(commandText);
 		}
 
 		void updateProfiler(size_t visibleChunkCount)
@@ -795,6 +910,7 @@ namespace
 
 		void clearClientWorldState()
 		{
+			closeCommandChat(false);
 			ClientWorldSystem::clear(m_runtime.worldState, m_runtime.chunkIndirectRenderer);
 			clearClientProfilerState(m_runtime.profilerState, std::chrono::steady_clock::now());
 		}

@@ -82,14 +82,4 @@ struct WorldFrontier
 	WorldGenerationMode mode = WorldGenerationMode::ActivityFrontier;
 };
 
-inline int perimeterChunkCount(const ChunkBounds &bounds)
-{
-	int side = bounds.widthChunks();
-	if (side <= 1)
-	{
-		return side;
-	}
-	return 4 * side - 4;
-}
-
 #endif

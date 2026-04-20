@@ -302,6 +302,9 @@ LoginScreenPollResult LoginScreen::pollConnection(WorldClient &worldClient,
 	}
 
 	camera.Position = worldClient.localPlayer().state.position;
+	camera.Yaw = 90.0f;
+	camera.Pitch = 0.0f;
+	camera.ProcessMouseMovement(0.0f, 0.0f);
 	m_statusMessage.clear();
 	m_errorMessage.clear();
 	if (window != nullptr)

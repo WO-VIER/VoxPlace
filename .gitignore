@@ -1,7 +1,7 @@
 .cache
 .PVS-Studio
 .PVS-Studio/
-.agents/
+.agent*/
 notes/
 build*
 *.pdf
@@ -23,3 +23,6 @@ vcpkg_installed/
 thirdparty/libsodium/src/libsodium/include/sodium/version.h
 *.tracy
 bench*
+graphify-out/
+*opencode*
+*imgui*

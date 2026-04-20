@@ -6,6 +6,7 @@
 #include <enet/enet.h>
 
 #include <chrono>
+#include <cstring>
 #include <iostream>
 #include <utility>
 
@@ -19,6 +20,32 @@ namespace
 		auto now = std::chrono::system_clock::now().time_since_epoch();
 		return static_cast<uint64_t>(
 			std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+	}
+
+	template <size_t N>
+	std::string packetBufferText(const char (&buffer)[N])
+	{
+		size_t length = 0;
+		while (length < N && buffer[length] != '\0')
+		{
+			length++;
+		}
+		return std::string(buffer, length);
+	}
+
+	template <size_t N>
+	void copyPacketBufferText(const std::string &text, char (&buffer)[N])
+	{
+		std::memset(buffer, 0, sizeof(buffer));
+		size_t copyLength = text.size();
+		if (copyLength >= N)
+		{
+			copyLength = N - 1;
+		}
+		for (size_t index = 0; index < copyLength; index++)
+		{
+			buffer[index] = text[index];
+		}
 	}
 }
 
@@ -376,12 +403,17 @@ const Player &WorldClient::localPlayer() const
 
 uint64_t WorldClient::remainingBlockActionCooldownMs() const
 {
+	return remainingServerCooldownMs(m_impl->localPlayer.state.blockActionReadyAtMs);
+}
+
+uint64_t WorldClient::remainingServerCooldownMs(uint64_t readyAtMs) const
+{
 	uint64_t nowMs = m_impl->estimatedServerNowMs();
-	if (m_impl->localPlayer.state.blockActionReadyAtMs <= nowMs)
+	if (readyAtMs <= nowMs)
 	{
 		return 0;
 	}
-	return m_impl->localPlayer.state.blockActionReadyAtMs - nowMs;
+	return readyAtMs - nowMs;
 }
 
 const std::string &WorldClient::lastConnectionError() const
@@ -469,6 +501,20 @@ void WorldClient::sendBreakBlock(int worldX, int worldY, int worldZ)
 		m_impl->estimatedServerNowMs() + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
 }
 
+void WorldClient::sendCommand(const std::string &commandText)
+{
+	if (!m_impl->connected || m_impl->peer == nullptr)
+	{
+		return;
+	}
+
+	CommandRequestMessage message;
+	copyPacketBufferText(commandText, message.text);
+	std::vector<uint8_t> payload = encodeCommandRequest(message);
+	ENetPacket *packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
+	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
+}
+
 void WorldClient::sendPlayerMoveUpdate(const glm::vec3 &position, const glm::vec3 &lookDirection)
 {
 	if (!m_impl->connected || m_impl->peer == nullptr)
@@ -524,6 +570,10 @@ void WorldClient::handlePacket(const uint8_t *data, size_t size)
 			return;
 		}
 		m_impl->applyPlayerState(message);
+		WorldClientEvent event;
+		event.type = WorldClientEvent::Type::PlayerStateUpdated;
+		event.playerState = message;
+		pushEvent(event);
 		return;
 	}
 
@@ -568,6 +618,34 @@ void WorldClient::handlePacket(const uint8_t *data, size_t size)
 		WorldClientEvent event;
 		event.type = WorldClientEvent::Type::BlockUpdated;
 		event.blockUpdate = message;
+		pushEvent(event);
+		return;
+	}
+
+	if (type == PacketType::ServerChatMessage)
+	{
+		ServerChatMessage message;
+		if (!decodeServerChatMessage(data, size, message))
+		{
+			return;
+		}
+		WorldClientEvent event;
+		event.type = WorldClientEvent::Type::ServerMessageReceived;
+		event.serverMessage = packetBufferText(message.text);
+		pushEvent(event);
+		return;
+	}
+
+	if (type == PacketType::ExpansionStatus)
+	{
+		ExpansionStatusMessage message;
+		if (!decodeExpansionStatus(data, size, message))
+		{
+			return;
+		}
+		WorldClientEvent event;
+		event.type = WorldClientEvent::Type::ExpansionStatusUpdated;
+		event.expansionStatus = message;
 		pushEvent(event);
 		return;
 	}

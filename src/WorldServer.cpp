@@ -19,6 +19,7 @@
 #include <enet/enet.h>
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -56,6 +57,10 @@ namespace
 	constexpr size_t CLASSIC_MAX_CHUNK_UNLOADS_PER_TICK = 32;
 	constexpr int INITIAL_PLAYABLE_RADIUS = 1;
 	constexpr int INITIAL_PADDING_CHUNKS = 0;
+	constexpr uint64_t EXPANSION_VOTE_TIMEOUT_MS = 30000;
+	constexpr uint64_t EXPANSION_BASE_COOLDOWN_MS = 30000;
+	constexpr uint64_t EXPANSION_MAX_COOLDOWN_MS = 15ull * 60ull * 1000ull;
+	constexpr int SPAWN_CLEARANCE_BLOCKS = 3;
 	volatile std::sig_atomic_t gWorldServerSignalStopRequested = 0;
 
 		size_t computeWorkerCount(size_t requestedWorkerCount)
@@ -110,6 +115,59 @@ namespace
 		auto now = std::chrono::system_clock::now().time_since_epoch();
 		return static_cast<uint64_t>(
 			std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+	}
+
+	template <size_t N>
+	std::string packetBufferText(const char (&buffer)[N])
+	{
+		size_t length = 0;
+		while (length < N && buffer[length] != '\0')
+		{
+			length++;
+		}
+		return std::string(buffer, length);
+	}
+
+	template <size_t N>
+	void copyPacketText(const std::string &text, char (&buffer)[N])
+	{
+		for (size_t index = 0; index < N; index++)
+		{
+			buffer[index] = '\0';
+		}
+		size_t copyLength = text.size();
+		if (copyLength >= N)
+		{
+			copyLength = N - 1;
+		}
+		for (size_t index = 0; index < copyLength; index++)
+		{
+			buffer[index] = text[index];
+		}
+	}
+
+	std::string trimCommandText(const std::string &text)
+	{
+		size_t begin = 0;
+		while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0)
+		{
+			begin++;
+		}
+		size_t end = text.size();
+		while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0)
+		{
+			end--;
+		}
+		return text.substr(begin, end - begin);
+	}
+
+	std::string lowercaseAscii(std::string text)
+	{
+		for (char &character : text)
+		{
+			character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+		}
+		return text;
 	}
 
 	void updateAtomicMax(std::atomic<uint64_t> &target, uint64_t value)
@@ -207,6 +265,15 @@ struct WorldServer::Impl
 		std::vector<uint8_t> payload;
 	};
 
+	struct ExpansionVoteState
+	{
+		bool active = false;
+		uint64_t cooldownReadyAtMs = 0;
+		uint64_t voteEndsAtMs = 0;
+		std::unordered_set<uint64_t> yesVoterIds;
+		std::unordered_set<uint64_t> noVoterIds;
+	};
+
 		uint16_t port = 0;
 			std::string playerDatabasePath;
 			std::string worldDatabasePath;
@@ -221,9 +288,10 @@ struct WorldServer::Impl
 	PasswordHasher passwordHasher;
 
 	WorldFrontier frontier;
+	ExpansionVoteState expansionVote;
 	std::unordered_map<int64_t, VoxelChunkData> worldChunks;
 	std::unordered_map<int64_t, CachedChunkSnapshotPayload> chunkSnapshotPayloadCache;
-	std::unordered_set<int64_t> activeChunkKeys;
+	uint64_t totalBlockActions = 0;
 	std::unordered_map<ENetPeer *, ClientSession> clients;
 	std::unordered_map<ENetPacket *, PendingChunkPacket> pendingChunkPackets;
 	std::unordered_map<std::string, uint64_t> activeUsernames;
@@ -499,20 +567,6 @@ struct WorldServer::Impl
 				  << " generated chunk(s)" << std::endl;
 	}
 
-	int computeActivePlayableChunkCount() const
-	{
-		int activePlayableChunkCount = 0;
-		for (int64_t key : activeChunkKeys)
-		{
-			ChunkCoord coord = chunkCoordFromKey(key);
-			if (frontier.playableBounds.containsChunk(coord))
-			{
-				activePlayableChunkCount++;
-			}
-		}
-		return activePlayableChunkCount;
-	}
-
 	void updateExpansionProgress()
 	{
 		if (generationMode == WorldGenerationMode::ClassicStreaming)
@@ -522,8 +576,9 @@ struct WorldServer::Impl
 			return;
 		}
 
-		frontier.activePlayableChunkCount = computeActivePlayableChunkCount();
-		frontier.requiredActiveChunkCount = perimeterChunkCount(frontier.playableBounds);
+		frontier.activePlayableChunkCount = totalBlockActions;
+		int width = frontier.playableBounds.widthChunks();
+		frontier.requiredActiveChunkCount = 20 * width * width;
 	}
 
 	bool usesClassicStreaming() const
@@ -675,6 +730,10 @@ struct WorldServer::Impl
 	void tick()
 	{
 		ZoneScopedN("Server Tick");
+		if (expansionVote.active && systemNowMs() >= expansionVote.voteEndsAtMs)
+		{
+			failExpansionVote("Expansion failed.");
+		}
 		flushDirtyChunks(DEFAULT_MAX_CHUNK_SAVES_PER_TICK);
 		unloadColdChunks(unloadChunksBudgetForTick());
 		logWorkerProfileWindowIfNeeded();
@@ -707,10 +766,6 @@ struct WorldServer::Impl
 
 		bool canUnloadChunkNow(int64_t key) const
 		{
-			if (activeChunkKeys.find(key) != activeChunkKeys.end())
-		{
-			return false;
-		}
 		if (dirtyChunkKeys.find(key) != dirtyChunkKeys.end())
 		{
 			return false;
@@ -1101,12 +1156,20 @@ struct WorldServer::Impl
 		auto sessionIt = clients.find(peer);
 		if (sessionIt != clients.end())
 		{
+			uint64_t playerId = sessionIt->second.playerContext.player.profile.playerId;
 			savePlayerForSession(sessionIt->second);
 			if (!sessionIt->second.playerContext.usernameKey.empty())
 			{
 				activeUsernames.erase(sessionIt->second.playerContext.usernameKey);
 			}
 			clients.erase(sessionIt);
+			expansionVote.yesVoterIds.erase(playerId);
+			expansionVote.noVoterIds.erase(playerId);
+			if (expansionVote.active)
+			{
+				broadcastExpansionStatus();
+				evaluateExpansionVote();
+			}
 		}
 		std::cout << "Client disconnected" << std::endl;
 	}
@@ -1136,6 +1199,293 @@ struct WorldServer::Impl
 		}
 
 		sendReliable(session.peer, encodeServerProfile(message));
+	}
+
+	size_t authenticatedClientCount() const
+	{
+		size_t count = 0;
+		for (const auto &entry : clients)
+		{
+			if (entry.second.playerContext.playerSession.authenticated)
+			{
+				count++;
+			}
+		}
+		return count;
+	}
+
+	int expansionRingLevel() const
+	{
+		int width = frontier.playableBounds.widthChunks();
+		if (width <= 3)
+		{
+			return 0;
+		}
+		return (width - 3) / 2;
+	}
+
+	uint64_t expansionCooldownMs() const
+	{
+		// Chaque anneau jouable ajoute un palier. On double donc le cooldown
+		// pour freiner les expansions lointaines qui coûtent plus de génération.
+		uint64_t cooldown = EXPANSION_BASE_COOLDOWN_MS;
+		for (int level = 0; level < expansionRingLevel(); level++)
+		{
+			if (cooldown >= EXPANSION_MAX_COOLDOWN_MS / 2)
+			{
+				return EXPANSION_MAX_COOLDOWN_MS;
+			}
+			cooldown *= 2;
+		}
+		return cooldown;
+	}
+
+	ExpansionStatusMessage buildExpansionStatusMessage() const
+	{
+		ExpansionStatusMessage message;
+		message.cooldownReadyAtMs = expansionVote.cooldownReadyAtMs;
+		message.serverNowMs = systemNowMs();
+		message.votesCast = static_cast<uint32_t>(
+			expansionVote.yesVoterIds.size() + expansionVote.noVoterIds.size());
+		message.yesVotes = static_cast<uint32_t>(expansionVote.yesVoterIds.size());
+		message.eligiblePlayers = static_cast<uint32_t>(authenticatedClientCount());
+		if (expansionVote.active)
+		{
+			message.voteActive = 1;
+		}
+		return message;
+	}
+
+	int findSpawnWorldY(int worldX, int worldZ) const
+	{
+		int chunkX = floorDiv(worldX, CHUNK_SIZE_X);
+		int chunkZ = floorDiv(worldZ, CHUNK_SIZE_Z);
+		auto worldIt = worldChunks.find(chunkKey(chunkX, chunkZ));
+		if (worldIt == worldChunks.end())
+		{
+			return 35 + SPAWN_CLEARANCE_BLOCKS;
+		}
+		int localX = floorMod(worldX, CHUNK_SIZE_X);
+		int localZ = floorMod(worldZ, CHUNK_SIZE_Z);
+		for (int worldY = CHUNK_SIZE_Y - 1; worldY >= 0; worldY--)
+		{
+			if (worldIt->second.getBlock(localX, worldY, localZ) == VOXEL_AIR)
+			{
+				continue;
+			}
+			int spawnY = worldY + SPAWN_CLEARANCE_BLOCKS;
+			if (spawnY < CHUNK_SIZE_Y)
+			{
+				return spawnY;
+			}
+			return CHUNK_SIZE_Y - 1;
+		}
+		return SPAWN_CLEARANCE_BLOCKS;
+	}
+
+	void placePlayerAtSpawn(Player &player) const
+	{
+		player.state.position.x = 0.0f;
+		player.state.position.y = static_cast<float>(findSpawnWorldY(0, 0));
+		player.state.position.z = 0.0f;
+	}
+
+	void sendExpansionStatus(ClientSession &session)
+	{
+		if (!session.playerContext.playerSession.authenticated)
+		{
+			return;
+		}
+		sendReliable(session.peer, encodeExpansionStatus(buildExpansionStatusMessage()));
+	}
+
+	void broadcastExpansionStatus()
+	{
+		broadcastReliable(encodeExpansionStatus(buildExpansionStatusMessage()));
+	}
+
+	void sendServerMessage(ClientSession &session, const std::string &text)
+	{
+		if (!session.playerContext.playerSession.authenticated)
+		{
+			return;
+		}
+		ServerChatMessage message;
+		copyPacketText(text, message.text);
+		sendReliable(session.peer, encodeServerChatMessage(message));
+	}
+
+	void broadcastServerMessage(const std::string &text)
+	{
+		ServerChatMessage message;
+		copyPacketText(text, message.text);
+		broadcastReliable(encodeServerChatMessage(message));
+	}
+
+	void clearExpansionVote()
+	{
+		expansionVote.active = false;
+		expansionVote.voteEndsAtMs = 0;
+		expansionVote.yesVoterIds.clear();
+		expansionVote.noVoterIds.clear();
+	}
+
+	void failExpansionVote(const std::string &reason)
+	{
+		clearExpansionVote();
+		broadcastExpansionStatus();
+		broadcastServerMessage(reason);
+	}
+
+	void evaluateExpansionVote()
+	{
+		if (!expansionVote.active)
+		{
+			return;
+		}
+		if (!expansionVote.noVoterIds.empty())
+		{
+			failExpansionVote("Expansion failed.");
+			return;
+		}
+		size_t eligiblePlayers = authenticatedClientCount();
+		if (eligiblePlayers == 0)
+		{
+			clearExpansionVote();
+			broadcastExpansionStatus();
+			return;
+		}
+		if (expansionVote.yesVoterIds.size() < eligiblePlayers)
+		{
+			return;
+		}
+		broadcastServerMessage("Expansion approved.");
+		expandWorldOneRing();
+	}
+
+	void startExpansionVote(ClientSession &session)
+	{
+		if (usesClassicStreaming())
+		{
+			sendServerMessage(session, "Expansion voting is only available in ActivityFrontier mode.");
+			return;
+		}
+		if (expansionVote.active)
+		{
+			sendServerMessage(session, "Expansion vote already in progress. Use /expand y or /expand n.");
+			return;
+		}
+		uint64_t nowMs = systemNowMs();
+		if (nowMs < expansionVote.cooldownReadyAtMs)
+		{
+			sendServerMessage(session, "Expansion is on cooldown.");
+			sendExpansionStatus(session);
+			return;
+		}
+		clearExpansionVote();
+		expansionVote.active = true;
+		expansionVote.voteEndsAtMs = nowMs + EXPANSION_VOTE_TIMEOUT_MS;
+		expansionVote.yesVoterIds.insert(session.playerContext.player.profile.playerId);
+		broadcastServerMessage(
+			session.playerContext.player.profile.username +
+			" started an expansion vote. Use /expand y or /expand n.");
+		broadcastExpansionStatus();
+		evaluateExpansionVote();
+	}
+
+	void registerExpansionVote(ClientSession &session, bool approve)
+	{
+		if (!expansionVote.active)
+		{
+			sendServerMessage(session, "No expansion vote is active.");
+			return;
+		}
+		uint64_t playerId = session.playerContext.player.profile.playerId;
+		if (expansionVote.yesVoterIds.find(playerId) != expansionVote.yesVoterIds.end() ||
+			expansionVote.noVoterIds.find(playerId) != expansionVote.noVoterIds.end())
+		{
+			sendServerMessage(session, "You already voted for this expansion.");
+			return;
+		}
+		if (approve)
+		{
+			expansionVote.yesVoterIds.insert(playerId);
+			broadcastServerMessage(session.playerContext.player.profile.username + " voted yes.");
+		}
+		else
+		{
+			expansionVote.noVoterIds.insert(playerId);
+			broadcastServerMessage(session.playerContext.player.profile.username + " voted no.");
+		}
+		broadcastExpansionStatus();
+		evaluateExpansionVote();
+	}
+
+	void teleportToSpawn(ClientSession &session)
+	{
+		placePlayerAtSpawn(session.playerContext.player);
+		sendPlayerState(session);
+		sendServerMessage(session, "Teleported to spawn.");
+	}
+
+	void resetExpansionCooldown(ClientSession &session)
+	{
+		expansionVote.cooldownReadyAtMs = 0;
+		broadcastExpansionStatus();
+		sendServerMessage(session, "Expand cooldown reset.");
+	}
+
+	void resetBlockCooldown(ClientSession &session)
+	{
+		session.playerContext.player.state.blockActionReadyAtMs = 0;
+		sendPlayerState(session);
+		sendServerMessage(session, "Block cooldown reset.");
+	}
+
+	void handleCommandRequest(ENetPeer *peer, const CommandRequestMessage &request)
+	{
+		auto sessionIt = clients.find(peer);
+		if (sessionIt == clients.end())
+		{
+			return;
+		}
+		ClientSession &session = sessionIt->second;
+		std::string command = lowercaseAscii(trimCommandText(packetBufferText(request.text)));
+		if (command.empty())
+		{
+			return;
+		}
+		if (command == "/expand")
+		{
+			startExpansionVote(session);
+			return;
+		}
+		if (command == "/expand y" || command == "/expand yes")
+		{
+			registerExpansionVote(session, true);
+			return;
+		}
+		if (command == "/expand n" || command == "/expand no")
+		{
+			registerExpansionVote(session, false);
+			return;
+		}
+		if (command == "/tp spawn")
+		{
+			teleportToSpawn(session);
+			return;
+		}
+		if (command == "/resetexpandcooldown")
+		{
+			resetExpansionCooldown(session);
+			return;
+		}
+		if (command == "/resetcooldown")
+		{
+			resetBlockCooldown(session);
+			return;
+		}
+		sendServerMessage(session, "Unknown command.");
 	}
 
 	bool savePlayerForSession(ClientSession &session)
@@ -1459,6 +1809,16 @@ struct WorldServer::Impl
 		}
 
 		session.playerContext.player = loadedPlayer;
+		if (createdPlayer)
+		{
+			placePlayerAtSpawn(session.playerContext.player);
+			if (!playerTable.savePlayer(session.playerContext.player))
+			{
+				std::cerr << "Failed to persist spawn for new player "
+						  << trimmedUsername
+						  << ": " << playerTable.lastError() << std::endl;
+			}
+		}
 		if (!createdPlayer)
 		{
 			if (!storedPasswordHash.empty())
@@ -1502,6 +1862,11 @@ struct WorldServer::Impl
 		response.blockActionReadyAtMs = session.playerContext.player.state.blockActionReadyAtMs;
 		sendReliable(peer, encodeLoginResponse(response));
 		sendReliable(peer, encodeWorldFrontier(frontier));
+		sendExpansionStatus(session);
+		if (expansionVote.active)
+		{
+			broadcastExpansionStatus();
+		}
 
 		std::cout << "Player authenticated: " << trimmedUsername
 				  << " id=" << session.playerContext.player.profile.playerId;
@@ -1588,6 +1953,17 @@ struct WorldServer::Impl
 				return;
 			}
 			handleBlockAction(peer, request);
+			return;
+		}
+
+		if (type == PacketType::CommandRequest)
+		{
+			CommandRequestMessage request;
+			if (!decodeCommandRequest(data, size, request))
+			{
+				return;
+			}
+			handleCommandRequest(peer, request);
 			return;
 		}
 
@@ -1713,28 +2089,6 @@ struct WorldServer::Impl
 		update.revision = worldIt->second.revision;
 		broadcastReliable(encodeBlockUpdateBroadcast(update));
 		sendPlayerState(session);
-
-		if (usesClassicStreaming())
-		{
-			return;
-		}
-
-		int previousActiveCount = frontier.activePlayableChunkCount;
-		activeChunkKeys.insert(key);
-		updateExpansionProgress();
-
-		if (frontier.activePlayableChunkCount != previousActiveCount)
-		{
-			broadcastReliable(encodeWorldFrontier(frontier));
-			std::cout << "Expansion progress: "
-					  << frontier.activePlayableChunkCount << " / "
-					  << frontier.requiredActiveChunkCount << std::endl;
-		}
-
-		if (shouldExpandPlayableBounds())
-		{
-			expandWorldOneRing();
-		}
 	}
 
 	void handlePlayerMoveUpdate(ENetPeer *peer, const PlayerMoveUpdateMessage &movement)
@@ -1796,6 +2150,9 @@ struct WorldServer::Impl
 		ChunkBounds previousGenerated = frontier.generatedBounds;
 		frontier.playableBounds = frontier.playableBounds.expanded(1);
 		frontier.generatedBounds = frontier.playableBounds.expanded(frontier.paddingChunks);
+		clearExpansionVote();
+		expansionVote.cooldownReadyAtMs = systemNowMs() + expansionCooldownMs();
+		totalBlockActions = 0;
 		updateExpansionProgress();
 
 		for (int cx = frontier.generatedBounds.minChunkX; cx < frontier.generatedBounds.maxChunkXExclusive; cx++)
@@ -1811,6 +2168,7 @@ struct WorldServer::Impl
 		}
 
 		broadcastReliable(encodeWorldFrontier(frontier));
+		broadcastExpansionStatus();
 		std::cout << "Expanded playable bounds to "
 				  << frontier.playableBounds.widthChunks() << "x"
 				  << frontier.playableBounds.depthChunks() << " chunks" << std::endl;

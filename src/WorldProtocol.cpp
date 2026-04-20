@@ -534,6 +534,51 @@ bool decodePlayerMoveUpdate(const uint8_t *data, size_t size, PlayerMoveUpdateMe
 	return readValue(data, size, offset, message);
 }
 
+std::vector<uint8_t> encodeCommandRequest(const CommandRequestMessage &message)
+{
+	return encodeWithType(PacketType::CommandRequest, message);
+}
+
+bool decodeCommandRequest(const uint8_t *data, size_t size, CommandRequestMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::CommandRequest, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
+std::vector<uint8_t> encodeServerChatMessage(const ServerChatMessage &message)
+{
+	return encodeWithType(PacketType::ServerChatMessage, message);
+}
+
+bool decodeServerChatMessage(const uint8_t *data, size_t size, ServerChatMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::ServerChatMessage, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
+std::vector<uint8_t> encodeExpansionStatus(const ExpansionStatusMessage &message)
+{
+	return encodeWithType(PacketType::ExpansionStatus, message);
+}
+
+bool decodeExpansionStatus(const uint8_t *data, size_t size, ExpansionStatusMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::ExpansionStatus, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
 std::vector<uint8_t> encodeServerProfile(const ServerProfileMessage &message)
 {
 	return encodeWithType(PacketType::ServerProfile, message);
@@ -583,6 +628,12 @@ const char *packetTypeName(PacketType type)
 		return "ChunkSnapshotSectionsZstd";
 	case PacketType::ServerProfile:
 		return "ServerProfile";
+	case PacketType::CommandRequest:
+		return "CommandRequest";
+	case PacketType::ServerChatMessage:
+		return "ServerChatMessage";
+	case PacketType::ExpansionStatus:
+		return "ExpansionStatus";
 	}
 	return "Unknown";
 }

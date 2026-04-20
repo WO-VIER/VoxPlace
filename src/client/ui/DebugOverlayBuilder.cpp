@@ -59,6 +59,8 @@ DebugOverlayData buildDebugOverlayData(const DebugOverlayBuildInputs &inputs)
 	data.indirectArenaUsedFaces = chunkIndirectRenderer.arenaUsedFaces;
 	data.indirectLargestFreeSpan = chunkIndirectRenderer.largestFreeFaceSpan;
 	data.compactArenaRequested = inputs.compactArenaRequested;
+	data.resetExpansionCooldownRequested = inputs.resetExpansionCooldownRequested;
+	data.resetBlockCooldownRequested = inputs.resetBlockCooldownRequested;
 	data.meshWorkerCount = chunkMesher.workerCount();
 	data.trackedJobs = worldState.pendingMeshRevisions.size();
 	data.queuedJobs = chunkMesher.pendingJobCount();

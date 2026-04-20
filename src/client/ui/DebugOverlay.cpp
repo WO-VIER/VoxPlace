@@ -115,6 +115,21 @@ void renderDebugOverlay(bool visible, const DebugOverlayData &data)
 	}
 
 	ImGui::Separator();
+	if (data.resetExpansionCooldownRequested != nullptr)
+	{
+		if (ImGui::Button("Reset Expand Cooldown"))
+		{
+			*data.resetExpansionCooldownRequested = true;
+		}
+	}
+	if (data.resetBlockCooldownRequested != nullptr)
+	{
+		if (ImGui::Button("Reset Block Cooldown"))
+		{
+			*data.resetBlockCooldownRequested = true;
+		}
+	}
+	ImGui::Separator();
 	ImGui::Text("Camera: (%.1f, %.1f, %.1f)", data.cameraX, data.cameraY, data.cameraZ);
 	ImGui::Text("Heading: %s", data.headingText);
 	if (data.cameraSpeed != nullptr)
