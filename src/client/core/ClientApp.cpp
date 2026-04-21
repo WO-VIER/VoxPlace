@@ -589,7 +589,7 @@ namespace
 					m_runtime.gameState.appState == ClientAppState::InGame,
 					m_runtime.gameState.command.open,
 					m_runtime.gameState.command.focusRequested,
-					m_runtime.worldState.serverMessages,
+					m_runtime.worldState.chatMessages,
 					m_runtime.gameState.command.inputBuffer,
 					sizeof(m_runtime.gameState.command.inputBuffer),
 					submittedCommand))
@@ -605,10 +605,16 @@ namespace
 			{
 				return;
 			}
-			m_runtime.worldState.serverMessages.push_back(message);
-			while (m_runtime.worldState.serverMessages.size() > 8)
+			ClientChatMessage chatMessage;
+			chatMessage.kind = ServerChatMessageKind::System;
+			chatMessage.text = message;
+			auto now = std::chrono::system_clock::now().time_since_epoch();
+			chatMessage.receivedAtMs = static_cast<uint64_t>(
+				std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+			m_runtime.worldState.chatMessages.push_back(chatMessage);
+			while (m_runtime.worldState.chatMessages.size() > 64)
 			{
-				m_runtime.worldState.serverMessages.pop_front();
+				m_runtime.worldState.chatMessages.pop_front();
 			}
 		}
 
@@ -662,12 +668,12 @@ namespace
 			}
 			if (commandText[0] != '/')
 			{
-				pushCommandMessage("Use /command syntax.");
+				m_runtime.worldClient.sendChatMessage(commandText);
 				return;
 			}
 			if (commandText == "/clear")
 			{
-				m_runtime.worldState.serverMessages.clear();
+				m_runtime.worldState.chatMessages.clear();
 				return;
 			}
 			pushCommandMessage(std::string("> ") + commandText);

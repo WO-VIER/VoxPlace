@@ -32,8 +32,11 @@ enum class PacketType : uint8_t
 	ChunkSnapshotSectionsZstd = 14,
 	ServerProfile = 15,
 	CommandRequest = 16,
-	ServerChatMessage = 17,
-	ExpansionStatus = 18
+		ServerChatMessage = 17,
+		ExpansionStatus = 18,
+		ChatMessageRequest = 19,
+		AccountDeleteRequest = 20,
+		AccountDeleteResponse = 21
 };
 
 enum class BlockActionType : uint8_t
@@ -48,6 +51,22 @@ enum class LoginStatus : uint8_t
 	InvalidUsername = 2,
 	UsernameAlreadyInUse = 3,
 	InvalidCredentials = 4
+};
+
+enum class AccountDeleteStatus : uint8_t
+{
+	Deleted = 1,
+	InvalidUsername = 2,
+	InvalidCredentials = 3,
+	UsernameAlreadyInUse = 4,
+	StorageError = 5
+};
+
+enum class ServerChatMessageKind : uint8_t
+{
+	Player = 1,
+	System = 2,
+	Error = 3
 };
 
 struct HelloMessage
@@ -73,6 +92,17 @@ struct LoginResponseMessage
 	float positionZ = 0.0f;
 	uint64_t blockActionReadyAtMs = 0;
 	uint64_t serverNowMs = 0;
+};
+
+struct AccountDeleteRequestMessage
+{
+	char username[PLAYER_USERNAME_MAX_LENGTH + 1] = {};
+	char password[PLAYER_PASSWORD_MAX_LENGTH + 1] = {};
+};
+
+struct AccountDeleteResponseMessage
+{
+	AccountDeleteStatus status = AccountDeleteStatus::InvalidCredentials;
 };
 
 struct ChunkRequestMessage
@@ -130,8 +160,15 @@ struct CommandRequestMessage
 	char text[COMMAND_REQUEST_TEXT_MAX_LENGTH + 1] = {};
 };
 
+struct ChatMessageRequestMessage
+{
+	char text[SERVER_CHAT_TEXT_MAX_LENGTH + 1] = {};
+};
+
 struct ServerChatMessage
 {
+	ServerChatMessageKind kind = ServerChatMessageKind::System;
+	char username[PLAYER_USERNAME_MAX_LENGTH + 1] = {};
 	char text[SERVER_CHAT_TEXT_MAX_LENGTH + 1] = {};
 };
 
@@ -202,6 +239,12 @@ bool decodeLoginRequest(const uint8_t *data, size_t size, LoginRequestMessage &m
 std::vector<uint8_t> encodeLoginResponse(const LoginResponseMessage &message);
 bool decodeLoginResponse(const uint8_t *data, size_t size, LoginResponseMessage &message);
 
+std::vector<uint8_t> encodeAccountDeleteRequest(const AccountDeleteRequestMessage &message);
+bool decodeAccountDeleteRequest(const uint8_t *data, size_t size, AccountDeleteRequestMessage &message);
+
+std::vector<uint8_t> encodeAccountDeleteResponse(const AccountDeleteResponseMessage &message);
+bool decodeAccountDeleteResponse(const uint8_t *data, size_t size, AccountDeleteResponseMessage &message);
+
 std::vector<uint8_t> encodeWorldFrontier(const WorldFrontier &frontier);
 bool decodeWorldFrontier(const uint8_t *data, size_t size, WorldFrontier &frontier);
 
@@ -229,6 +272,9 @@ bool decodePlayerMoveUpdate(const uint8_t *data, size_t size, PlayerMoveUpdateMe
 
 std::vector<uint8_t> encodeCommandRequest(const CommandRequestMessage &message);
 bool decodeCommandRequest(const uint8_t *data, size_t size, CommandRequestMessage &message);
+
+std::vector<uint8_t> encodeChatMessageRequest(const ChatMessageRequestMessage &message);
+bool decodeChatMessageRequest(const uint8_t *data, size_t size, ChatMessageRequestMessage &message);
 
 std::vector<uint8_t> encodeServerChatMessage(const ServerChatMessage &message);
 bool decodeServerChatMessage(const uint8_t *data, size_t size, ServerChatMessage &message);

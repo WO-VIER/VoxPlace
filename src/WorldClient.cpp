@@ -312,6 +312,150 @@ bool WorldClient::connectToServer(const std::string &hostName,
 	return false;
 }
 
+bool WorldClient::deleteUserOnServer(const std::string &hostName,
+									 uint16_t port,
+									 const std::string &username,
+									 const std::string &password)
+{
+	m_impl->lastConnectionError.clear();
+	if (!m_impl->enetInitialized)
+	{
+		m_impl->lastConnectionError = "ENet client initialization failed";
+		return false;
+	}
+
+	std::string trimmedUsername = trimPlayerUsername(username);
+	PlayerUsernameValidationError usernameError = validatePlayerUsername(trimmedUsername);
+	if (usernameError != PlayerUsernameValidationError::None)
+	{
+		m_impl->lastConnectionError = playerUsernameValidationErrorText(usernameError);
+		return false;
+	}
+	if (password.empty())
+	{
+		m_impl->lastConnectionError = "Password must not be empty";
+		return false;
+	}
+	if (password.size() > PLAYER_PASSWORD_MAX_LENGTH)
+	{
+		m_impl->lastConnectionError = "Password is too long";
+		return false;
+	}
+
+	if (m_impl->host == nullptr)
+	{
+		m_impl->host = enet_host_create(nullptr, 1, 2, 0, 0);
+		if (m_impl->host == nullptr)
+		{
+			m_impl->lastConnectionError = "Failed to create ENet client host";
+			return false;
+		}
+	}
+
+	ENetAddress address{};
+	address.port = port;
+	if (enet_address_set_host(&address, hostName.c_str()) != 0)
+	{
+		m_impl->lastConnectionError = "Failed to resolve server host: " + hostName;
+		return false;
+	}
+
+	m_impl->peer = enet_host_connect(m_impl->host, &address, 2, 0);
+	if (m_impl->peer == nullptr)
+	{
+		m_impl->lastConnectionError = "Failed to create ENet peer";
+		return false;
+	}
+
+	bool deleted = false;
+	ENetEvent event{};
+	if (enet_host_service(m_impl->host, &event, 5000) > 0 &&
+		event.type == ENET_EVENT_TYPE_CONNECT)
+	{
+		AccountDeleteRequestMessage request;
+		(void)copyPlayerUsernameToBuffer(trimmedUsername, request.username);
+		copyPacketBufferText(password, request.password);
+		std::vector<uint8_t> payload = encodeAccountDeleteRequest(request);
+		ENetPacket *packet = enet_packet_create(
+			payload.data(),
+			payload.size(),
+			ENET_PACKET_FLAG_RELIABLE);
+		enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
+		enet_host_flush(m_impl->host);
+
+		auto start = std::chrono::steady_clock::now();
+		bool responseReceived = false;
+		while (!deleted && !responseReceived)
+		{
+			uint64_t elapsedMs = static_cast<uint64_t>(
+				std::chrono::duration_cast<std::chrono::milliseconds>(
+					std::chrono::steady_clock::now() - start)
+					.count());
+			if (elapsedMs >= 5000)
+			{
+				m_impl->lastConnectionError = "Timed out while deleting user";
+				break;
+			}
+			if (enet_host_service(m_impl->host, &event, 250) <= 0)
+			{
+				continue;
+			}
+			if (event.type == ENET_EVENT_TYPE_RECEIVE)
+			{
+				if (event.packet->dataLength > 0 &&
+					static_cast<PacketType>(event.packet->data[0]) == PacketType::AccountDeleteResponse)
+				{
+					responseReceived = true;
+					AccountDeleteResponseMessage response;
+					if (!decodeAccountDeleteResponse(
+							event.packet->data,
+							event.packet->dataLength,
+							response))
+					{
+						m_impl->lastConnectionError = "Failed to decode delete response";
+					}
+					else if (response.status == AccountDeleteStatus::Deleted)
+					{
+						deleted = true;
+					}
+					else if (response.status == AccountDeleteStatus::UsernameAlreadyInUse)
+					{
+						m_impl->lastConnectionError = "User is currently connected";
+					}
+					else if (response.status == AccountDeleteStatus::InvalidUsername)
+					{
+						m_impl->lastConnectionError = "Server rejected username";
+					}
+					else if (response.status == AccountDeleteStatus::StorageError)
+					{
+						m_impl->lastConnectionError = "Server failed to delete user";
+					}
+					else
+					{
+						m_impl->lastConnectionError = "Invalid username/password";
+					}
+				}
+				enet_packet_destroy(event.packet);
+			}
+			else if (event.type == ENET_EVENT_TYPE_DISCONNECT)
+			{
+				m_impl->lastConnectionError = "Disconnected during user delete";
+				break;
+			}
+		}
+	}
+	else
+	{
+		m_impl->lastConnectionError = "Timed out while connecting to server";
+	}
+
+	enet_peer_reset(m_impl->peer);
+	m_impl->peer = nullptr;
+	m_impl->connected = false;
+	m_impl->localPlayer = Player{};
+	return deleted;
+}
+
 void WorldClient::disconnect()
 {
 	if (m_impl->peer == nullptr)
@@ -515,6 +659,20 @@ void WorldClient::sendCommand(const std::string &commandText)
 	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
 }
 
+void WorldClient::sendChatMessage(const std::string &messageText)
+{
+	if (!m_impl->connected || m_impl->peer == nullptr)
+	{
+		return;
+	}
+
+	ChatMessageRequestMessage message;
+	copyPacketBufferText(messageText, message.text);
+	std::vector<uint8_t> payload = encodeChatMessageRequest(message);
+	ENetPacket *packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
+	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
+}
+
 void WorldClient::sendPlayerMoveUpdate(const glm::vec3 &position, const glm::vec3 &lookDirection)
 {
 	if (!m_impl->connected || m_impl->peer == nullptr)
@@ -630,8 +788,8 @@ void WorldClient::handlePacket(const uint8_t *data, size_t size)
 			return;
 		}
 		WorldClientEvent event;
-		event.type = WorldClientEvent::Type::ServerMessageReceived;
-		event.serverMessage = packetBufferText(message.text);
+		event.type = WorldClientEvent::Type::ChatMessageReceived;
+		event.chatMessage = message;
 		pushEvent(event);
 		return;
 	}

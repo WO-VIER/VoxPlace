@@ -362,6 +362,83 @@ bool WorldTable::loadAllChunkKeys(std::vector<int64_t> &outChunkKeys)
 	return true;
 }
 
+bool WorldTable::loadMetaValue(const std::string &key, std::string &outValue)
+{
+	std::lock_guard<std::mutex> lock(m_mutex);
+	m_lastError.clear();
+	outValue.clear();
+	if (m_db == nullptr)
+	{
+		m_lastError = "World database is not open";
+		return false;
+	}
+
+	const char *sql = "SELECT value FROM world_meta WHERE key = ?1;";
+	sqlite3_stmt *statement = nullptr;
+	if (!prepareStatementNoLock(sql, &statement))
+	{
+		return false;
+	}
+	if (sqlite3_bind_text(statement, 1, key.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK)
+	{
+		setLastErrorFromDatabaseNoLock("Failed to bind world meta key");
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	int stepResult = sqlite3_step(statement);
+	if (stepResult == SQLITE_ROW)
+	{
+		const unsigned char *storedValue = sqlite3_column_text(statement, 0);
+		if (storedValue != nullptr)
+		{
+			outValue = reinterpret_cast<const char *>(storedValue);
+		}
+		sqlite3_finalize(statement);
+		return true;
+	}
+	if (stepResult != SQLITE_DONE)
+	{
+		setLastErrorFromDatabaseNoLock("Failed to read world meta value");
+	}
+	sqlite3_finalize(statement);
+	return false;
+}
+
+bool WorldTable::saveMetaValue(const std::string &key, const std::string &value)
+{
+	std::lock_guard<std::mutex> lock(m_mutex);
+	m_lastError.clear();
+	if (m_db == nullptr)
+	{
+		m_lastError = "World database is not open";
+		return false;
+	}
+
+	const char *sql =
+		"INSERT OR REPLACE INTO world_meta (key, value) VALUES (?1, ?2);";
+	sqlite3_stmt *statement = nullptr;
+	if (!prepareStatementNoLock(sql, &statement))
+	{
+		return false;
+	}
+	if (sqlite3_bind_text(statement, 1, key.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
+		sqlite3_bind_text(statement, 2, value.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK)
+	{
+		setLastErrorFromDatabaseNoLock("Failed to bind world meta value");
+		sqlite3_finalize(statement);
+		return false;
+	}
+	if (sqlite3_step(statement) != SQLITE_DONE)
+	{
+		setLastErrorFromDatabaseNoLock("Failed to save world meta value");
+		sqlite3_finalize(statement);
+		return false;
+	}
+	sqlite3_finalize(statement);
+	return true;
+}
+
 bool WorldTable::saveChunk(const VoxelChunkData &chunk)
 {
 	std::vector<VoxelChunkData> chunks;

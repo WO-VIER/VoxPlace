@@ -25,11 +25,16 @@
 #include <condition_variable>
 #include <cstdint>
 #include <csignal>
+#include <ctime>
 #include <deque>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -61,7 +66,17 @@ namespace
 	constexpr uint64_t EXPANSION_BASE_COOLDOWN_MS = 30000;
 	constexpr uint64_t EXPANSION_MAX_COOLDOWN_MS = 15ull * 60ull * 1000ull;
 	constexpr int SPAWN_CLEARANCE_BLOCKS = 3;
+	constexpr const char *SERVER_CONNECTION_LOG_PATH = "logs/server_connections.log";
+	constexpr const char *ACTIVITY_FRONTIER_META_KEY = "activity_frontier_state_v1";
 	volatile std::sig_atomic_t gWorldServerSignalStopRequested = 0;
+
+	struct ActivityFrontierState
+	{
+		ChunkBounds playableBounds;
+		int paddingChunks = 0;
+		uint64_t totalBlockActions = 0;
+		uint64_t cooldownReadyAtMs = 0;
+	};
 
 		size_t computeWorkerCount(size_t requestedWorkerCount)
 		{
@@ -92,19 +107,76 @@ namespace
 			return static_cast<size_t>(reported - 2);
 		}
 
-	ChunkBounds makeSquareBounds(int radiusChunks)
-	{
-		ChunkBounds bounds;
-		bounds.minChunkX = -radiusChunks;
-		bounds.maxChunkXExclusive = radiusChunks + 1;
+		ChunkBounds makeSquareBounds(int radiusChunks)
+		{
+			ChunkBounds bounds;
+			bounds.minChunkX = -radiusChunks;
+			bounds.maxChunkXExclusive = radiusChunks + 1;
 		bounds.minChunkZ = -radiusChunks;
-		bounds.maxChunkZExclusive = radiusChunks + 1;
-		return bounds;
-	}
+			bounds.maxChunkZExclusive = radiusChunks + 1;
+			return bounds;
+		}
 
-	ChunkCoord chunkCoordFromKey(int64_t key)
-	{
-		ChunkCoord coord;
+		bool isValidActivityFrontierState(const ActivityFrontierState &state)
+		{
+			if (state.playableBounds.minChunkX >= state.playableBounds.maxChunkXExclusive)
+			{
+				return false;
+			}
+			if (state.playableBounds.minChunkZ >= state.playableBounds.maxChunkZExclusive)
+			{
+				return false;
+			}
+			if (state.paddingChunks < 0)
+			{
+				return false;
+			}
+			return true;
+		}
+
+		std::string encodeActivityFrontierState(
+			const WorldFrontier &frontier,
+			uint64_t totalBlockActions,
+			uint64_t cooldownReadyAtMs)
+		{
+			std::ostringstream stream;
+			stream << frontier.playableBounds.minChunkX << ' '
+				   << frontier.playableBounds.maxChunkXExclusive << ' '
+				   << frontier.playableBounds.minChunkZ << ' '
+				   << frontier.playableBounds.maxChunkZExclusive << ' '
+				   << frontier.paddingChunks << ' '
+				   << totalBlockActions << ' '
+				   << cooldownReadyAtMs;
+			return stream.str();
+		}
+
+		bool decodeActivityFrontierState(
+			const std::string &value,
+			ActivityFrontierState &state)
+		{
+			std::istringstream stream(value);
+			stream >> state.playableBounds.minChunkX
+				   >> state.playableBounds.maxChunkXExclusive
+				   >> state.playableBounds.minChunkZ
+				   >> state.playableBounds.maxChunkZExclusive
+				   >> state.paddingChunks
+				   >> state.totalBlockActions
+				   >> state.cooldownReadyAtMs;
+			if (stream.fail())
+			{
+				return false;
+			}
+			std::string trailing;
+			if (stream >> trailing)
+			{
+				return false;
+			}
+			return isValidActivityFrontierState(state);
+		}
+
+		ChunkCoord chunkCoordFromKey(int64_t key)
+		{
+			ChunkCoord coord;
 		coord.x = static_cast<int>(key >> 32);
 		coord.z = static_cast<int>(key & 0xFFFFFFFF);
 		return coord;
@@ -317,6 +389,8 @@ struct WorldServer::Impl
 	std::vector<std::thread> workers;
 	size_t workerCount = 0;
 	bool profileWorkers = false;
+	std::filesystem::path connectionLogPath = SERVER_CONNECTION_LOG_PATH;
+	std::ofstream connectionLogFile;
 	std::chrono::steady_clock::time_point profileWindowStart;
 	std::atomic<size_t> profileReadyChunks = 0;
 	std::atomic<size_t> profileLoadedChunks = 0;
@@ -392,21 +466,28 @@ struct WorldServer::Impl
 					playerTable.close();
 					return false;
 				}
-				if (!persistGeneratedChunks)
-				{
-					if (!loadPersistedChunkKeys())
+					if (!persistGeneratedChunks)
 					{
-						std::cerr << "Failed to preload modified chunk keys: "
-								  << worldTable.lastErrorCopy() << std::endl;
-						worldTable.close();
-						playerTable.close();
-						return false;
-					}
+						if (!loadPersistedChunkKeys())
+						{
+							std::cerr << "Failed to preload modified chunk keys: "
+									  << worldTable.lastErrorCopy() << std::endl;
+							worldTable.close();
+					playerTable.close();
+					return false;
 				}
-
-			if (enet_initialize() != 0)
+			}
+			if (!loadActivityFrontierState())
 			{
-			return false;
+				worldTable.close();
+				playerTable.close();
+				return false;
+			}
+			initializeConnectionLog();
+
+		if (enet_initialize() != 0)
+		{
+		return false;
 		}
 		enetInitialized = true;
 
@@ -455,12 +536,13 @@ struct WorldServer::Impl
 		if (!running)
 		{
 			integrateReadyChunks((std::numeric_limits<size_t>::max)());
-			flushDirtyChunks((std::numeric_limits<size_t>::max)());
-			stopSaveWorker();
-			saveAllAuthenticatedPlayers();
-			cleanupNetwork();
-			return;
-		}
+				flushDirtyChunks((std::numeric_limits<size_t>::max)());
+				stopSaveWorker();
+				saveAllAuthenticatedPlayers();
+				saveActivityFrontierState();
+				cleanupNetwork();
+				return;
+			}
 
 		running = false;
 		taskCv.notify_all();
@@ -473,11 +555,12 @@ struct WorldServer::Impl
 		}
 		workers.clear();
 		integrateReadyChunks((std::numeric_limits<size_t>::max)());
-		flushDirtyChunks((std::numeric_limits<size_t>::max)());
-		stopSaveWorker();
-		saveAllAuthenticatedPlayers();
-		cleanupNetwork();
-	}
+			flushDirtyChunks((std::numeric_limits<size_t>::max)());
+			stopSaveWorker();
+			saveAllAuthenticatedPlayers();
+			saveActivityFrontierState();
+			cleanupNetwork();
+		}
 
 	void cleanupNetwork()
 	{
@@ -491,6 +574,10 @@ struct WorldServer::Impl
 		{
 			enet_deinitialize();
 			enetInitialized = false;
+		}
+		if (connectionLogFile.is_open())
+		{
+			connectionLogFile.close();
 		}
 		worldTable.close();
 		playerTable.close();
@@ -581,26 +668,94 @@ struct WorldServer::Impl
 		frontier.requiredActiveChunkCount = 20 * width * width;
 	}
 
-	bool usesClassicStreaming() const
-	{
-		if (generationMode == WorldGenerationMode::ClassicStreaming)
+		bool usesClassicStreaming() const
 		{
+			if (generationMode == WorldGenerationMode::ClassicStreaming)
+			{
+				return true;
+			}
+			return false;
+		}
+
+		bool usesActivityFrontier() const
+		{
+			if (generationMode == WorldGenerationMode::ActivityFrontier)
+			{
+				return true;
+			}
+			return false;
+		}
+
+		bool usesOptimizedStreamingBudgets() const
+		{
+			if (generationMode == WorldGenerationMode::ClassicStreaming)
+			{
+				return true;
+			}
+			if (generationMode == WorldGenerationMode::ActivityFrontier)
+			{
+				return true;
+			}
+			return false;
+		}
+
+		bool canStreamChunkRequest(int chunkX, int chunkZ) const
+		{
+			if (usesClassicStreaming())
+			{
+			return true;
+			}
+			return frontier.generatedBounds.containsChunk(chunkX, chunkZ);
+		}
+
+		bool loadActivityFrontierState()
+		{
+			if (!usesActivityFrontier())
+			{
+				return true;
+			}
+			std::string encodedState;
+			if (!worldTable.loadMetaValue(ACTIVITY_FRONTIER_META_KEY, encodedState))
+			{
+				return worldTable.lastErrorCopy().empty();
+			}
+			ActivityFrontierState state;
+			if (!decodeActivityFrontierState(encodedState, state))
+			{
+				std::cerr << "Invalid ActivityFrontier state in world meta" << std::endl;
+				return false;
+			}
+			frontier.playableBounds = state.playableBounds;
+			frontier.paddingChunks = state.paddingChunks;
+			frontier.generatedBounds = frontier.playableBounds.expanded(frontier.paddingChunks);
+			frontier.mode = generationMode;
+			totalBlockActions = state.totalBlockActions;
+			expansionVote.cooldownReadyAtMs = state.cooldownReadyAtMs;
+			updateExpansionProgress();
 			return true;
 		}
-		return false;
-	}
 
-	bool canStreamChunkRequest(int chunkX, int chunkZ) const
-	{
-		if (usesClassicStreaming())
+		bool saveActivityFrontierState()
 		{
-			return true;
+			if (!usesActivityFrontier() || !worldTable.isOpen())
+			{
+				return true;
+			}
+			std::string encodedState = encodeActivityFrontierState(
+				frontier,
+				totalBlockActions,
+				expansionVote.cooldownReadyAtMs);
+			if (worldTable.saveMetaValue(ACTIVITY_FRONTIER_META_KEY, encodedState))
+			{
+				return true;
+			}
+			std::cerr << "Failed to save ActivityFrontier state: "
+					  << worldTable.lastErrorCopy() << std::endl;
+			return false;
 		}
-		return frontier.generatedBounds.containsChunk(chunkX, chunkZ);
-	}
 
-		void workerLoop()
-		{
+			void workerLoop()
+			{
 			while (running)
 			{
 				ChunkCoord coord;
@@ -785,13 +940,13 @@ struct WorldServer::Impl
 		return true;
 	}
 
-	size_t unloadChunksBudgetForTick() const
-	{
-		if (!usesClassicStreaming())
+		size_t unloadChunksBudgetForTick() const
 		{
-			return DEFAULT_MAX_CHUNK_UNLOADS_PER_TICK;
-		}
-		return CLASSIC_MAX_CHUNK_UNLOADS_PER_TICK;
+			if (!usesOptimizedStreamingBudgets())
+			{
+				return DEFAULT_MAX_CHUNK_UNLOADS_PER_TICK;
+			}
+			return CLASSIC_MAX_CHUNK_UNLOADS_PER_TICK;
 	}
 
 	void unloadColdChunks(size_t maxCount)
@@ -1102,12 +1257,12 @@ struct WorldServer::Impl
 		profileSnapshotSectionCount = 0;
 	}
 
-	size_t integratedChunksBudgetForTick()
-	{
-		if (!usesClassicStreaming())
+		size_t integratedChunksBudgetForTick()
 		{
-			return DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK;
-		}
+			if (!usesOptimizedStreamingBudgets())
+			{
+				return DEFAULT_MAX_INTEGRATED_CHUNKS_PER_TICK;
+			}
 
 		size_t readyCount = 0;
 		{
@@ -1143,7 +1298,7 @@ struct WorldServer::Impl
 		// Ce réglage agit surtout sur les envois non fiables d'ENet.
 		// On le garde aligné avec le client pour les essais de streaming agressif.
 		enet_peer_throttle_configure(peer, 5000, 6, 3);
-		
+
 		ClientSession session;
 		session.peer = peer;
 		session.playerContext.playerSession.lastSeenAtMs = systemNowMs();
@@ -1156,13 +1311,20 @@ struct WorldServer::Impl
 		auto sessionIt = clients.find(peer);
 		if (sessionIt != clients.end())
 		{
-			uint64_t playerId = sessionIt->second.playerContext.player.profile.playerId;
-			savePlayerForSession(sessionIt->second);
-			if (!sessionIt->second.playerContext.usernameKey.empty())
+			ClientSession &session = sessionIt->second;
+			uint64_t playerId = session.playerContext.player.profile.playerId;
+			bool wasAuthenticated = session.playerContext.playerSession.authenticated;
+			std::string username = session.playerContext.player.profile.username;
+			savePlayerForSession(session);
+			if (!session.playerContext.usernameKey.empty())
 			{
-				activeUsernames.erase(sessionIt->second.playerContext.usernameKey);
+				activeUsernames.erase(session.playerContext.usernameKey);
 			}
 			clients.erase(sessionIt);
+			if (wasAuthenticated)
+			{
+				broadcastServerMessage(username + " left the server.");
+			}
 			expansionVote.yesVoterIds.erase(playerId);
 			expansionVote.noVoterIds.erase(playerId);
 			if (expansionVote.active)
@@ -1240,6 +1402,74 @@ struct WorldServer::Impl
 		return cooldown;
 	}
 
+	void initializeConnectionLog()
+	{
+		std::error_code error;
+		std::filesystem::path parentDirectory = connectionLogPath.parent_path();
+		if (!parentDirectory.empty())
+		{
+			std::filesystem::create_directories(parentDirectory, error);
+			if (error)
+			{
+				std::cerr << "Failed to create connection log directory: "
+						  << error.message() << std::endl;
+				return;
+			}
+		}
+
+		connectionLogFile.open(connectionLogPath, std::ios::app);
+		if (!connectionLogFile.is_open())
+		{
+					std::cerr << "Failed to open connection log file: "
+						  << connectionLogPath.string() << std::endl;
+		}
+		else
+		{
+			std::cout << "Connection log: " << connectionLogPath.string() << std::endl;
+		}
+	}
+
+	std::string peerAddressString(ENetPeer *peer) const
+	{
+		if (peer == nullptr)
+		{
+			return "unknown";
+		}
+		char hostBuffer[64] = {};
+		if (enet_address_get_host_ip(&peer->address, hostBuffer, sizeof(hostBuffer)) != 0)
+		{
+			return "unknown:" + std::to_string(peer->address.port);
+		}
+		return std::string(hostBuffer) + ":" + std::to_string(peer->address.port);
+	}
+
+	void logSuccessfulLogin(const ClientSession &session, bool createdPlayer)
+	{
+		if (!connectionLogFile.is_open())
+		{
+			return;
+		}
+
+		std::time_t now = std::time(nullptr);
+		std::tm timeInfo{};
+		localtime_r(&now, &timeInfo);
+		connectionLogFile << '[' << std::put_time(&timeInfo, "%Y-%m-%d %H:%M:%S") << "] "
+					  << session.playerContext.player.profile.username
+					  << " id=" << session.playerContext.player.profile.playerId
+					  << " addr=" << peerAddressString(session.peer)
+					  << " status=";
+		if (createdPlayer)
+		{
+			connectionLogFile << "created";
+		}
+		else
+		{
+			connectionLogFile << "loaded";
+		}
+		connectionLogFile << '\n';
+		connectionLogFile.flush();
+	}
+
 	ExpansionStatusMessage buildExpansionStatusMessage() const
 	{
 		ExpansionStatusMessage message;
@@ -1304,22 +1534,56 @@ struct WorldServer::Impl
 		broadcastReliable(encodeExpansionStatus(buildExpansionStatusMessage()));
 	}
 
-	void sendServerMessage(ClientSession &session, const std::string &text)
+	void sendChatMessage(ENetPeer *peer,
+					 ServerChatMessageKind kind,
+					 const std::string &username,
+					 const std::string &text)
+	{
+		ServerChatMessage message;
+		message.kind = kind;
+		copyPlayerUsernameToBuffer(username, message.username);
+		copyPacketText(text, message.text);
+		sendReliable(peer, encodeServerChatMessage(message));
+	}
+
+	void sendServerMessage(ClientSession &session,
+					 const std::string &text,
+					 ServerChatMessageKind kind = ServerChatMessageKind::System)
 	{
 		if (!session.playerContext.playerSession.authenticated)
 		{
 			return;
 		}
-		ServerChatMessage message;
-		copyPacketText(text, message.text);
-		sendReliable(session.peer, encodeServerChatMessage(message));
+		sendChatMessage(session.peer, kind, "", text);
 	}
 
-	void broadcastServerMessage(const std::string &text)
+	void broadcastServerMessage(const std::string &text,
+						 ServerChatMessageKind kind = ServerChatMessageKind::System)
 	{
-		ServerChatMessage message;
-		copyPacketText(text, message.text);
-		broadcastReliable(encodeServerChatMessage(message));
+		for (auto &entry : clients)
+		{
+			if (!entry.second.playerContext.playerSession.authenticated)
+			{
+				continue;
+			}
+			sendChatMessage(entry.first, kind, "", text);
+		}
+	}
+
+	void broadcastPlayerMessage(const ClientSession &session, const std::string &text)
+	{
+		for (auto &entry : clients)
+		{
+			if (!entry.second.playerContext.playerSession.authenticated)
+			{
+				continue;
+			}
+			sendChatMessage(
+				entry.first,
+				ServerChatMessageKind::Player,
+				session.playerContext.player.profile.username,
+				text);
+		}
 	}
 
 	void clearExpansionVote()
@@ -1367,18 +1631,18 @@ struct WorldServer::Impl
 	{
 		if (usesClassicStreaming())
 		{
-			sendServerMessage(session, "Expansion voting is only available in ActivityFrontier mode.");
+			sendServerMessage(session, "Expansion voting is only available in ActivityFrontier mode.", ServerChatMessageKind::Error);
 			return;
 		}
 		if (expansionVote.active)
 		{
-			sendServerMessage(session, "Expansion vote already in progress. Use /expand y or /expand n.");
+			sendServerMessage(session, "Expansion vote already in progress. Use /expand y or /expand n.", ServerChatMessageKind::Error);
 			return;
 		}
 		uint64_t nowMs = systemNowMs();
 		if (nowMs < expansionVote.cooldownReadyAtMs)
 		{
-			sendServerMessage(session, "Expansion is on cooldown.");
+			sendServerMessage(session, "Expansion is on cooldown.", ServerChatMessageKind::Error);
 			sendExpansionStatus(session);
 			return;
 		}
@@ -1397,14 +1661,14 @@ struct WorldServer::Impl
 	{
 		if (!expansionVote.active)
 		{
-			sendServerMessage(session, "No expansion vote is active.");
+			sendServerMessage(session, "No expansion vote is active.", ServerChatMessageKind::Error);
 			return;
 		}
 		uint64_t playerId = session.playerContext.player.profile.playerId;
 		if (expansionVote.yesVoterIds.find(playerId) != expansionVote.yesVoterIds.end() ||
 			expansionVote.noVoterIds.find(playerId) != expansionVote.noVoterIds.end())
 		{
-			sendServerMessage(session, "You already voted for this expansion.");
+			sendServerMessage(session, "You already voted for this expansion.", ServerChatMessageKind::Error);
 			return;
 		}
 		if (approve)
@@ -1428,18 +1692,55 @@ struct WorldServer::Impl
 		sendServerMessage(session, "Teleported to spawn.");
 	}
 
-	void resetExpansionCooldown(ClientSession &session)
-	{
-		expansionVote.cooldownReadyAtMs = 0;
-		broadcastExpansionStatus();
-		sendServerMessage(session, "Expand cooldown reset.");
-	}
+		void resetExpansionCooldown(ClientSession &session)
+		{
+			expansionVote.cooldownReadyAtMs = 0;
+			saveActivityFrontierState();
+			broadcastExpansionStatus();
+			sendServerMessage(session, "Expand cooldown reset.");
+		}
 
 	void resetBlockCooldown(ClientSession &session)
 	{
 		session.playerContext.player.state.blockActionReadyAtMs = 0;
 		sendPlayerState(session);
 		sendServerMessage(session, "Block cooldown reset.");
+	}
+
+	void sendHelp(ClientSession &session)
+	{
+		sendServerMessage(session, "Commands: /expand, /expand [y/n], /connected, /tp spawn, /clear");
+	}
+
+	void sendConnectedCount(ClientSession &session)
+	{
+		sendServerMessage(
+			session,
+			"Connected players: " + std::to_string(authenticatedClientCount()));
+	}
+
+	void handleChatMessageRequest(ENetPeer *peer, const ChatMessageRequestMessage &request)
+	{
+		auto sessionIt = clients.find(peer);
+		if (sessionIt == clients.end())
+		{
+			return;
+		}
+		ClientSession &session = sessionIt->second;
+		std::string text = trimCommandText(packetBufferText(request.text));
+		if (text.empty())
+		{
+			return;
+		}
+		if (text[0] == '/')
+		{
+			sendServerMessage(
+				session,
+				"Use commands with the command channel, not the chat channel.",
+				ServerChatMessageKind::Error);
+			return;
+		}
+		broadcastPlayerMessage(session, text);
 	}
 
 	void handleCommandRequest(ENetPeer *peer, const CommandRequestMessage &request)
@@ -1458,6 +1759,16 @@ struct WorldServer::Impl
 		if (command == "/expand")
 		{
 			startExpansionVote(session);
+			return;
+		}
+		if (command == "/help")
+		{
+			sendHelp(session);
+			return;
+		}
+		if (command == "/connected")
+		{
+			sendConnectedCount(session);
 			return;
 		}
 		if (command == "/expand y" || command == "/expand yes")
@@ -1485,7 +1796,7 @@ struct WorldServer::Impl
 			resetBlockCooldown(session);
 			return;
 		}
-		sendServerMessage(session, "Unknown command.");
+		sendServerMessage(session, "Unknown command.", ServerChatMessageKind::Error);
 	}
 
 	bool savePlayerForSession(ClientSession &session)
@@ -1722,10 +2033,10 @@ struct WorldServer::Impl
 			persistedChunkKeys.insert(key);
 		}
 
-		bool isChunkPendingSave(int64_t key) const
-		{
-			std::lock_guard<std::mutex> lock(saveMutex);
-			auto pendingIt = pendingSaveChunkCounts.find(key);
+			bool isChunkPendingSave(int64_t key) const
+			{
+				std::lock_guard<std::mutex> lock(saveMutex);
+				auto pendingIt = pendingSaveChunkCounts.find(key);
 			if (pendingIt == pendingSaveChunkCounts.end())
 			{
 				return false;
@@ -1733,12 +2044,64 @@ struct WorldServer::Impl
 			if (pendingIt->second == 0)
 			{
 				return false;
+				}
+				return true;
 			}
-			return true;
+
+		void handleAccountDeleteRequest(
+			ENetPeer *peer,
+			const AccountDeleteRequestMessage &request)
+		{
+			AccountDeleteResponseMessage response;
+			std::string trimmedUsername = trimPlayerUsername(
+				playerUsernameFromBuffer(request.username));
+			PlayerUsernameValidationError usernameError = validatePlayerUsername(trimmedUsername);
+			if (usernameError != PlayerUsernameValidationError::None)
+			{
+				response.status = AccountDeleteStatus::InvalidUsername;
+				sendReliable(peer, encodeAccountDeleteResponse(response));
+				return;
+			}
+			if (activeUsernames.find(trimmedUsername) != activeUsernames.end())
+			{
+				response.status = AccountDeleteStatus::UsernameAlreadyInUse;
+				sendReliable(peer, encodeAccountDeleteResponse(response));
+				return;
+			}
+
+			std::string password = std::string(request.password);
+			Player player;
+			std::string storedPasswordHash;
+			if (password.empty() ||
+				!playerTable.loadPlayerAuthByUsername(trimmedUsername, player, storedPasswordHash))
+			{
+				response.status = AccountDeleteStatus::InvalidCredentials;
+				sendReliable(peer, encodeAccountDeleteResponse(response));
+				return;
+			}
+			if (storedPasswordHash.empty() ||
+				!passwordHasher.verifyPassword(password, storedPasswordHash))
+			{
+				response.status = AccountDeleteStatus::InvalidCredentials;
+				sendReliable(peer, encodeAccountDeleteResponse(response));
+				return;
+			}
+			if (!playerTable.deletePlayer(player.profile.playerId))
+			{
+				std::cerr << "Failed to delete player "
+						  << trimmedUsername
+						  << ": " << playerTable.lastError() << std::endl;
+				response.status = AccountDeleteStatus::StorageError;
+				sendReliable(peer, encodeAccountDeleteResponse(response));
+				return;
+			}
+			response.status = AccountDeleteStatus::Deleted;
+			sendReliable(peer, encodeAccountDeleteResponse(response));
+			std::cout << "Deleted player account: " << trimmedUsername << std::endl;
 		}
 
-	void handleLoginRequest(ENetPeer *peer, const LoginRequestMessage &request)
-	{
+		void handleLoginRequest(ENetPeer *peer, const LoginRequestMessage &request)
+		{
 		auto sessionIt = clients.find(peer);
 		if (sessionIt == clients.end())
 		{
@@ -1867,6 +2230,8 @@ struct WorldServer::Impl
 		{
 			broadcastExpansionStatus();
 		}
+		logSuccessfulLogin(session, createdPlayer);
+		broadcastServerMessage(trimmedUsername + " joined the server.");
 
 		std::cout << "Player authenticated: " << trimmedUsername
 				  << " id=" << session.playerContext.player.profile.playerId;
@@ -1901,18 +2266,29 @@ struct WorldServer::Impl
 			return;
 		}
 
-		if (type == PacketType::LoginRequest)
-		{
-			LoginRequestMessage loginRequest;
-			if (!decodeLoginRequest(data, size, loginRequest))
+			if (type == PacketType::LoginRequest)
+			{
+				LoginRequestMessage loginRequest;
+				if (!decodeLoginRequest(data, size, loginRequest))
 			{
 				return;
 			}
-			handleLoginRequest(peer, loginRequest);
-			return;
-		}
+				handleLoginRequest(peer, loginRequest);
+				return;
+			}
 
-		auto sessionIt = clients.find(peer);
+			if (type == PacketType::AccountDeleteRequest)
+			{
+				AccountDeleteRequestMessage request;
+				if (!decodeAccountDeleteRequest(data, size, request))
+				{
+					return;
+				}
+				handleAccountDeleteRequest(peer, request);
+				return;
+			}
+
+			auto sessionIt = clients.find(peer);
 		if (sessionIt == clients.end())
 		{
 			return;
@@ -1964,6 +2340,17 @@ struct WorldServer::Impl
 				return;
 			}
 			handleCommandRequest(peer, request);
+			return;
+		}
+
+		if (type == PacketType::ChatMessageRequest)
+		{
+			ChatMessageRequestMessage request;
+			if (!decodeChatMessageRequest(data, size, request))
+			{
+				return;
+			}
+			handleChatMessageRequest(peer, request);
 			return;
 		}
 
@@ -2151,12 +2538,13 @@ struct WorldServer::Impl
 		frontier.playableBounds = frontier.playableBounds.expanded(1);
 		frontier.generatedBounds = frontier.playableBounds.expanded(frontier.paddingChunks);
 		clearExpansionVote();
-		expansionVote.cooldownReadyAtMs = systemNowMs() + expansionCooldownMs();
-		totalBlockActions = 0;
-		updateExpansionProgress();
+			expansionVote.cooldownReadyAtMs = systemNowMs() + expansionCooldownMs();
+			totalBlockActions = 0;
+			updateExpansionProgress();
+			saveActivityFrontierState();
 
-		for (int cx = frontier.generatedBounds.minChunkX; cx < frontier.generatedBounds.maxChunkXExclusive; cx++)
-		{
+			for (int cx = frontier.generatedBounds.minChunkX; cx < frontier.generatedBounds.maxChunkXExclusive; cx++)
+			{
 			for (int cz = frontier.generatedBounds.minChunkZ; cz < frontier.generatedBounds.maxChunkZExclusive; cz++)
 			{
 				if (previousGenerated.containsChunk(cx, cz))
@@ -2294,12 +2682,12 @@ struct WorldServer::Impl
 		return scaleBudgetForStreamTick(chunkSendBudgetForClient(chunkStream), environmentOptions.streamTickMs);
 	}
 
-	size_t chunkSendBudgetForClient(const ClientSession::ClientChunkStreamState &chunkStream)
-	{
-		if (!usesClassicStreaming())
+		size_t chunkSendBudgetForClient(const ClientSession::ClientChunkStreamState &chunkStream)
 		{
-			return DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK;
-		}
+			if (!usesOptimizedStreamingBudgets())
+			{
+				return DEFAULT_MAX_CHUNK_SENDS_PER_CLIENT_PER_TICK;
+			}
 
 		size_t queueSize = chunkStream.sendQueue.size();
 		size_t budget = CLASSIC_MIN_CHUNK_SENDS_PER_CLIENT_PER_TICK;

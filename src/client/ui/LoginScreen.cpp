@@ -261,13 +261,18 @@ bool LoginScreen::renderAndMaybeStartConnect(WorldClient &worldClient,
 											 std::string &playerUsername)
 {
 	m_connectRequestedThisFrame = false;
+	m_deleteRequestedThisFrame = false;
 	renderScreen();
 
 	if (!isConnecting())
 	{
 		ImGuiIO &io = ImGui::GetIO();
-		if (m_connectRequestedThisFrame ||
-			(io.KeyMods == 0 && ImGui::IsKeyPressed(ImGuiKey_Enter, false)))
+		if (m_deleteRequestedThisFrame)
+		{
+			beginDeleteUser(worldClient, clearWorldState, serverHost, serverPort);
+		}
+		else if (m_connectRequestedThisFrame ||
+				 (io.KeyMods == 0 && ImGui::IsKeyPressed(ImGuiKey_Enter, false)))
 		{
 			beginConnect(worldClient, clearWorldState, serverHost, serverPort, playerUsername);
 		}
@@ -292,13 +297,22 @@ LoginScreenPollResult LoginScreen::pollConnection(WorldClient &worldClient,
 	}
 
 	bool connected = m_connectFuture.get();
+	TaskKind completedTaskKind = m_taskKind;
 	m_connectTaskActive = false;
+	m_taskKind = TaskKind::None;
 
 	if (!connected)
 	{
 		m_statusMessage.clear();
 		m_errorMessage = worldClient.lastConnectionError();
 		return LoginScreenPollResult::Failed;
+	}
+
+	if (completedTaskKind == TaskKind::DeleteUser)
+	{
+		m_statusMessage = "User deleted.";
+		m_errorMessage.clear();
+		return LoginScreenPollResult::None;
 	}
 
 	camera.Position = worldClient.localPlayer().state.position;
@@ -343,6 +357,7 @@ void LoginScreen::waitForTask()
 	{
 		m_connectFuture.wait();
 		m_connectTaskActive = false;
+		m_taskKind = TaskKind::None;
 	}
 }
 
@@ -406,6 +421,67 @@ bool LoginScreen::beginConnect(WorldClient &worldClient,
 			return worldClient.connectToServer(host, port, username, password);
 		});
 	m_connectTaskActive = true;
+	m_taskKind = TaskKind::Connect;
+	return true;
+}
+
+bool LoginScreen::beginDeleteUser(WorldClient &worldClient,
+								  const std::function<void()> &clearWorldState,
+								  std::string &serverHost,
+								  uint16_t &serverPort)
+{
+	if (m_connectTaskActive)
+	{
+		return false;
+	}
+
+	std::string host = trimPlayerUsername(m_host);
+	if (host.empty())
+	{
+		m_errorMessage = "Server host must not be empty";
+		return false;
+	}
+	uint16_t port = 0;
+	if (!parsePortBuffer(m_port, port))
+	{
+		m_errorMessage = "Invalid server port";
+		return false;
+	}
+
+	std::string username = trimPlayerUsername(m_username);
+	PlayerUsernameValidationError usernameError = validatePlayerUsername(username);
+	if (usernameError != PlayerUsernameValidationError::None)
+	{
+		m_errorMessage = playerUsernameValidationErrorText(usernameError);
+		return false;
+	}
+	std::string password = std::string(m_password);
+	if (password.empty())
+	{
+		m_errorMessage = "Password must not be empty";
+		return false;
+	}
+	if (password.size() > PLAYER_PASSWORD_MAX_LENGTH)
+	{
+		m_errorMessage = "Password is too long";
+		return false;
+	}
+
+	worldClient.disconnect();
+	clearWorldState();
+	m_errorMessage.clear();
+	m_statusMessage = "Deleting user...";
+	serverHost = host;
+	serverPort = port;
+
+	m_connectFuture = std::async(
+		std::launch::async,
+		[&worldClient, host, port, username, password]()
+		{
+			return worldClient.deleteUserOnServer(host, port, username, password);
+		});
+	m_connectTaskActive = true;
+	m_taskKind = TaskKind::DeleteUser;
 	return true;
 }
 
@@ -413,7 +489,8 @@ bool LoginScreen::drawMinecraftMenuButton(const char *id,
 										  const char *label,
 										  float width,
 										  float height,
-										  bool enabled)
+										  bool enabled,
+										  bool bold)
 {
 	ImDrawList *drawList = ImGui::GetWindowDrawList();
 	ImVec2 cursor = ImGui::GetCursorScreenPos();
@@ -476,6 +553,15 @@ bool LoginScreen::drawMinecraftMenuButton(const char *id,
 		textPos,
 		textColor,
 		label);
+	if (bold)
+	{
+		drawList->AddText(
+			m_buttonFont,
+			m_buttonFont->LegacySize,
+			ImVec2(textPos.x + 1.0f, textPos.y),
+			textColor,
+			label);
+	}
 
 	ImGui::PopID();
 	return clicked;
@@ -598,9 +684,14 @@ void LoginScreen::renderScreen()
 	float buttonWidth = panelWidth;
 	float buttonHeight = 54.0f;
 	ImGui::SetCursorPos(ImVec2(contentX, topY + 252.0f));
+	const char *connectLabel = "CONNECT";
+	if (m_connectTaskActive && m_taskKind == TaskKind::Connect)
+	{
+		connectLabel = "CONNECTING...";
+	}
 	if (drawMinecraftMenuButton(
 			"connect",
-			m_connectTaskActive ? "CONNECTING..." : "CONNECT",
+			connectLabel,
 			buttonWidth,
 			buttonHeight,
 			!m_connectTaskActive))
@@ -609,6 +700,23 @@ void LoginScreen::renderScreen()
 	}
 
 	ImGui::SetCursorPos(ImVec2(contentX, topY + 318.0f));
+	const char *deleteLabel = "DELETE USER";
+	if (m_connectTaskActive && m_taskKind == TaskKind::DeleteUser)
+	{
+		deleteLabel = "DELETING...";
+	}
+	if (drawMinecraftMenuButton(
+			"delete_user",
+			deleteLabel,
+			buttonWidth,
+			buttonHeight,
+			!m_connectTaskActive,
+			true))
+	{
+		m_deleteRequestedThisFrame = true;
+	}
+
+	ImGui::SetCursorPos(ImVec2(contentX, topY + 384.0f));
 	if (drawMinecraftMenuButton("quit", "QUIT GAME", buttonWidth, buttonHeight, true))
 	{
 		glfwSetWindowShouldClose(glfwGetCurrentContext(), GLFW_TRUE);
@@ -617,21 +725,21 @@ void LoginScreen::renderScreen()
 	ImDrawList *windowDraw = ImGui::GetWindowDrawList();
 	if (!m_errorMessage.empty())
 	{
-		windowDraw->AddText(
-			m_labelFont,
-			m_labelFont->LegacySize,
-			ImVec2(viewport->Pos.x + contentX, viewport->Pos.y + topY + 394.0f),
-			IM_COL32(255, 120, 120, 255),
-			m_errorMessage.c_str());
+			windowDraw->AddText(
+				m_labelFont,
+				m_labelFont->LegacySize,
+				ImVec2(viewport->Pos.x + contentX, viewport->Pos.y + topY + 460.0f),
+				IM_COL32(255, 120, 120, 255),
+				m_errorMessage.c_str());
 	}
 	else if (!m_statusMessage.empty())
 	{
-		windowDraw->AddText(
-			m_labelFont,
-			m_labelFont->LegacySize,
-			ImVec2(viewport->Pos.x + contentX, viewport->Pos.y + topY + 394.0f),
-			IM_COL32(255, 231, 45, 255),
-			m_statusMessage.c_str());
+			windowDraw->AddText(
+				m_labelFont,
+				m_labelFont->LegacySize,
+				ImVec2(viewport->Pos.x + contentX, viewport->Pos.y + topY + 460.0f),
+				IM_COL32(255, 231, 45, 255),
+				m_statusMessage.c_str());
 	}
 
 	ImGui::End();

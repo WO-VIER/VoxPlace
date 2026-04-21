@@ -66,6 +66,12 @@ public:
 
 private:
 	struct UiTexture;
+	enum class TaskKind
+	{
+		None = 0,
+		Connect = 1,
+		DeleteUser = 2
+	};
 
 	char m_host[128];
 	char m_port[16];
@@ -75,8 +81,10 @@ private:
 	std::string m_statusMessage;
 	bool m_autoConnectPending = false;
 	bool m_connectTaskActive = false;
+	TaskKind m_taskKind = TaskKind::None;
 	std::future<bool> m_connectFuture;
 	bool m_connectRequestedThisFrame = false;
+	bool m_deleteRequestedThisFrame = false;
 	UiTexture *m_dirtTexture = nullptr;
 	UiTexture *m_buttonNormalTexture = nullptr;
 	UiTexture *m_buttonHoverTexture = nullptr;
@@ -90,12 +98,17 @@ private:
 					  std::string &serverHost,
 					  uint16_t &serverPort,
 					  std::string &playerUsername);
+	bool beginDeleteUser(WorldClient &worldClient,
+						 const std::function<void()> &clearWorldState,
+						 std::string &serverHost,
+						 uint16_t &serverPort);
 
 	bool drawMinecraftMenuButton(const char *id,
 								 const char *label,
 								 float width,
 								 float height,
-								 bool enabled);
+								 bool enabled,
+								 bool bold = false);
 	void renderScreen();
 };
 

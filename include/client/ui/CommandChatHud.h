@@ -1,10 +1,11 @@
 #ifndef CLIENT_UI_COMMAND_CHAT_HUD_H
 #define CLIENT_UI_COMMAND_CHAT_HUD_H
 
+#include <client/gameplay/ClientWorldState.h>
+
 #include <imgui.h>
 
 #include <cstddef>
-#include <deque>
 #include <string>
 
 class CommandChatHud
@@ -16,7 +17,7 @@ public:
 	bool render(bool inGame,
 				 bool open,
 				 bool &focusRequested,
-				 const std::deque<std::string> &messages,
+				 const std::deque<ClientChatMessage> &messages,
 				 char *inputBuffer,
 				 size_t inputBufferSize,
 				 std::string &submittedCommand);

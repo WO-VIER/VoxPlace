@@ -5,11 +5,21 @@
 #include <WorldProtocol.h>
 #include <WorldBounds.h>
 
+#include <glm/vec3.hpp>
+
 #include <cstdint>
 #include <deque>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+
+struct ClientChatMessage
+{
+	ServerChatMessageKind kind = ServerChatMessageKind::System;
+	std::string username;
+	std::string text;
+	uint64_t receivedAtMs = 0;
+};
 
 struct ClientWorldState
 {
@@ -24,7 +34,7 @@ struct ClientWorldState
 	std::unordered_map<int64_t, uint64_t> pendingMeshRevisions;
 	ExpansionStatusMessage expansionStatus;
 	ServerProfileMessage serverProfile;
-	std::deque<std::string> serverMessages;
+	std::deque<ClientChatMessage> chatMessages;
 	size_t profileChunkRequestsWindow = 0;
 	size_t profileChunkDropsWindow = 0;
 	size_t profileChunkReceivesWindow = 0;

@@ -3,21 +3,40 @@
 #include <client/gameplay/MeshBuildSystem.h>
 #include <client/gameplay/PlayerSyncSystem.h>
 
+#include <chrono>
+
 #include <glm/geometric.hpp>
 
 namespace
 {
-	void pushServerMessage(ClientWorldState &worldState, const std::string &message)
+	uint64_t systemNowMs()
 	{
-		if (message.empty())
+		auto now = std::chrono::system_clock::now().time_since_epoch();
+		return static_cast<uint64_t>(
+			std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+	}
+
+	void pushChatMessage(ClientWorldState &worldState, const ClientChatMessage &message)
+	{
+		if (message.text.empty())
 		{
 			return;
 		}
-		worldState.serverMessages.push_back(message);
-		while (worldState.serverMessages.size() > 8)
+		worldState.chatMessages.push_back(message);
+		while (worldState.chatMessages.size() > 64)
 		{
-			worldState.serverMessages.pop_front();
+			worldState.chatMessages.pop_front();
 		}
+	}
+
+	std::string packetText(const char *buffer, size_t size)
+	{
+		size_t length = 0;
+		while (length < size && buffer[length] != '\0')
+		{
+			length++;
+		}
+		return std::string(buffer, length);
 	}
 }
 
@@ -31,7 +50,7 @@ void ClientWorldSystem::clear(ClientWorldState &worldState, ChunkIndirectRendere
 	worldState.frontier = WorldFrontier{};
 	worldState.expansionStatus = ExpansionStatusMessage{};
 	worldState.serverProfile = ServerProfileMessage{};
-	worldState.serverMessages.clear();
+	worldState.chatMessages.clear();
 	worldState.pendingMeshRevisions.clear();
 	worldState.profileChunkRequestsWindow = 0;
 	worldState.profileChunkDropsWindow = 0;
@@ -114,9 +133,14 @@ void ClientWorldSystem::handleEvents(WorldClient &worldClient,
 				event.blockUpdate.finalColor);
 			continue;
 		}
-		if (event.type == WorldClientEvent::Type::ServerMessageReceived)
+		if (event.type == WorldClientEvent::Type::ChatMessageReceived)
 		{
-			pushServerMessage(worldState, event.serverMessage);
+			ClientChatMessage message;
+			message.kind = event.chatMessage.kind;
+			message.username = packetText(event.chatMessage.username, sizeof(event.chatMessage.username));
+			message.text = packetText(event.chatMessage.text, sizeof(event.chatMessage.text));
+			message.receivedAtMs = systemNowMs();
+			pushChatMessage(worldState, message);
 			continue;
 		}
 		if (event.type == WorldClientEvent::Type::ExpansionStatusUpdated)

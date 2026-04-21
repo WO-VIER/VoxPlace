@@ -204,6 +204,42 @@ bool decodeLoginResponse(const uint8_t *data, size_t size, LoginResponseMessage 
 	return readValue(data, size, offset, message);
 }
 
+std::vector<uint8_t> encodeAccountDeleteRequest(const AccountDeleteRequestMessage &message)
+{
+	return encodeWithType(PacketType::AccountDeleteRequest, message);
+}
+
+bool decodeAccountDeleteRequest(
+	const uint8_t *data,
+	size_t size,
+	AccountDeleteRequestMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::AccountDeleteRequest, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
+std::vector<uint8_t> encodeAccountDeleteResponse(const AccountDeleteResponseMessage &message)
+{
+	return encodeWithType(PacketType::AccountDeleteResponse, message);
+}
+
+bool decodeAccountDeleteResponse(
+	const uint8_t *data,
+	size_t size,
+	AccountDeleteResponseMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::AccountDeleteResponse, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
 std::vector<uint8_t> encodeWorldFrontier(const WorldFrontier &frontier)
 {
 	return encodeWithType(PacketType::WorldFrontier, frontier);
@@ -549,6 +585,21 @@ bool decodeCommandRequest(const uint8_t *data, size_t size, CommandRequestMessag
 	return readValue(data, size, offset, message);
 }
 
+std::vector<uint8_t> encodeChatMessageRequest(const ChatMessageRequestMessage &message)
+{
+	return encodeWithType(PacketType::ChatMessageRequest, message);
+}
+
+bool decodeChatMessageRequest(const uint8_t *data, size_t size, ChatMessageRequestMessage &message)
+{
+	size_t offset = 0;
+	if (!readPacketType(data, size, PacketType::ChatMessageRequest, offset))
+	{
+		return false;
+	}
+	return readValue(data, size, offset, message);
+}
+
 std::vector<uint8_t> encodeServerChatMessage(const ServerChatMessage &message)
 {
 	return encodeWithType(PacketType::ServerChatMessage, message);
@@ -634,6 +685,12 @@ const char *packetTypeName(PacketType type)
 		return "ServerChatMessage";
 	case PacketType::ExpansionStatus:
 		return "ExpansionStatus";
+	case PacketType::ChatMessageRequest:
+		return "ChatMessageRequest";
+	case PacketType::AccountDeleteRequest:
+		return "AccountDeleteRequest";
+	case PacketType::AccountDeleteResponse:
+		return "AccountDeleteResponse";
 	}
 	return "Unknown";
 }

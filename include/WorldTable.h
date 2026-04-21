@@ -35,6 +35,8 @@ public:
 	bool loadAllChunkKeys(std::vector<int64_t> &outChunkKeys);
 	bool saveChunk(const VoxelChunkData &chunk);
 	bool saveChunksBatch(const std::vector<VoxelChunkData> &chunks);
+	bool loadMetaValue(const std::string &key, std::string &outValue);
+	bool saveMetaValue(const std::string &key, const std::string &value);
 
 	const std::string &lastError() const;
 	std::string lastErrorCopy() const;

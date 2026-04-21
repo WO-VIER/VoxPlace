@@ -12,6 +12,23 @@ namespace
 		float dz = centerZ - pos.z;
 		return dx * dx + dz * dz;
 	}
+
+	bool usesOptimizedStreamingBudgets(bool hasWorldFrontier, const WorldFrontier &frontier)
+	{
+		if (!hasWorldFrontier)
+		{
+			return false;
+		}
+		if (frontier.mode == WorldGenerationMode::ClassicStreaming)
+		{
+			return true;
+		}
+		if (frontier.mode == WorldGenerationMode::ActivityFrontier)
+		{
+			return true;
+		}
+		return false;
+	}
 }
 
 bool ChunkStreamingSystem::usesClassicStreaming(bool hasWorldFrontier, const WorldFrontier &frontier)
@@ -77,7 +94,7 @@ void ChunkStreamingSystem::syncChunkStreaming(
 	}
 
 	int streamDistanceChunks = renderDistanceChunks;
-	if (usesClassicStreaming(hasWorldFrontier, frontier))
+	if (usesOptimizedStreamingBudgets(hasWorldFrontier, frontier))
 	{
 		streamDistanceChunks += classicStreamingPaddingChunks;
 	}
@@ -145,7 +162,7 @@ void ChunkStreamingSystem::syncChunkStreaming(
 			  });
 
 	size_t maxNewRequestsThisFrame = requestCandidates.size();
-	if (usesClassicStreaming(hasWorldFrontier, frontier))
+	if (usesOptimizedStreamingBudgets(hasWorldFrontier, frontier))
 	{
 		size_t frustumMissingChunks = 0;
 		for (const auto &candidate : requestCandidates)
@@ -193,7 +210,7 @@ void ChunkStreamingSystem::syncChunkStreaming(
 	}
 
 	int dropDistanceChunks = streamDistanceChunks;
-	if (usesClassicStreaming(hasWorldFrontier, frontier))
+	if (usesOptimizedStreamingBudgets(hasWorldFrontier, frontier))
 	{
 		dropDistanceChunks += classicStreamingPaddingChunks;
 	}

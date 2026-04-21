@@ -293,6 +293,42 @@ bool PlayerTable::updatePasswordHash(uint64_t playerId, const std::string &passw
 	return true;
 }
 
+bool PlayerTable::deletePlayer(uint64_t playerId)
+{
+	m_lastError.clear();
+	if (!isOpen())
+	{
+		m_lastError = "Player database is not open";
+		return false;
+	}
+	if (playerId == 0)
+	{
+		m_lastError = "Cannot delete player with invalid id";
+		return false;
+	}
+
+	const char *sql = "DELETE FROM player_table WHERE id = ?1;";
+	sqlite3_stmt *statement = nullptr;
+	if (!prepareStatement(sql, &statement))
+	{
+		return false;
+	}
+	if (sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(playerId)) != SQLITE_OK)
+	{
+		setLastErrorFromDatabase("Failed to bind player delete");
+		sqlite3_finalize(statement);
+		return false;
+	}
+	if (sqlite3_step(statement) != SQLITE_DONE)
+	{
+		setLastErrorFromDatabase("Failed to delete player");
+		sqlite3_finalize(statement);
+		return false;
+	}
+	sqlite3_finalize(statement);
+	return true;
+}
+
 bool PlayerTable::savePlayer(const Player &player)
 {
 	m_lastError.clear();
