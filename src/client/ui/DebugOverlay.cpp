@@ -35,6 +35,14 @@ void renderDebugOverlay(bool visible, const DebugOverlayData &data)
 	}
 	ImGui::Text("Server: %s:%d", data.serverHost, data.serverPort);
 	ImGui::Text("Username: %s", data.username);
+	if (data.isAdmin)
+	{
+		ImGui::Text("Role: admin");
+	}
+	else
+	{
+		ImGui::Text("Role: player");
+	}
 	ImGui::Text("Network: %s (%u ms ping)", data.connected ? "Connected" : "Disconnected", data.roundTripTimeMs);
 	if (data.hasWorldFrontier && data.frontier != nullptr)
 	{
@@ -115,18 +123,46 @@ void renderDebugOverlay(bool visible, const DebugOverlayData &data)
 	}
 
 	ImGui::Separator();
-	if (data.resetExpansionCooldownRequested != nullptr)
+	ImGui::Text("Server admin");
+	if (!data.isAdmin)
+	{
+		ImGui::TextDisabled("Admin permissions required.");
+	}
+	if (data.isAdmin && data.resetExpansionCooldownRequested != nullptr)
 	{
 		if (ImGui::Button("Reset Expand Cooldown"))
 		{
 			*data.resetExpansionCooldownRequested = true;
 		}
 	}
-	if (data.resetBlockCooldownRequested != nullptr)
+	if (data.isAdmin && data.resetBlockCooldownRequested != nullptr)
 	{
 		if (ImGui::Button("Reset Block Cooldown"))
 		{
 			*data.resetBlockCooldownRequested = true;
+		}
+	}
+	if (data.isAdmin && data.toggleBlockCooldownRequested != nullptr)
+	{
+		const char *label = "Disable Block Cooldown";
+		if (data.blockCooldownDisabled)
+		{
+			label = "Enable Block Cooldown";
+		}
+		if (ImGui::Button(label))
+		{
+			*data.toggleBlockCooldownRequested = true;
+		}
+	}
+	if (data.isAdmin)
+	{
+		if (data.blockCooldownDisabled)
+		{
+			ImGui::Text("Block cooldown: disabled");
+		}
+		else
+		{
+			ImGui::Text("Block cooldown: enabled");
 		}
 	}
 	ImGui::Separator();

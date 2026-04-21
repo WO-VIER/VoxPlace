@@ -31,6 +31,7 @@ struct DebugOverlayBuildInputs
 	bool *compactArenaRequested = nullptr;
 	bool *resetExpansionCooldownRequested = nullptr;
 	bool *resetBlockCooldownRequested = nullptr;
+	bool *toggleBlockCooldownRequested = nullptr;
 };
 
 DebugOverlayData buildDebugOverlayData(const DebugOverlayBuildInputs &inputs);

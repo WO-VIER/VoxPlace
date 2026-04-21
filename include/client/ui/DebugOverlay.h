@@ -16,6 +16,7 @@ struct DebugOverlayData
 	int serverPort = 0;
 	uint32_t roundTripTimeMs = 0;
 	const char *username = "";
+	bool isAdmin = false;
 	bool connected = false;
 	bool hasWorldFrontier = false;
 	const WorldFrontier *frontier = nullptr;
@@ -35,6 +36,8 @@ struct DebugOverlayData
 	bool *compactArenaRequested = nullptr;
 	bool *resetExpansionCooldownRequested = nullptr;
 	bool *resetBlockCooldownRequested = nullptr;
+	bool *toggleBlockCooldownRequested = nullptr;
+	bool blockCooldownDisabled = false;
 	size_t meshWorkerCount = 0;
 	size_t trackedJobs = 0;
 	size_t queuedJobs = 0;

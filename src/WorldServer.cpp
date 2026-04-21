@@ -25,6 +25,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <csignal>
+#include <cstdlib>
 #include <ctime>
 #include <deque>
 #include <filesystem>
@@ -68,6 +69,7 @@ namespace
 	constexpr int SPAWN_CLEARANCE_BLOCKS = 3;
 	constexpr const char *SERVER_CONNECTION_LOG_PATH = "logs/server_connections.log";
 	constexpr const char *ACTIVITY_FRONTIER_META_KEY = "activity_frontier_state_v1";
+	constexpr const char *ADMIN_USERS_ENV = "VOXPLACE_ADMIN_USERS";
 	volatile std::sig_atomic_t gWorldServerSignalStopRequested = 0;
 
 	struct ActivityFrontierState
@@ -105,6 +107,41 @@ namespace
 				return 1;
 			}
 			return static_cast<size_t>(reported - 2);
+		}
+
+		void addAdminUsername(std::unordered_set<std::string> &admins, const std::string &rawUsername)
+		{
+			std::string username = trimPlayerUsername(rawUsername);
+			if (validatePlayerUsername(username) != PlayerUsernameValidationError::None)
+			{
+				return;
+			}
+			admins.insert(username);
+		}
+
+		std::unordered_set<std::string> loadAdminUsernamesFromEnvironment()
+		{
+			std::unordered_set<std::string> admins;
+			const char *rawValue = std::getenv(ADMIN_USERS_ENV);
+			if (rawValue == nullptr)
+			{
+				return admins;
+			}
+
+			std::string token;
+			for (const char *cursor = rawValue; *cursor != '\0'; cursor++)
+			{
+				char character = *cursor;
+				if (character == ',' || character == ';' || std::isspace(static_cast<unsigned char>(character)))
+				{
+					addAdminUsername(admins, token);
+					token.clear();
+					continue;
+				}
+				token.push_back(character);
+			}
+			addAdminUsername(admins, token);
+			return admins;
 		}
 
 		ChunkBounds makeSquareBounds(int radiusChunks)
@@ -297,12 +334,13 @@ struct WorldServer::Impl
 			std::deque<int64_t> sendQueue;
 		};
 
-		struct ClientPlayerContext
-		{
-			Player player;
-			PlayerSessionData playerSession;
-			std::string usernameKey;
-		};
+			struct ClientPlayerContext
+			{
+				Player player;
+				PlayerSessionData playerSession;
+				std::string usernameKey;
+				bool admin = false;
+			};
 
 		ENetPeer *peer = nullptr;
 		ClientChunkStreamState chunkStream;
@@ -356,10 +394,12 @@ struct WorldServer::Impl
 	std::unique_ptr<IChunkGenerator> generator;
 		WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier;
 		PlayerTable playerTable;
-		WorldTable worldTable;
-	PasswordHasher passwordHasher;
+			WorldTable worldTable;
+		PasswordHasher passwordHasher;
+		std::unordered_set<std::string> adminUsernames;
+		bool blockCooldownDisabled = false;
 
-	WorldFrontier frontier;
+		WorldFrontier frontier;
 	ExpansionVoteState expansionVote;
 	std::unordered_map<int64_t, VoxelChunkData> worldChunks;
 	std::unordered_map<int64_t, CachedChunkSnapshotPayload> chunkSnapshotPayloadCache;
@@ -440,11 +480,12 @@ struct WorldServer::Impl
 			environmentOptions.streamTickMs = DEFAULT_STREAM_TICK_MS;
 		}
 		frontier.playableBounds = makeSquareBounds(INITIAL_PLAYABLE_RADIUS);
-		frontier.paddingChunks = INITIAL_PADDING_CHUNKS;
-		frontier.generatedBounds = frontier.playableBounds.expanded(frontier.paddingChunks);
-		frontier.mode = generationMode;
-		updateExpansionProgress();
-	}
+			frontier.paddingChunks = INITIAL_PADDING_CHUNKS;
+			frontier.generatedBounds = frontier.playableBounds.expanded(frontier.paddingChunks);
+			frontier.mode = generationMode;
+			adminUsernames = loadAdminUsernamesFromEnvironment();
+			updateExpansionProgress();
+		}
 
 	~Impl()
 	{
@@ -1129,11 +1170,15 @@ struct WorldServer::Impl
 		message.tasksNow = static_cast<uint32_t>(generationTaskCount);
 		message.tasksAvg = static_cast<float>(avgTasks);
 		message.tasksMax = static_cast<uint32_t>(profileMaxGenerationTasks);
-		message.readyNow = static_cast<uint32_t>(readyChunkCount);
-		message.readyAvg = static_cast<float>(avgReady);
-		message.readyMax = static_cast<uint32_t>(profileMaxReadyChunks);
-		message.windowSeconds = static_cast<float>(elapsedSeconds);
-		if (elapsedSeconds > 0.0)
+			message.readyNow = static_cast<uint32_t>(readyChunkCount);
+			message.readyAvg = static_cast<float>(avgReady);
+			message.readyMax = static_cast<uint32_t>(profileMaxReadyChunks);
+			message.windowSeconds = static_cast<float>(elapsedSeconds);
+			if (blockCooldownDisabled)
+			{
+				message.blockCooldownDisabled = 1;
+			}
+			if (elapsedSeconds > 0.0)
 		{
 			message.ticksPerSecond =
 				static_cast<float>(static_cast<double>(profileTickCount) / elapsedSeconds);
@@ -1363,20 +1408,42 @@ struct WorldServer::Impl
 		sendReliable(session.peer, encodeServerProfile(message));
 	}
 
-	size_t authenticatedClientCount() const
-	{
-		size_t count = 0;
-		for (const auto &entry : clients)
+		size_t authenticatedClientCount() const
+		{
+			size_t count = 0;
+			for (const auto &entry : clients)
 		{
 			if (entry.second.playerContext.playerSession.authenticated)
 			{
 				count++;
 			}
+			}
+			return count;
 		}
-		return count;
-	}
 
-	int expansionRingLevel() const
+		bool isAdminUsername(const std::string &username) const
+		{
+			if (adminUsernames.find(username) != adminUsernames.end())
+			{
+				return true;
+			}
+			return false;
+		}
+
+		bool requireAdminCommand(ClientSession &session)
+		{
+			if (session.playerContext.admin)
+			{
+				return true;
+			}
+			sendServerMessage(
+				session,
+				"Admin permissions required.",
+				ServerChatMessageKind::Error);
+			return false;
+		}
+
+		int expansionRingLevel() const
 	{
 		int width = frontier.playableBounds.widthChunks();
 		if (width <= 3)
@@ -1700,17 +1767,34 @@ struct WorldServer::Impl
 			sendServerMessage(session, "Expand cooldown reset.");
 		}
 
-	void resetBlockCooldown(ClientSession &session)
-	{
-		session.playerContext.player.state.blockActionReadyAtMs = 0;
-		sendPlayerState(session);
-		sendServerMessage(session, "Block cooldown reset.");
-	}
+		void resetBlockCooldown(ClientSession &session)
+		{
+			session.playerContext.player.state.blockActionReadyAtMs = 0;
+			sendPlayerState(session);
+			sendServerMessage(session, "Block cooldown reset.");
+		}
 
-	void sendHelp(ClientSession &session)
-	{
-		sendServerMessage(session, "Commands: /expand, /expand [y/n], /connected, /tp spawn, /clear");
-	}
+		void toggleBlockCooldown(ClientSession &session)
+		{
+			blockCooldownDisabled = !blockCooldownDisabled;
+			if (blockCooldownDisabled)
+			{
+				session.playerContext.player.state.blockActionReadyAtMs = 0;
+				sendPlayerState(session);
+				broadcastServerMessage("Block cooldown disabled by admin.");
+				return;
+			}
+			broadcastServerMessage("Block cooldown enabled by admin.");
+		}
+
+		void sendHelp(ClientSession &session)
+		{
+			sendServerMessage(session, "Commands: /expand, /expand [y/n], /connected, /tp spawn, /clear");
+			if (session.playerContext.admin)
+			{
+				sendServerMessage(session, "Admin: /resetexpandcooldown, /resetcooldown, /toggleblockcooldown");
+			}
+		}
 
 	void sendConnectedCount(ClientSession &session)
 	{
@@ -1788,12 +1872,29 @@ struct WorldServer::Impl
 		}
 		if (command == "/resetexpandcooldown")
 		{
+			if (!requireAdminCommand(session))
+			{
+				return;
+			}
 			resetExpansionCooldown(session);
 			return;
 		}
 		if (command == "/resetcooldown")
 		{
+			if (!requireAdminCommand(session))
+			{
+				return;
+			}
 			resetBlockCooldown(session);
+			return;
+		}
+		if (command == "/toggleblockcooldown")
+		{
+			if (!requireAdminCommand(session))
+			{
+				return;
+			}
+			toggleBlockCooldown(session);
 			return;
 		}
 		sendServerMessage(session, "Unknown command.", ServerChatMessageKind::Error);
@@ -2210,20 +2311,29 @@ struct WorldServer::Impl
 			}
 		}
 
-		session.playerContext.playerSession.playerId = session.playerContext.player.profile.playerId;
-		session.playerContext.playerSession.authenticated = true;
-		session.playerContext.usernameKey = trimmedUsername;
-		activeUsernames[trimmedUsername] = session.playerContext.player.profile.playerId;
+			session.playerContext.playerSession.playerId = session.playerContext.player.profile.playerId;
+			session.playerContext.playerSession.authenticated = true;
+			session.playerContext.usernameKey = trimmedUsername;
+			session.playerContext.admin = isAdminUsername(trimmedUsername);
+			activeUsernames[trimmedUsername] = session.playerContext.player.profile.playerId;
 
 		response.status = LoginStatus::Accepted;
 		response.playerId = session.playerContext.player.profile.playerId;
 		copyPlayerUsernameToBuffer(trimmedUsername, response.username);
 		response.skinId = session.playerContext.player.profile.skinId;
 		response.positionX = session.playerContext.player.state.position.x;
-		response.positionY = session.playerContext.player.state.position.y;
-		response.positionZ = session.playerContext.player.state.position.z;
-		response.blockActionReadyAtMs = session.playerContext.player.state.blockActionReadyAtMs;
-		sendReliable(peer, encodeLoginResponse(response));
+			response.positionY = session.playerContext.player.state.position.y;
+			response.positionZ = session.playerContext.player.state.position.z;
+			response.blockActionReadyAtMs = session.playerContext.player.state.blockActionReadyAtMs;
+			if (session.playerContext.admin)
+			{
+				response.isAdmin = 1;
+			}
+			if (blockCooldownDisabled)
+			{
+				response.blockCooldownDisabled = 1;
+			}
+			sendReliable(peer, encodeLoginResponse(response));
 		sendReliable(peer, encodeWorldFrontier(frontier));
 		sendExpansionStatus(session);
 		if (expansionVote.active)
@@ -2419,13 +2529,14 @@ struct WorldServer::Impl
 		auto rejectActionAndSync = [&]()
 		{
 			sendPlayerState(session);
-		};
+			};
 
-		uint64_t nowMs = systemNowMs();
-		if (nowMs < session.playerContext.player.state.blockActionReadyAtMs)
-		{
-			rejectActionAndSync();
-			return;
+			uint64_t nowMs = systemNowMs();
+			if (!blockCooldownDisabled &&
+				nowMs < session.playerContext.player.state.blockActionReadyAtMs)
+			{
+				rejectActionAndSync();
+				return;
 		}
 		if (request.worldY < 0 || request.worldY >= CHUNK_SIZE_Y)
 		{
@@ -2464,9 +2575,17 @@ struct WorldServer::Impl
 			return;
 		}
 
-		invalidateChunkSnapshotCache(key);
-		markChunkDirty(key);
-		session.playerContext.player.state.blockActionReadyAtMs = nowMs + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
+			invalidateChunkSnapshotCache(key);
+			markChunkDirty(key);
+			if (blockCooldownDisabled)
+			{
+				session.playerContext.player.state.blockActionReadyAtMs = 0;
+			}
+			else
+			{
+				session.playerContext.player.state.blockActionReadyAtMs =
+					nowMs + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
+			}
 
 		BlockUpdateBroadcastMessage update;
 		update.worldX = request.worldX;

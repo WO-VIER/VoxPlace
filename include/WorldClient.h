@@ -48,9 +48,10 @@ public:
 							const std::string &password);
 	void disconnect();
 	void service();
-	bool popEvent(WorldClientEvent &event);
-	bool isConnected() const;
-	uint32_t getRoundTripTime() const;
+		bool popEvent(WorldClientEvent &event);
+		bool isConnected() const;
+		bool isLocalPlayerAdmin() const;
+		uint32_t getRoundTripTime() const;
 	const Player &localPlayer() const;
 	uint64_t remainingBlockActionCooldownMs() const;
 	uint64_t remainingServerCooldownMs(uint64_t readyAtMs) const;

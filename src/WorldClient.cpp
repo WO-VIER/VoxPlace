@@ -53,9 +53,11 @@ struct WorldClient::Impl
 {
 	bool enetInitialized = false;
 	ENetHost *host = nullptr;
-	ENetPeer *peer = nullptr;
-	bool connected = false;
-	Player localPlayer;
+		ENetPeer *peer = nullptr;
+		bool connected = false;
+		bool localPlayerAdmin = false;
+		bool blockCooldownDisabled = false;
+		Player localPlayer;
 	std::string lastConnectionError;
 	int64_t serverTimeOffsetMs = 0;
 
@@ -84,9 +86,11 @@ struct WorldClient::Impl
 			message.positionX,
 			message.positionY,
 			message.positionZ);
-		localPlayer.state.blockActionReadyAtMs = message.blockActionReadyAtMs;
+			localPlayer.state.blockActionReadyAtMs = message.blockActionReadyAtMs;
+			localPlayerAdmin = message.isAdmin != 0;
+			blockCooldownDisabled = message.blockCooldownDisabled != 0;
 
-		int64_t localNow = static_cast<int64_t>(systemNowMs());
+			int64_t localNow = static_cast<int64_t>(systemNowMs());
 		int64_t serverNow = static_cast<int64_t>(message.serverNowMs);
 		serverTimeOffsetMs = serverNow - localNow;
 	}
@@ -309,6 +313,8 @@ bool WorldClient::connectToServer(const std::string &hostName,
 	enet_peer_reset(m_impl->peer);
 	m_impl->peer = nullptr;
 	m_impl->connected = false;
+	m_impl->localPlayerAdmin = false;
+	m_impl->blockCooldownDisabled = false;
 	return false;
 }
 
@@ -451,10 +457,12 @@ bool WorldClient::deleteUserOnServer(const std::string &hostName,
 
 	enet_peer_reset(m_impl->peer);
 	m_impl->peer = nullptr;
-	m_impl->connected = false;
-	m_impl->localPlayer = Player{};
-	return deleted;
-}
+			m_impl->connected = false;
+			m_impl->localPlayer = Player{};
+			m_impl->localPlayerAdmin = false;
+			m_impl->blockCooldownDisabled = false;
+			return deleted;
+		}
 
 void WorldClient::disconnect()
 {
@@ -481,6 +489,8 @@ void WorldClient::disconnect()
 	m_impl->peer = nullptr;
 	m_impl->connected = false;
 	m_impl->localPlayer = Player{};
+	m_impl->localPlayerAdmin = false;
+	m_impl->blockCooldownDisabled = false;
 	m_impl->serverTimeOffsetMs = 0;
 }
 
@@ -509,6 +519,8 @@ void WorldClient::service()
 		{
 			m_impl->peer = nullptr;
 			m_impl->connected = false;
+			m_impl->localPlayerAdmin = false;
+			m_impl->blockCooldownDisabled = false;
 			pushEvent(WorldClientEvent{WorldClientEvent::Type::Disconnected});
 			break;
 		}
@@ -531,6 +543,11 @@ bool WorldClient::isConnected() const
 	return m_impl->connected;
 }
 
+bool WorldClient::isLocalPlayerAdmin() const
+{
+	return m_impl->connected && m_impl->localPlayerAdmin;
+}
+
 uint32_t WorldClient::getRoundTripTime() const
 {
 	if (m_impl->peer != nullptr)
@@ -547,6 +564,10 @@ const Player &WorldClient::localPlayer() const
 
 uint64_t WorldClient::remainingBlockActionCooldownMs() const
 {
+	if (m_impl->blockCooldownDisabled)
+	{
+		return 0;
+	}
 	return remainingServerCooldownMs(m_impl->localPlayer.state.blockActionReadyAtMs);
 }
 
@@ -601,7 +622,8 @@ void WorldClient::sendPlaceBlock(int worldX, int worldY, int worldZ, uint8_t pal
 	{
 		return;
 	}
-	if (!m_impl->canIssueBlockAction())
+	if (!m_impl->blockCooldownDisabled &&
+		!m_impl->canIssueBlockAction())
 	{
 		return;
 	}
@@ -616,8 +638,11 @@ void WorldClient::sendPlaceBlock(int worldX, int worldY, int worldZ, uint8_t pal
 	std::vector<uint8_t> payload = encodeBlockActionRequest(message);
 	ENetPacket *packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
 	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
-	m_impl->localPlayer.state.blockActionReadyAtMs =
-		m_impl->estimatedServerNowMs() + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
+	if (!m_impl->blockCooldownDisabled)
+	{
+		m_impl->localPlayer.state.blockActionReadyAtMs =
+			m_impl->estimatedServerNowMs() + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
+	}
 }
 
 void WorldClient::sendBreakBlock(int worldX, int worldY, int worldZ)
@@ -626,7 +651,8 @@ void WorldClient::sendBreakBlock(int worldX, int worldY, int worldZ)
 	{
 		return;
 	}
-	if (!m_impl->canIssueBlockAction())
+	if (!m_impl->blockCooldownDisabled &&
+		!m_impl->canIssueBlockAction())
 	{
 		return;
 	}
@@ -641,8 +667,11 @@ void WorldClient::sendBreakBlock(int worldX, int worldY, int worldZ)
 	std::vector<uint8_t> payload = encodeBlockActionRequest(message);
 	ENetPacket *packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
 	enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
-	m_impl->localPlayer.state.blockActionReadyAtMs =
-		m_impl->estimatedServerNowMs() + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
+	if (!m_impl->blockCooldownDisabled)
+	{
+		m_impl->localPlayer.state.blockActionReadyAtMs =
+			m_impl->estimatedServerNowMs() + PLAYER_DEFAULT_BLOCK_ACTION_COOLDOWN_MS;
+	}
 }
 
 void WorldClient::sendCommand(const std::string &commandText)
@@ -811,11 +840,12 @@ void WorldClient::handlePacket(const uint8_t *data, size_t size)
 	if (type == PacketType::ServerProfile)
 	{
 		ServerProfileMessage message;
-		if (!decodeServerProfile(data, size, message))
-		{
-			return;
-		}
-		WorldClientEvent event;
+			if (!decodeServerProfile(data, size, message))
+			{
+				return;
+			}
+			m_impl->blockCooldownDisabled = message.blockCooldownDisabled != 0;
+			WorldClientEvent event;
 		event.type = WorldClientEvent::Type::ServerProfileUpdated;
 		event.serverProfile = message;
 		pushEvent(event);

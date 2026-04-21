@@ -525,10 +525,11 @@ namespace
 		void renderDebugAndHud(const ClientFrameRenderResult &frameResult,
 							 int &terrainArchitectureIndex,
 							 bool &compactArenaRequested)
-		{
-			bool resetExpansionCooldownRequested = false;
-			bool resetBlockCooldownRequested = false;
-			DebugOverlayBuildInputs debugOverlayInputs;
+			{
+				bool resetExpansionCooldownRequested = false;
+				bool resetBlockCooldownRequested = false;
+				bool toggleBlockCooldownRequested = false;
+				DebugOverlayBuildInputs debugOverlayInputs;
 			debugOverlayInputs.gameState = &m_runtime.gameState;
 			debugOverlayInputs.worldClient = &m_runtime.worldClient;
 			debugOverlayInputs.worldState = &m_runtime.worldState;
@@ -542,9 +543,10 @@ namespace
 			debugOverlayInputs.visibleChunks = frameResult.visibleChunks;
 			debugOverlayInputs.totalFaces = frameResult.totalFaces;
 			debugOverlayInputs.terrainArchitectureIndex = &terrainArchitectureIndex;
-			debugOverlayInputs.compactArenaRequested = &compactArenaRequested;
-			debugOverlayInputs.resetExpansionCooldownRequested = &resetExpansionCooldownRequested;
-			debugOverlayInputs.resetBlockCooldownRequested = &resetBlockCooldownRequested;
+				debugOverlayInputs.compactArenaRequested = &compactArenaRequested;
+				debugOverlayInputs.resetExpansionCooldownRequested = &resetExpansionCooldownRequested;
+				debugOverlayInputs.resetBlockCooldownRequested = &resetBlockCooldownRequested;
+				debugOverlayInputs.toggleBlockCooldownRequested = &toggleBlockCooldownRequested;
 
 			DebugOverlayData debugOverlayData = buildDebugOverlayData(debugOverlayInputs);
 			renderDebugOverlay(m_runtime.gameState.debugOverlayVisible, debugOverlayData);
@@ -552,12 +554,16 @@ namespace
 			{
 				m_runtime.worldClient.sendCommand("/resetexpandcooldown");
 			}
-			if (resetBlockCooldownRequested)
-			{
-				m_runtime.worldClient.sendCommand("/resetcooldown");
-			}
+				if (resetBlockCooldownRequested)
+				{
+					m_runtime.worldClient.sendCommand("/resetcooldown");
+				}
+				if (toggleBlockCooldownRequested)
+				{
+					m_runtime.worldClient.sendCommand("/toggleblockcooldown");
+				}
 
-			ProfilerWindowsData profilerWindowsData;
+				ProfilerWindowsData profilerWindowsData;
 			profilerWindowsData.gameState = &m_runtime.gameState;
 			profilerWindowsData.worldState = &m_runtime.worldState;
 			profilerWindowsData.clientProfiler = &m_runtime.profilerState;

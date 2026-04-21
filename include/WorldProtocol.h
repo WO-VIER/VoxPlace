@@ -92,6 +92,8 @@ struct LoginResponseMessage
 	float positionZ = 0.0f;
 	uint64_t blockActionReadyAtMs = 0;
 	uint64_t serverNowMs = 0;
+	uint8_t isAdmin = 0;
+	uint8_t blockCooldownDisabled = 0;
 };
 
 struct AccountDeleteRequestMessage
@@ -223,6 +225,7 @@ struct ServerProfileMessage
 	float saveAvgChunks = 0.0f;
 	float ticksPerSecond = 0.0f;
 	float windowSeconds = 0.0f;
+	uint8_t blockCooldownDisabled = 0;
 };
 
 struct DecodedChunkSnapshot

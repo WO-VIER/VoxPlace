@@ -38,6 +38,7 @@ DebugOverlayData buildDebugOverlayData(const DebugOverlayBuildInputs &inputs)
 	data.serverPort = static_cast<int>(gameState.connection.serverPort);
 	data.roundTripTimeMs = worldClient.getRoundTripTime();
 	data.username = worldClient.localPlayer().profile.username.c_str();
+	data.isAdmin = worldClient.isLocalPlayerAdmin();
 	data.connected = worldClient.isConnected();
 	data.hasWorldFrontier = worldState.hasWorldFrontier;
 	data.frontier = &worldState.frontier;
@@ -61,6 +62,11 @@ DebugOverlayData buildDebugOverlayData(const DebugOverlayBuildInputs &inputs)
 	data.compactArenaRequested = inputs.compactArenaRequested;
 	data.resetExpansionCooldownRequested = inputs.resetExpansionCooldownRequested;
 	data.resetBlockCooldownRequested = inputs.resetBlockCooldownRequested;
+	data.toggleBlockCooldownRequested = inputs.toggleBlockCooldownRequested;
+	if (worldState.hasServerProfile && worldState.serverProfile.blockCooldownDisabled != 0)
+	{
+		data.blockCooldownDisabled = true;
+	}
 	data.meshWorkerCount = chunkMesher.workerCount();
 	data.trackedJobs = worldState.pendingMeshRevisions.size();
 	data.queuedJobs = chunkMesher.pendingJobCount();
