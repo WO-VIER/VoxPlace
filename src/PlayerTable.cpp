@@ -71,6 +71,15 @@ bool PlayerTable::open(const std::string &databasePath)
 		}
 	}
 
+	if (!executeStatement("PRAGMA journal_mode=WAL;"))
+	{
+		return false;
+	}
+	if (!executeStatement("PRAGMA synchronous=NORMAL;"))
+	{
+		return false;
+	}
+
 	return true;
 }
 
