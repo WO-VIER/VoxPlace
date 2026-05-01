@@ -14,6 +14,15 @@ namespace
 		return static_cast<uint64_t>(
 			std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
 	}
+
+	int sqliteBool(bool value)
+	{
+		if (value)
+		{
+			return 1;
+		}
+		return 0;
+	}
 }
 
 PlayerTable::PlayerTable()
@@ -42,6 +51,7 @@ bool PlayerTable::open(const std::string &databasePath)
 		" id INTEGER PRIMARY KEY AUTOINCREMENT,"
 		" username TEXT NOT NULL UNIQUE,"
 		" skin_id INTEGER NOT NULL DEFAULT 0,"
+		" is_admin INTEGER NOT NULL DEFAULT 0,"
 		" position_x REAL NOT NULL DEFAULT 0.0,"
 		" position_y REAL NOT NULL DEFAULT 35.0,"
 		" position_z REAL NOT NULL DEFAULT 0.0,"
@@ -67,6 +77,21 @@ bool PlayerTable::open(const std::string &databasePath)
 		if (errorText.find("duplicate column name") == std::string::npos)
 		{
 			m_lastError = "Failed to ensure password_hash column: " + errorText;
+			return false;
+		}
+	}
+
+	const char *adminColumnSql =
+		"ALTER TABLE player_table ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;";
+	errorMessage = nullptr;
+	alterResult = sqlite3_exec(m_db, adminColumnSql, nullptr, nullptr, &errorMessage);
+	if (alterResult != SQLITE_OK && errorMessage != nullptr)
+	{
+		std::string errorText = errorMessage;
+		sqlite3_free(errorMessage);
+		if (errorText.find("duplicate column name") == std::string::npos)
+		{
+			m_lastError = "Failed to ensure is_admin column: " + errorText;
 			return false;
 		}
 	}
@@ -115,7 +140,7 @@ bool PlayerTable::loadPlayerAuthByUsername(const std::string &username,
 	}
 
 	const char *sql =
-		"SELECT id, username, skin_id, position_x, position_y, position_z, block_action_ready_at_ms, password_hash "
+		"SELECT id, username, skin_id, position_x, position_y, position_z, block_action_ready_at_ms, password_hash, is_admin "
 		"FROM player_table WHERE username = ?1;";
 
 	sqlite3_stmt *statement = nullptr;
@@ -159,6 +184,7 @@ bool PlayerTable::loadPlayerAuthByUsername(const std::string &username,
 		{
 			passwordHash.clear();
 		}
+		player.profile.admin = sqlite3_column_int(statement, 8) != 0;
 		sqlite3_finalize(statement);
 		return true;
 	}
@@ -201,6 +227,7 @@ bool PlayerTable::createPlayer(const std::string &username,
 
 	player.profile.username = username;
 	player.profile.skinId = 0;
+	player.profile.admin = false;
 	player.state.position.x = 0.0f;
 	player.state.position.y = 35.0f;
 	player.state.position.z = 0.0f;
@@ -302,6 +329,50 @@ bool PlayerTable::updatePasswordHash(uint64_t playerId, const std::string &passw
 	return true;
 }
 
+bool PlayerTable::updateAdminFlag(uint64_t playerId, bool admin)
+{
+	m_lastError.clear();
+	if (!isOpen())
+	{
+		m_lastError = "Player database is not open";
+		return false;
+	}
+	if (playerId == 0)
+	{
+		m_lastError = "Cannot update admin flag with invalid id";
+		return false;
+	}
+
+	const char *sql =
+		"UPDATE player_table SET is_admin = ?1, updated_at_ms = ?2 WHERE id = ?3;";
+
+	sqlite3_stmt *statement = nullptr;
+	if (!prepareStatement(sql, &statement))
+	{
+		return false;
+	}
+
+	uint64_t nowMs = systemNowMs();
+	if (sqlite3_bind_int(statement, 1, sqliteBool(admin)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 2, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 3, static_cast<sqlite3_int64>(playerId)) != SQLITE_OK)
+	{
+		setLastErrorFromDatabase("Failed to bind admin flag update");
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	if (sqlite3_step(statement) != SQLITE_DONE)
+	{
+		setLastErrorFromDatabase("Failed to update admin flag");
+		sqlite3_finalize(statement);
+		return false;
+	}
+
+	sqlite3_finalize(statement);
+	return true;
+}
+
 bool PlayerTable::deletePlayer(uint64_t playerId)
 {
 	m_lastError.clear();
@@ -355,8 +426,8 @@ bool PlayerTable::savePlayer(const Player &player)
 	const char *sql =
 		"UPDATE player_table "
 		"SET username = ?1, skin_id = ?2, position_x = ?3, position_y = ?4, position_z = ?5, "
-		"block_action_ready_at_ms = ?6, updated_at_ms = ?7 "
-		"WHERE id = ?8;";
+		"block_action_ready_at_ms = ?6, is_admin = ?7, updated_at_ms = ?8 "
+		"WHERE id = ?9;";
 
 	sqlite3_stmt *statement = nullptr;
 	if (!prepareStatement(sql, &statement))
@@ -372,8 +443,9 @@ bool PlayerTable::savePlayer(const Player &player)
 		|| sqlite3_bind_double(statement, 4, static_cast<double>(player.state.position.y)) != SQLITE_OK
 		|| sqlite3_bind_double(statement, 5, static_cast<double>(player.state.position.z)) != SQLITE_OK
 		|| sqlite3_bind_int64(statement, 6, static_cast<sqlite3_int64>(player.state.blockActionReadyAtMs)) != SQLITE_OK
-		|| sqlite3_bind_int64(statement, 7, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK
-		|| sqlite3_bind_int64(statement, 8, static_cast<sqlite3_int64>(player.profile.playerId)) != SQLITE_OK)
+		|| sqlite3_bind_int(statement, 7, sqliteBool(player.profile.admin)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 8, static_cast<sqlite3_int64>(nowMs)) != SQLITE_OK
+		|| sqlite3_bind_int64(statement, 9, static_cast<sqlite3_int64>(player.profile.playerId)) != SQLITE_OK)
 	{
 		setLastErrorFromDatabase("Failed to bind player save statement");
 		sqlite3_finalize(statement);

@@ -100,7 +100,11 @@ VOXPLACE_SERVER_WORKERS=<n>     Change le nombre de threads de calcul
 VOXPLACE_PROFILE_WORKERS=1      Active l'affichage du profiling des workers
 VOXPLACE_PROFILE_JSON=1         Client: émet des snapshots JSON combinés client+serveur dans stdout et logs/voxplace_profile.jsonl
 VOXPLACE_PROFILE_JSON_PATH=<p>  Client: remplace le chemin du fichier JSONL de profiling
+VOXPLACE_ADMIN_USERS=<names>    Bootstrap admin: pseudos séparés par virgule/espace, persistés en DB au login
 ```
+
+Le compte bootstrap `Admin` avec le mot de passe `admin` est aussi promu admin
+au login et persiste ce droit en base de données.
 
 Exemple :
 

@@ -70,6 +70,8 @@ namespace
 	constexpr const char *SERVER_CONNECTION_LOG_PATH = "logs/server_connections.log";
 	constexpr const char *ACTIVITY_FRONTIER_META_KEY = "activity_frontier_state_v1";
 	constexpr const char *ADMIN_USERS_ENV = "VOXPLACE_ADMIN_USERS";
+	constexpr const char *DEFAULT_ADMIN_USERNAME = "Admin";
+	constexpr const char *DEFAULT_ADMIN_PASSWORD = "admin";
 	volatile std::sig_atomic_t gWorldServerSignalStopRequested = 0;
 
 	struct ActivityFrontierState
@@ -142,6 +144,19 @@ namespace
 			}
 			addAdminUsername(admins, token);
 			return admins;
+		}
+
+		bool isDefaultAdminCredential(const std::string &username, const std::string &password)
+		{
+			if (username != DEFAULT_ADMIN_USERNAME)
+			{
+				return false;
+			}
+			if (password != DEFAULT_ADMIN_PASSWORD)
+			{
+				return false;
+			}
+			return true;
 		}
 
 		ChunkBounds makeSquareBounds(int radiusChunks)
@@ -2311,11 +2326,27 @@ struct WorldServer::Impl
 			}
 		}
 
-			session.playerContext.playerSession.playerId = session.playerContext.player.profile.playerId;
-			session.playerContext.playerSession.authenticated = true;
-			session.playerContext.usernameKey = trimmedUsername;
-			session.playerContext.admin = isAdminUsername(trimmedUsername);
-			activeUsernames[trimmedUsername] = session.playerContext.player.profile.playerId;
+		bool adminFromEnvironment = isAdminUsername(trimmedUsername);
+		bool adminFromDefaultCredential = isDefaultAdminCredential(trimmedUsername, password);
+		if ((adminFromEnvironment || adminFromDefaultCredential) &&
+			!session.playerContext.player.profile.admin)
+		{
+			session.playerContext.player.profile.admin = true;
+			if (!playerTable.updateAdminFlag(
+					session.playerContext.player.profile.playerId,
+					true))
+			{
+				std::cerr << "Failed to persist admin flag for "
+						  << trimmedUsername
+						  << ": " << playerTable.lastError() << std::endl;
+			}
+		}
+
+		session.playerContext.playerSession.playerId = session.playerContext.player.profile.playerId;
+		session.playerContext.playerSession.authenticated = true;
+		session.playerContext.usernameKey = trimmedUsername;
+		session.playerContext.admin = session.playerContext.player.profile.admin;
+		activeUsernames[trimmedUsername] = session.playerContext.player.profile.playerId;
 
 		response.status = LoginStatus::Accepted;
 		response.playerId = session.playerContext.player.profile.playerId;

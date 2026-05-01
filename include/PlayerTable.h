@@ -26,6 +26,7 @@ public:
 							std::string &storedPasswordHash,
 							bool &createdPlayer);
 	bool updatePasswordHash(uint64_t playerId, const std::string &passwordHash);
+	bool updateAdminFlag(uint64_t playerId, bool admin);
 	bool deletePlayer(uint64_t playerId);
 	bool savePlayer(const Player &player);
 
