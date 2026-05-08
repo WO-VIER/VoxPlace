@@ -16,13 +16,13 @@ Développé en C++23, OpenGL 4.6, et ENet.
 Arch / CachyOS / Manjaro :
 
 ```bash
-sudo pacman -S cmake gcc pkgconf glfw enet libsodium sqlite zstd mesa
+sudo pacman -S cmake gcc pkgconf glfw enet libsodium sqlite zstd curl mesa
 ```
 
 Ubuntu / Debian (24.04+) :
 
 ```bash
-sudo apt install cmake g++ pkg-config libglfw3-dev libenet-dev libsodium-dev libsqlite3-dev libzstd-dev libgl-dev
+sudo apt install cmake g++ pkg-config libglfw3-dev libenet-dev libsodium-dev libsqlite3-dev libzstd-dev libcurl4-openssl-dev libgl-dev
 ```
 
 ### Windows
@@ -101,6 +101,10 @@ VOXPLACE_PROFILE_WORKERS=1      Active l'affichage du profiling des workers
 VOXPLACE_PROFILE_JSON=1         Client: émet des snapshots JSON combinés client+serveur dans stdout et logs/voxplace_profile.jsonl
 VOXPLACE_PROFILE_JSON_PATH=<p>  Client: remplace le chemin du fichier JSONL de profiling
 VOXPLACE_ADMIN_USERS=<names>    Bootstrap admin: pseudos séparés par virgule/espace, persistés en DB au login
+VOXPLACE_SERVER_KEY_PATH=<p>    Serveur: remplace le chemin de la clé privée/libsodium persistée
+VOXPLACE_SERVER_PROOF_PATH=<p>  Serveur: écrit le JSON .proof officiel à ce chemin si défini
+VOXPLACE_SERVER_PROOF_HOST=<h>  Serveur: host publié dans le JSON .proof (défaut: play.voxplace.codes)
+VOXPLACE_SERVER_PROOF_URL=<url> Client: remplace l'URL HTTPS .proof du serveur officiel
 ```
 
 Le compte bootstrap `Admin` avec le mot de passe `admin` est aussi promu admin
@@ -124,7 +128,7 @@ Mode de persistance du monde :
 Un serveur de démonstration est disponible pour tester le projet :
 
 ```text
-Adresse : 161.35.214.248
+Adresse : play.voxplace.codes
 Port    : 28713 (UDP)
 Mode    : ClassicStreaming
 ```
@@ -151,10 +155,18 @@ Le serveur fonctionne avec la règle suivante :
 - si le compte n'existe pas encore, il est créé avec le couple `username + password`
 - si le compte existe déjà, le même `username` doit être fourni avec le bon mot de passe
 
+Sécurité de l'authentification :
+
+- les mots de passe de `LoginRequest` et `AccountDeleteRequest` ne transitent pas en clair ;
+- le serveur expose une clé publique libsodium persistée et un challenge unique dans `Hello` ;
+- le client chiffre le mot de passe avec `crypto_box` avant de l'envoyer sur ENet ;
+- pour `play.voxplace.codes`, le client compare la clé reçue avec le fingerprint publié en HTTPS sur `https://voxplace.codes/.proof/voxplace-server.json` si le fichier est disponible ;
+- pour les serveurs locaux ou personnalisés, le client utilise un modèle TOFU similaire à SSH et mémorise la première clé vue pour `host:port`.
+
 Connexion au serveur public :
 
 ```bash
-./build_debug/VoxPlace 161.35.214.248 28713 MonPseudo MonMotDePasse
+./build_debug/VoxPlace play.voxplace.codes 28713 MonPseudo MonMotDePasse
 ```
 
 Connexion à un serveur local :

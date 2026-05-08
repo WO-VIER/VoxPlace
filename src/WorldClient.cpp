@@ -2,6 +2,7 @@
 
 #include <PlayerState.h>
 #include <PlayerUsername.h>
+#include <client/security/ServerProof.h>
 
 #include <enet/enet.h>
 
@@ -9,6 +10,7 @@
 #include <cstring>
 #include <iostream>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -47,7 +49,137 @@ namespace
 			buffer[index] = text[index];
 		}
 	}
-}
+
+	bool sendReliablePayload(ENetPeer *peer, const std::vector<uint8_t> &payload)
+	{
+		ENetPacket *packet = enet_packet_create(
+			payload.data(),
+			payload.size(),
+			ENET_PACKET_FLAG_RELIABLE);
+		if (packet == nullptr)
+		{
+			return false;
+		}
+		if (enet_peer_send(peer, WORLD_CHANNEL_RELIABLE, packet) != 0)
+		{
+			enet_packet_destroy(packet);
+			return false;
+		}
+		return true;
+	}
+
+	void resetClientPeer(ENetPeer *&peer)
+	{
+		if (peer != nullptr)
+		{
+			enet_peer_reset(peer);
+			peer = nullptr;
+		}
+	}
+
+	bool validateServerHello(
+		const std::string &hostName,
+		uint16_t port,
+		const HelloMessage &serverHello,
+		std::string &errorMessage)
+	{
+		if (serverHello.hasServerCrypto == 0)
+		{
+			errorMessage = "Server does not expose a crypto identity";
+			return false;
+		}
+		return verifyServerPublicKeyProof(
+			hostName,
+			port,
+			serverHello.serverPublicKey,
+			errorMessage);
+	}
+
+	bool waitForServerHelloPacket(
+		ENetHost *host,
+		ENetPeer *peer,
+		HelloMessage &serverHello,
+		std::string &errorMessage)
+	{
+		ENetEvent event{};
+		auto start = std::chrono::steady_clock::now();
+		while (true)
+		{
+			uint64_t elapsedMs = static_cast<uint64_t>(
+				std::chrono::duration_cast<std::chrono::milliseconds>(
+					std::chrono::steady_clock::now() - start).count());
+			if (elapsedMs >= 5000)
+			{
+				errorMessage = "Timed out while waiting for server hello";
+				return false;
+			}
+			if (enet_host_service(host, &event, 250) <= 0)
+			{
+				continue;
+			}
+			if (event.type == ENET_EVENT_TYPE_DISCONNECT)
+			{
+				errorMessage = "Disconnected while waiting for server hello";
+				return false;
+			}
+			if (event.type != ENET_EVENT_TYPE_RECEIVE || event.peer != peer)
+			{
+				continue;
+			}
+			if (event.packet->dataLength > 0 &&
+				static_cast<PacketType>(event.packet->data[0]) == PacketType::Hello)
+			{
+				bool decoded = decodeHello(
+					event.packet->data,
+					event.packet->dataLength,
+					serverHello);
+				enet_packet_destroy(event.packet);
+				if (!decoded)
+				{
+					errorMessage = "Failed to decode server hello";
+				}
+				return decoded;
+			}
+			enet_packet_destroy(event.packet);
+		}
+	}
+
+	bool requestServerHello(
+		ENetHost *host,
+		ENetPeer *peer,
+		HelloMessage &serverHello,
+		std::string &errorMessage)
+	{
+		HelloMessage hello;
+		std::vector<uint8_t> helloPayload = encodeHello(hello);
+		if (!sendReliablePayload(peer, helloPayload))
+		{
+			errorMessage = "Failed to send hello packet";
+			return false;
+		}
+		enet_host_flush(host);
+		return waitForServerHelloPacket(host, peer, serverHello, errorMessage);
+	}
+
+	bool encryptPasswordForHello(
+		const std::string &password,
+		const HelloMessage &serverHello,
+		EncryptedPasswordPayload &payload,
+		std::string &errorMessage)
+	{
+		if (password.size() > PLAYER_PASSWORD_MAX_LENGTH)
+		{
+			errorMessage = "Password is too long";
+			return false;
+		}
+		return encryptPasswordPayload(
+			password,
+			serverHello.serverPublicKey,
+			serverHello.loginChallenge,
+			payload,
+			errorMessage);
+	}
+	}
 
 struct WorldClient::Impl
 {
@@ -158,11 +290,16 @@ bool WorldClient::connectToServer(const std::string &hostName,
 		m_impl->lastConnectionError = playerUsernameValidationErrorText(usernameError);
 		return false;
 	}
-	if (password.empty())
-	{
-		m_impl->lastConnectionError = "Password must not be empty";
-		return false;
-	}
+		if (password.empty())
+		{
+			m_impl->lastConnectionError = "Password must not be empty";
+			return false;
+		}
+		if (password.size() > PLAYER_PASSWORD_MAX_LENGTH)
+		{
+			m_impl->lastConnectionError = "Password is too long";
+			return false;
+		}
 
 	if (m_impl->host == nullptr)
 	{
@@ -196,33 +333,45 @@ bool WorldClient::connectToServer(const std::string &hostName,
 		// On le garde aligné avec le serveur pour les essais de streaming agressif.
 		enet_peer_throttle_configure(m_impl->peer, 5000, 6, 3);
 
-		HelloMessage hello;
-		std::vector<uint8_t> helloPayload = encodeHello(hello);
-		ENetPacket *helloPacket = enet_packet_create(
-			helloPayload.data(),
-			helloPayload.size(),
-			ENET_PACKET_FLAG_RELIABLE);
-		enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, helloPacket);
+			HelloMessage serverHello;
+			if (!requestServerHello(
+					m_impl->host,
+					m_impl->peer,
+					serverHello,
+					m_impl->lastConnectionError))
+			{
+				resetClientPeer(m_impl->peer);
+				return false;
+			}
+			if (!validateServerHello(
+					hostName,
+					port,
+					serverHello,
+					m_impl->lastConnectionError))
+			{
+				resetClientPeer(m_impl->peer);
+				return false;
+			}
 
-		LoginRequestMessage login;
-		(void)copyPlayerUsernameToBuffer(trimmedUsername, login.username);
-		std::string trimmedPassword = password;
-		if (trimmedPassword.size() > PLAYER_PASSWORD_MAX_LENGTH)
-		{
-			trimmedPassword.resize(PLAYER_PASSWORD_MAX_LENGTH);
-		}
-		std::fill(std::begin(login.password), std::end(login.password), '\0');
-		for (size_t index = 0; index < trimmedPassword.size(); index++)
-		{
-			login.password[index] = trimmedPassword[index];
-		}
-		std::vector<uint8_t> loginPayload = encodeLoginRequest(login);
-		ENetPacket *loginPacket = enet_packet_create(
-			loginPayload.data(),
-			loginPayload.size(),
-			ENET_PACKET_FLAG_RELIABLE);
-		enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, loginPacket);
-		enet_host_flush(m_impl->host);
+			LoginRequestMessage login;
+			(void)copyPlayerUsernameToBuffer(trimmedUsername, login.username);
+			if (!encryptPasswordForHello(
+					password,
+					serverHello,
+					login.passwordPayload,
+					m_impl->lastConnectionError))
+			{
+				resetClientPeer(m_impl->peer);
+				return false;
+			}
+			std::vector<uint8_t> loginPayload = encodeLoginRequest(login);
+			if (!sendReliablePayload(m_impl->peer, loginPayload))
+			{
+				m_impl->lastConnectionError = "Failed to send login packet";
+				resetClientPeer(m_impl->peer);
+				return false;
+			}
+			enet_host_flush(m_impl->host);
 
 		auto start = std::chrono::steady_clock::now();
 		while (true)
@@ -378,15 +527,44 @@ bool WorldClient::deleteUserOnServer(const std::string &hostName,
 	if (enet_host_service(m_impl->host, &event, 5000) > 0 &&
 		event.type == ENET_EVENT_TYPE_CONNECT)
 	{
+		HelloMessage serverHello;
+		if (!requestServerHello(
+				m_impl->host,
+				m_impl->peer,
+				serverHello,
+				m_impl->lastConnectionError))
+		{
+			resetClientPeer(m_impl->peer);
+			return false;
+		}
+		if (!validateServerHello(
+				hostName,
+				port,
+				serverHello,
+				m_impl->lastConnectionError))
+		{
+			resetClientPeer(m_impl->peer);
+			return false;
+		}
+
 		AccountDeleteRequestMessage request;
 		(void)copyPlayerUsernameToBuffer(trimmedUsername, request.username);
-		copyPacketBufferText(password, request.password);
+		if (!encryptPasswordForHello(
+				password,
+				serverHello,
+				request.passwordPayload,
+				m_impl->lastConnectionError))
+		{
+			resetClientPeer(m_impl->peer);
+			return false;
+		}
 		std::vector<uint8_t> payload = encodeAccountDeleteRequest(request);
-		ENetPacket *packet = enet_packet_create(
-			payload.data(),
-			payload.size(),
-			ENET_PACKET_FLAG_RELIABLE);
-		enet_peer_send(m_impl->peer, WORLD_CHANNEL_RELIABLE, packet);
+		if (!sendReliablePayload(m_impl->peer, payload))
+		{
+			m_impl->lastConnectionError = "Failed to send delete account packet";
+			resetClientPeer(m_impl->peer);
+			return false;
+		}
 		enet_host_flush(m_impl->host);
 
 		auto start = std::chrono::steady_clock::now();
@@ -455,14 +633,13 @@ bool WorldClient::deleteUserOnServer(const std::string &hostName,
 		m_impl->lastConnectionError = "Timed out while connecting to server";
 	}
 
-	enet_peer_reset(m_impl->peer);
-	m_impl->peer = nullptr;
-			m_impl->connected = false;
-			m_impl->localPlayer = Player{};
-			m_impl->localPlayerAdmin = false;
-			m_impl->blockCooldownDisabled = false;
-			return deleted;
-		}
+	resetClientPeer(m_impl->peer);
+	m_impl->connected = false;
+	m_impl->localPlayer = Player{};
+	m_impl->localPlayerAdmin = false;
+	m_impl->blockCooldownDisabled = false;
+	return deleted;
+}
 
 void WorldClient::disconnect()
 {

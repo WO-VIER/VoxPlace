@@ -1,6 +1,7 @@
 #ifndef WORLD_PROTOCOL_H
 #define WORLD_PROTOCOL_H
 
+#include <CryptoHandshake.h>
 #include <PlayerUsername.h>
 #include <VoxelChunkData.h>
 #include <WorldBounds.h>
@@ -10,7 +11,7 @@
 #include <string>
 #include <vector>
 
-constexpr size_t PLAYER_PASSWORD_MAX_LENGTH = 128;
+constexpr size_t PLAYER_PASSWORD_MAX_LENGTH = VOXPLACE_PASSWORD_MAX_LENGTH;
 constexpr size_t COMMAND_REQUEST_TEXT_MAX_LENGTH = 127;
 constexpr size_t SERVER_CHAT_TEXT_MAX_LENGTH = 255;
 
@@ -73,12 +74,15 @@ struct HelloMessage
 {
 	uint32_t magic = 0x5658504Cu;
 	uint16_t version = 1;
+	uint8_t serverPublicKey[VOXPLACE_CRYPTO_PUBLIC_KEY_BYTES] = {};
+	uint8_t loginChallenge[VOXPLACE_LOGIN_CHALLENGE_BYTES] = {};
+	uint8_t hasServerCrypto = 0;
 };
 
 struct LoginRequestMessage
 {
 	char username[PLAYER_USERNAME_MAX_LENGTH + 1] = {};
-	char password[PLAYER_PASSWORD_MAX_LENGTH + 1] = {};
+	EncryptedPasswordPayload passwordPayload;
 };
 
 struct LoginResponseMessage
@@ -99,7 +103,7 @@ struct LoginResponseMessage
 struct AccountDeleteRequestMessage
 {
 	char username[PLAYER_USERNAME_MAX_LENGTH + 1] = {};
-	char password[PLAYER_PASSWORD_MAX_LENGTH + 1] = {};
+	EncryptedPasswordPayload passwordPayload;
 };
 
 struct AccountDeleteResponseMessage

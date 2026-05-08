@@ -9,6 +9,7 @@
 #endif
 
 #include <ChunkPalette.h>
+#include <CryptoHandshake.h>
 #include <PasswordHasher.h>
 #include <Player.h>
 #include <PlayerSessionData.h>
@@ -17,6 +18,7 @@
 #include <WorldTable.h>
 
 #include <enet/enet.h>
+#include <sodium.h>
 
 #include <atomic>
 #include <cctype>
@@ -37,6 +39,7 @@
 #include <queue>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -334,7 +337,137 @@ namespace
 			sizeof(uint32_t);
 		return rawBytes;
 	}
-}
+
+	std::string serverIdentityPath()
+	{
+		const char *overridePath = std::getenv("VOXPLACE_SERVER_KEY_PATH");
+		if (overridePath != nullptr && overridePath[0] != '\0')
+		{
+			return overridePath;
+		}
+		return "voxplace_server_identity.key";
+	}
+
+	bool readServerIdentity(
+		const std::string &path,
+		uint8_t publicKey[VOXPLACE_CRYPTO_PUBLIC_KEY_BYTES],
+		uint8_t secretKey[VOXPLACE_CRYPTO_SECRET_KEY_BYTES])
+	{
+		std::ifstream input(path);
+		std::string magic;
+		std::string publicHex;
+		std::string secretHex;
+		input >> magic >> publicHex >> secretHex;
+		if (magic != "voxplace_server_identity_v1")
+		{
+			return false;
+		}
+		if (!hexToBytes(publicHex, publicKey, VOXPLACE_CRYPTO_PUBLIC_KEY_BYTES))
+		{
+			return false;
+		}
+		return hexToBytes(secretHex, secretKey, VOXPLACE_CRYPTO_SECRET_KEY_BYTES);
+	}
+
+	bool writeServerIdentity(
+		const std::string &path,
+		const uint8_t publicKey[VOXPLACE_CRYPTO_PUBLIC_KEY_BYTES],
+		const uint8_t secretKey[VOXPLACE_CRYPTO_SECRET_KEY_BYTES])
+	{
+		std::filesystem::path keyPath(path);
+		std::filesystem::path parentPath = keyPath.parent_path();
+		if (!parentPath.empty())
+		{
+			std::error_code error;
+			std::filesystem::create_directories(parentPath, error);
+		}
+		std::ofstream output(path, std::ios::trunc);
+		output << "voxplace_server_identity_v1\n"
+			   << bytesToHex(publicKey, VOXPLACE_CRYPTO_PUBLIC_KEY_BYTES) << "\n"
+			   << bytesToHex(secretKey, VOXPLACE_CRYPTO_SECRET_KEY_BYTES) << "\n";
+		output.close();
+		std::error_code error;
+		std::filesystem::permissions(
+			keyPath,
+			std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+			std::filesystem::perm_options::replace,
+			error);
+		return !output.fail();
+	}
+
+	bool loadOrCreateServerIdentity(
+		uint8_t publicKey[VOXPLACE_CRYPTO_PUBLIC_KEY_BYTES],
+		uint8_t secretKey[VOXPLACE_CRYPTO_SECRET_KEY_BYTES],
+		std::string &identityPath,
+		std::string &errorMessage)
+	{
+		identityPath = serverIdentityPath();
+		if (std::filesystem::exists(identityPath))
+		{
+			if (readServerIdentity(identityPath, publicKey, secretKey))
+			{
+				return true;
+			}
+			errorMessage = "Failed to read server identity key";
+			return false;
+		}
+		if (!generateServerCryptoIdentity(publicKey, secretKey, errorMessage))
+		{
+			return false;
+		}
+		if (!writeServerIdentity(identityPath, publicKey, secretKey))
+		{
+			errorMessage = "Failed to write server identity key";
+			return false;
+		}
+		return true;
+	}
+
+	std::string serverProofOutputPath()
+	{
+		const char *path = std::getenv("VOXPLACE_SERVER_PROOF_PATH");
+		if (path != nullptr && path[0] != '\0')
+		{
+			return path;
+		}
+		return "";
+	}
+
+	std::string serverProofHostName()
+	{
+		const char *host = std::getenv("VOXPLACE_SERVER_PROOF_HOST");
+		if (host != nullptr && host[0] != '\0')
+		{
+			return host;
+		}
+		return "play.voxplace.codes";
+	}
+
+	bool writeServerProofFile(
+		const std::string &path,
+		const std::string &hostName,
+		uint16_t port,
+		const std::string &fingerprint)
+	{
+		std::filesystem::path proofPath(path);
+		std::filesystem::path parentPath = proofPath.parent_path();
+		if (!parentPath.empty())
+		{
+			std::error_code error;
+			std::filesystem::create_directories(parentPath, error);
+		}
+		std::ofstream output(path, std::ios::trunc);
+		output << "{\n"
+			   << "  \"service\": \"VoxPlace\",\n"
+			   << "  \"host\": \"" << hostName << "\",\n"
+			   << "  \"port\": " << port << ",\n"
+			   << "  \"protocol\": \"enet-udp\",\n"
+			   << "  \"public_key_algorithm\": \"libsodium-crypto_box\",\n"
+			   << "  \"public_key_fingerprint\": \"" << fingerprint << "\"\n"
+			   << "}\n";
+		return !output.fail();
+	}
+		}
 
 struct WorldServer::Impl
 {
@@ -357,10 +490,12 @@ struct WorldServer::Impl
 				bool admin = false;
 			};
 
-		ENetPeer *peer = nullptr;
-		ClientChunkStreamState chunkStream;
-		ClientPlayerContext playerContext;
-	};
+			ENetPeer *peer = nullptr;
+			ClientChunkStreamState chunkStream;
+			ClientPlayerContext playerContext;
+			uint8_t loginChallenge[VOXPLACE_LOGIN_CHALLENGE_BYTES] = {};
+			bool loginChallengeReady = false;
+		};
 
 	struct ReadyChunk
 	{
@@ -408,10 +543,15 @@ struct WorldServer::Impl
 	ENetHost *host = nullptr;
 	std::unique_ptr<IChunkGenerator> generator;
 		WorldGenerationMode generationMode = WorldGenerationMode::ActivityFrontier;
-		PlayerTable playerTable;
-			WorldTable worldTable;
-		PasswordHasher passwordHasher;
-		std::unordered_set<std::string> adminUsernames;
+			PlayerTable playerTable;
+				WorldTable worldTable;
+			PasswordHasher passwordHasher;
+			uint8_t serverPublicKey[VOXPLACE_CRYPTO_PUBLIC_KEY_BYTES] = {};
+			uint8_t serverSecretKey[VOXPLACE_CRYPTO_SECRET_KEY_BYTES] = {};
+			std::string serverIdentityKeyPath;
+			std::string serverPublicKeyFingerprintValue;
+			bool serverCryptoReady = false;
+			std::unordered_set<std::string> adminUsernames;
 		bool blockCooldownDisabled = false;
 
 		WorldFrontier frontier;
@@ -507,11 +647,38 @@ struct WorldServer::Impl
 		stop();
 	}
 
-		bool start()
-		{
-				if (!playerTable.open(playerDatabasePath))
+			bool start()
+			{
+				std::string identityError;
+				if (!loadOrCreateServerIdentity(
+						serverPublicKey,
+						serverSecretKey,
+						serverIdentityKeyPath,
+						identityError))
 				{
-				std::cerr << "Failed to open player database: "
+					std::cerr << "Failed to initialize server crypto identity: "
+							  << identityError << std::endl;
+					return false;
+				}
+				serverCryptoReady = true;
+				serverPublicKeyFingerprintValue =
+					serverPublicKeyFingerprint(serverPublicKey);
+				std::string proofOutputPath = serverProofOutputPath();
+				if (!proofOutputPath.empty())
+				{
+					if (!writeServerProofFile(
+							proofOutputPath,
+							serverProofHostName(),
+							port,
+							serverPublicKeyFingerprintValue))
+					{
+						std::cerr << "Failed to write server proof file: "
+								  << proofOutputPath << std::endl;
+					}
+				}
+					if (!playerTable.open(playerDatabasePath))
+					{
+					std::cerr << "Failed to open player database: "
 						  << playerTable.lastError() << std::endl;
 				return false;
 			}
@@ -570,8 +737,16 @@ struct WorldServer::Impl
 					  << " with " << workerCount << " generation worker(s)"
 					  << " in " << worldGenerationModeName(generationMode)
 					  << " mode" << std::endl;
-			std::cout << "Chunk stream tick: " << environmentOptions.streamTickMs << " ms" << std::endl;
-				std::cout << "World DB path: " << worldDatabasePath << std::endl;
+				std::cout << "Chunk stream tick: " << environmentOptions.streamTickMs << " ms" << std::endl;
+				std::cout << "Server crypto key path: " << serverIdentityKeyPath << std::endl;
+				std::cout << "Server public key fingerprint: "
+						  << serverPublicKeyFingerprintValue << std::endl;
+				if (!proofOutputPath.empty())
+				{
+					std::cout << "Server proof JSON path: "
+							  << proofOutputPath << std::endl;
+				}
+					std::cout << "World DB path: " << worldDatabasePath << std::endl;
 			if (!persistGeneratedChunks)
 			{
 				std::cout << "Modified-only world cache contains "
@@ -1353,20 +1528,65 @@ struct WorldServer::Impl
 		return scaleBudgetForStreamTick(integratedChunksBudgetForTick(), environmentOptions.streamTickMs);
 	}
 
-	void handleConnect(ENetPeer *peer)
-	{
-		// Ce réglage agit surtout sur les envois non fiables d'ENet.
-		// On le garde aligné avec le client pour les essais de streaming agressif.
+		void handleConnect(ENetPeer *peer)
+		{
+			// Ce réglage agit surtout sur les envois non fiables d'ENet.
+			// On le garde aligné avec le client pour les essais de streaming agressif.
 		enet_peer_throttle_configure(peer, 5000, 6, 3);
 
 		ClientSession session;
 		session.peer = peer;
 		session.playerContext.playerSession.lastSeenAtMs = systemNowMs();
-		clients[peer] = std::move(session);
-		std::cout << "Client connected" << std::endl;
-	}
+			clients[peer] = std::move(session);
+			std::cout << "Client connected" << std::endl;
+		}
 
-	void handleDisconnect(ENetPeer *peer)
+		void sendHelloResponse(ClientSession &session, const HelloMessage &request)
+		{
+			HelloMessage response;
+			response.magic = request.magic;
+			response.version = request.version;
+			std::memcpy(
+				response.serverPublicKey,
+				serverPublicKey,
+				sizeof(response.serverPublicKey));
+			randombytes_buf(session.loginChallenge, sizeof(session.loginChallenge));
+			std::memcpy(
+				response.loginChallenge,
+				session.loginChallenge,
+				sizeof(response.loginChallenge));
+			response.hasServerCrypto = 1;
+			session.loginChallengeReady = true;
+			sendReliable(session.peer, encodeHello(response));
+		}
+
+		bool decryptSessionPassword(
+			ClientSession &session,
+			const EncryptedPasswordPayload &payload,
+			std::string &password)
+		{
+			if (!serverCryptoReady || !session.loginChallengeReady)
+			{
+				return false;
+			}
+			std::string cryptoError;
+			bool decrypted = decryptPasswordPayload(
+				payload,
+				serverSecretKey,
+				session.loginChallenge,
+				password,
+				cryptoError);
+			sodium_memzero(session.loginChallenge, sizeof(session.loginChallenge));
+			session.loginChallengeReady = false;
+			if (!decrypted)
+			{
+				std::cerr << "Rejected encrypted password payload: "
+						  << cryptoError << std::endl;
+			}
+			return decrypted;
+		}
+
+		void handleDisconnect(ENetPeer *peer)
 	{
 		auto sessionIt = clients.find(peer);
 		if (sessionIt != clients.end())
@@ -2164,13 +2384,19 @@ struct WorldServer::Impl
 				return true;
 			}
 
-		void handleAccountDeleteRequest(
-			ENetPeer *peer,
-			const AccountDeleteRequestMessage &request)
-		{
-			AccountDeleteResponseMessage response;
-			std::string trimmedUsername = trimPlayerUsername(
-				playerUsernameFromBuffer(request.username));
+			void handleAccountDeleteRequest(
+				ENetPeer *peer,
+				const AccountDeleteRequestMessage &request)
+			{
+				auto sessionIt = clients.find(peer);
+				if (sessionIt == clients.end())
+				{
+					return;
+				}
+
+				AccountDeleteResponseMessage response;
+				std::string trimmedUsername = trimPlayerUsername(
+					playerUsernameFromBuffer(request.username));
 			PlayerUsernameValidationError usernameError = validatePlayerUsername(trimmedUsername);
 			if (usernameError != PlayerUsernameValidationError::None)
 			{
@@ -2178,16 +2404,25 @@ struct WorldServer::Impl
 				sendReliable(peer, encodeAccountDeleteResponse(response));
 				return;
 			}
-			if (activeUsernames.find(trimmedUsername) != activeUsernames.end())
-			{
-				response.status = AccountDeleteStatus::UsernameAlreadyInUse;
-				sendReliable(peer, encodeAccountDeleteResponse(response));
-				return;
-			}
+				if (activeUsernames.find(trimmedUsername) != activeUsernames.end())
+				{
+					response.status = AccountDeleteStatus::UsernameAlreadyInUse;
+					sendReliable(peer, encodeAccountDeleteResponse(response));
+					return;
+				}
 
-			std::string password = std::string(request.password);
-			Player player;
-			std::string storedPasswordHash;
+				std::string password;
+				if (!decryptSessionPassword(
+						sessionIt->second,
+						request.passwordPayload,
+						password))
+				{
+					response.status = AccountDeleteStatus::InvalidCredentials;
+					sendReliable(peer, encodeAccountDeleteResponse(response));
+					return;
+				}
+				Player player;
+				std::string storedPasswordHash;
 			if (password.empty() ||
 				!playerTable.loadPlayerAuthByUsername(trimmedUsername, player, storedPasswordHash))
 			{
@@ -2251,13 +2486,22 @@ struct WorldServer::Impl
 			return;
 		}
 
-		std::string password = std::string(request.password);
-		if (password.empty())
-		{
-			response.status = LoginStatus::InvalidCredentials;
-			sendReliable(peer, encodeLoginResponse(response));
-			return;
-		}
+			std::string password;
+			if (!decryptSessionPassword(
+					session,
+					request.passwordPayload,
+					password))
+			{
+				response.status = LoginStatus::InvalidCredentials;
+				sendReliable(peer, encodeLoginResponse(response));
+				return;
+			}
+			if (password.empty())
+			{
+				response.status = LoginStatus::InvalidCredentials;
+				sendReliable(peer, encodeLoginResponse(response));
+				return;
+			}
 		std::string passwordHashForNewPlayer;
 		if (!passwordHasher.hashPassword(password, passwordHashForNewPlayer))
 		{
@@ -2396,16 +2640,21 @@ struct WorldServer::Impl
 
 		PacketType type = static_cast<PacketType>(data[0]);
 
-		if (type == PacketType::Hello)
-		{
-			HelloMessage hello;
-			if (!decodeHello(data, size, hello))
+			if (type == PacketType::Hello)
 			{
+				HelloMessage hello;
+				if (!decodeHello(data, size, hello))
+				{
+					return;
+				}
+				auto sessionIt = clients.find(peer);
+				if (sessionIt == clients.end())
+				{
+					return;
+				}
+				sendHelloResponse(sessionIt->second, hello);
 				return;
 			}
-			sendReliable(peer, encodeHello(hello));
-			return;
-		}
 
 			if (type == PacketType::LoginRequest)
 			{

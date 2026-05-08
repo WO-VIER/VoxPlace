@@ -6,6 +6,8 @@ notes/
 build*
 *.pdf
 *.sqlite3*
+voxplace_server_identity.key
+voxplace_trusted_servers.txt
 valgrind*.txt
 build_tracy_profiler/
 .cachegrind/

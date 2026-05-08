@@ -170,6 +170,10 @@ if(WIN32)
 	add_library(PkgConfig::SODIUM INTERFACE IMPORTED)
 	target_link_libraries(PkgConfig::SODIUM INTERFACE sodium)
 
+	find_package(CURL REQUIRED)
+	add_library(PkgConfig::CURL INTERFACE IMPORTED)
+	target_link_libraries(PkgConfig::CURL INTERFACE CURL::libcurl)
+
 	add_library(PkgConfig::SQLITE3 INTERFACE IMPORTED)
 	target_link_libraries(PkgConfig::SQLITE3 INTERFACE sqlite3)
 
@@ -184,6 +188,7 @@ else()
 		pkg_check_modules(ENET REQUIRED IMPORTED_TARGET enet)
 	endif()
 	pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+	pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 	pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
 	pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 	set(OpenGL_GL_PREFERENCE "GLVND")
@@ -194,6 +199,7 @@ endif()
 # Core library
 # ============================================================
 set(CORE_SOURCES
+	src/CryptoHandshake.cpp
 	src/WorldProtocol.cpp
 )
 
@@ -208,6 +214,7 @@ target_include_directories(voxplace_core PUBLIC
 )
 
 target_link_libraries(voxplace_core PUBLIC
+	PkgConfig::SODIUM
 	PkgConfig::ZSTD
 )
 
@@ -229,6 +236,7 @@ set(CLIENT_SOURCES
 	src/client/ui/DebugOverlay.cpp
 	src/client/ui/LoginScreen.cpp
 	src/client/ui/ProfilerWindows.cpp
+	src/client/security/ServerProof.cpp
 	src/client/gameplay/BlockInteractionSystem.cpp
 	src/client/gameplay/ClientWorldSystem.cpp
 	src/client/gameplay/ChunkStreamingSystem.cpp
@@ -279,6 +287,7 @@ target_link_libraries(VoxPlace PRIVATE voxplace_core)
 target_link_libraries(VoxPlace PRIVATE
 	PkgConfig::GLFW
 	PkgConfig::ENET
+	PkgConfig::CURL
 	${OPENGL_gl_LIBRARY}
 )
 
@@ -359,6 +368,7 @@ target_link_libraries(VoxPlaceWorldStorageBench PRIVATE
 # ============================================================
 set(PREGEN_SOURCES
 	src/tools/pregen_main.cpp
+	src/client/security/ServerProof.cpp
 	src/WorldClient.cpp
 )
 
@@ -376,6 +386,7 @@ target_include_directories(VoxPlacePregen PRIVATE
 target_link_libraries(VoxPlacePregen PRIVATE
 	voxplace_core
 	PkgConfig::ENET
+	PkgConfig::CURL
 )
 
 # ============================================================
