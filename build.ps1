@@ -1,7 +1,8 @@
 param(
     [ValidateSet("Debug", "Release")]
     [string]$Config = "Debug",
-    [switch]$Clean
+    [switch]$Clean,
+    [string]$VcpkgRoot = $env:VCPKG_ROOT
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +17,68 @@ function Write-Step {
 function Test-Command {
     param([string]$Name)
     $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Resolve-VcpkgRoot {
+    param([string]$RequestedRoot)
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($RequestedRoot)) {
+        $candidates += $RequestedRoot
+    }
+
+    $vcpkgCommand = Get-Command "vcpkg" -ErrorAction SilentlyContinue
+    if ($null -ne $vcpkgCommand) {
+        $candidates += (Split-Path -Parent $vcpkgCommand.Source)
+    }
+
+    $candidates += (Join-Path $projectRoot "vcpkg")
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+
+        $toolchainFile = Join-Path $candidate "scripts\buildsystems\vcpkg.cmake"
+        if (Test-Path $toolchainFile) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    return $null
+}
+
+function Get-VcpkgExecutable {
+    param([string]$Root)
+
+    $exe = Join-Path $Root "vcpkg.exe"
+    if (Test-Path $exe) {
+        return $exe
+    }
+
+    $exe = Join-Path $Root "vcpkg"
+    if (Test-Path $exe) {
+        return $exe
+    }
+
+    return $null
+}
+
+function Ensure-VcpkgCurl {
+    param([string]$Root)
+
+    $vcpkgExe = Get-VcpkgExecutable $Root
+    if ($null -eq $vcpkgExe) {
+        Write-Host "vcpkg executable not found in $Root" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Step "Ensuring libcurl is available through vcpkg..."
+    & $vcpkgExe install "curl:x64-windows"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Failed to install curl:x64-windows with vcpkg" -ForegroundColor Red
+        exit 1
+    }
 }
 
 # ============================================================
@@ -45,6 +108,18 @@ if (Test-Command "cl") {
 if (-not (Test-Command "cmake")) {
     Write-Host "CMake not found. Install with: winget install Kitware.CMake" -ForegroundColor Red
     exit 1
+}
+
+# ============================================================
+# Windows libcurl dependency
+# ============================================================
+$resolvedVcpkgRoot = Resolve-VcpkgRoot $VcpkgRoot
+if ($null -ne $resolvedVcpkgRoot) {
+    Ensure-VcpkgCurl $resolvedVcpkgRoot
+} else {
+    Write-Host "vcpkg not found. libcurl is required for the HTTPS .proof check." -ForegroundColor Yellow
+    Write-Host "Install vcpkg, then run: vcpkg install curl:x64-windows" -ForegroundColor Yellow
+    Write-Host "Set VCPKG_ROOT or pass -VcpkgRoot C:\path\to\vcpkg before building." -ForegroundColor Yellow
 }
 
 # ============================================================
@@ -79,6 +154,12 @@ $cmakeArgs = @(
 if ($useMsvc) {
     $cmakeArgs += "-G", "Visual Studio 17 2022"
     $cmakeArgs += "-A", "x64"
+}
+
+if ($null -ne $resolvedVcpkgRoot) {
+    $toolchainFile = Join-Path $resolvedVcpkgRoot "scripts\buildsystems\vcpkg.cmake"
+    $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile"
+    $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=x64-windows"
 }
 
 & cmake @cmakeArgs

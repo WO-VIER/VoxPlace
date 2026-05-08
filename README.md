@@ -29,8 +29,10 @@ sudo apt install cmake g++ pkg-config libglfw3-dev libenet-dev libsodium-dev lib
 
 - CMake >= 3.20 : `winget install Kitware.CMake`
 - MSVC Build Tools ou LLVM/Clang
+- vcpkg pour `libcurl` : `vcpkg install curl:x64-windows`
 
-Les dépendances sont téléchargées automatiquement au premier build via CMake FetchContent.
+Les dépendances principales sont téléchargées automatiquement au premier build via CMake FetchContent.
+`build.ps1` détecte aussi `VCPKG_ROOT` ou `vcpkg` pour fournir `libcurl`, utilisé par la vérification HTTPS `.proof`.
 
 ## Compilation
 

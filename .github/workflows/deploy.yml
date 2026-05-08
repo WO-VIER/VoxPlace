@@ -25,6 +25,7 @@ jobs:
             libsodium-dev \
             libsqlite3-dev \
             libzstd-dev \
+            libcurl4-openssl-dev \
             libgl1-mesa-dev \
             libglm-dev
 

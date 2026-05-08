@@ -3,6 +3,12 @@ set -e
 
 echo "[deploy] $(date) - Starting deployment..."
 
+if ! pkg-config --exists libcurl; then
+    echo '[deploy] Missing libcurl development package, installing it...'
+    apt-get update
+    apt-get install -y libcurl4-openssl-dev pkg-config
+fi
+
 # Arrêter le serveur proprement via systemd
 if systemctl is-active --quiet voxplace.service; then
     echo '[deploy] Stopping voxplace.service...'
