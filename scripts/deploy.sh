@@ -42,6 +42,9 @@ systemctl reset-failed voxplace.service || true
 cd /root/VoxPlace
 git pull origin main
 
+# Préparer le dossier servi par Caddy/Nginx pour la preuve HTTPS du serveur.
+install -d -m 0755 /var/www/voxplace/.proof
+
 # Installer l'unité systemd versionnée dans le repo.
 install -m 0644 scripts/voxplace.service /etc/systemd/system/voxplace.service
 systemctl daemon-reload
