@@ -73,13 +73,18 @@ namespace
 		{
 			return;
 		}
+		uint32_t requiredYesVotes = 0;
+		if (expansionStatus.eligiblePlayers > 0)
+		{
+			requiredYesVotes = (expansionStatus.eligiblePlayers + 1) / 2;
+		}
 		char buffer[64];
 		std::snprintf(
 			buffer,
 			sizeof(buffer),
-			"Expand votes: %u/%u",
-			expansionStatus.votesCast,
-			expansionStatus.eligiblePlayers);
+			"Expand yes: %u/%u",
+			expansionStatus.yesVotes,
+			requiredYesVotes);
 		std::string label = buffer;
 		ImVec2 textSize = font->CalcTextSizeA(
 			font->LegacySize,

@@ -1909,11 +1909,6 @@ struct WorldServer::Impl
 		{
 			return;
 		}
-		if (!expansionVote.noVoterIds.empty())
-		{
-			failExpansionVote("Expansion failed.");
-			return;
-		}
 		size_t eligiblePlayers = authenticatedClientCount();
 		if (eligiblePlayers == 0)
 		{
@@ -1921,12 +1916,19 @@ struct WorldServer::Impl
 			broadcastExpansionStatus();
 			return;
 		}
-		if (expansionVote.yesVoterIds.size() < eligiblePlayers)
+		size_t yesVotes = expansionVote.yesVoterIds.size();
+		if (yesVotes * 2 > eligiblePlayers)
+		{
+			broadcastServerMessage("Expansion approved.");
+			expandWorldOneRing();
+			return;
+		}
+		size_t votesCast = yesVotes + expansionVote.noVoterIds.size();
+		if (votesCast < eligiblePlayers)
 		{
 			return;
 		}
-		broadcastServerMessage("Expansion approved.");
-		expandWorldOneRing();
+		failExpansionVote("Expansion failed.");
 	}
 
 	void startExpansionVote(ClientSession &session)
