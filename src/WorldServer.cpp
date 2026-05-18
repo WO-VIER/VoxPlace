@@ -1916,6 +1916,11 @@ struct WorldServer::Impl
 			broadcastExpansionStatus();
 			return;
 		}
+		if (eligiblePlayers < 2)
+		{
+			failExpansionVote("Expansion failed: another player is required.");
+			return;
+		}
 		size_t yesVotes = expansionVote.yesVoterIds.size();
 		if (yesVotes * 2 > eligiblePlayers)
 		{
@@ -1941,6 +1946,12 @@ struct WorldServer::Impl
 		if (expansionVote.active)
 		{
 			sendServerMessage(session, "Expansion vote already in progress. Use /expand y or /expand n.", ServerChatMessageKind::Error);
+			return;
+		}
+		size_t eligiblePlayers = authenticatedClientCount();
+		if (eligiblePlayers < 2)
+		{
+			sendServerMessage(session, "Expansion requires another connected player.", ServerChatMessageKind::Error);
 			return;
 		}
 		uint64_t nowMs = systemNowMs();

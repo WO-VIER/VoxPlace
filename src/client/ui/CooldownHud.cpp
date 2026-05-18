@@ -76,7 +76,8 @@ namespace
 		uint32_t requiredYesVotes = 0;
 		if (expansionStatus.eligiblePlayers > 0)
 		{
-			requiredYesVotes = (expansionStatus.eligiblePlayers + 1) / 2;
+			// Majorité stricte : il faut plus de la moitié des joueurs éligibles.
+			requiredYesVotes = (expansionStatus.eligiblePlayers / 2) + 1;
 		}
 		char buffer[64];
 		std::snprintf(
