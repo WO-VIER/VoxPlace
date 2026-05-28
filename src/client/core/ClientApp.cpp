@@ -107,6 +107,7 @@ namespace
 		std::ofstream m_profileJsonLogFile;
 		bool m_glfwInitialized = false;
 		bool m_imguiInitialized = false;
+		bool m_meshWorkersAreLocal = true;
 
 		bool initializeLaunch(int argc, char **argv, int &exitCode)
 		{
@@ -234,6 +235,7 @@ namespace
 			
 			bool isLocal = (m_launchOptions.host == "127.0.0.1" || m_launchOptions.host == "localhost");
 			m_runtime.chunkMesher.start(m_environmentOptions.requestedMeshWorkers, isLocal);
+			m_meshWorkersAreLocal = isLocal;
 			
 			m_runtime.chunkIndirectRenderer.init();
 		}
@@ -340,6 +342,15 @@ namespace
 					m_runtime.gameState,
 					m_runtime.camera,
 					m_runtime.worldClient);
+				const std::string &connectedHost = m_runtime.gameState.connection.serverHost;
+				bool isLocal = (connectedHost == "127.0.0.1" || connectedHost == "localhost");
+				if (isLocal != m_meshWorkersAreLocal)
+				{
+					m_runtime.chunkMesher.start(m_environmentOptions.requestedMeshWorkers, isLocal);
+					m_meshWorkersAreLocal = isLocal;
+					std::cout << "Client mesh workers retuned: " << m_runtime.chunkMesher.workerCount()
+							  << " (isLocal=" << (isLocal ? "true" : "false") << ")" << std::endl;
+				}
 				std::cout << "Connected as " << m_runtime.worldClient.localPlayer().profile.username
 						  << " to " << m_runtime.gameState.connection.serverHost
 						  << ":" << m_runtime.gameState.connection.serverPort << std::endl;
