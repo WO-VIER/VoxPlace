@@ -12,6 +12,7 @@ valgrind*.txt
 build_tracy_profiler/
 .cachegrind/
 output/
+dist/
 *.py
 vgcore*
 .github/deploy_key

@@ -77,6 +77,15 @@ namespace
 	constexpr const char *DEFAULT_ADMIN_PASSWORD = "admin";
 	volatile std::sig_atomic_t gWorldServerSignalStopRequested = 0;
 
+	bool fillLocalTime(std::time_t time, std::tm &outTime)
+	{
+#ifdef _WIN32
+		return localtime_s(&outTime, &time) == 0;
+#else
+		return localtime_r(&time, &outTime) != nullptr;
+#endif
+	}
+
 	struct ActivityFrontierState
 	{
 		ChunkBounds playableBounds;
@@ -1754,7 +1763,7 @@ struct WorldServer::Impl
 
 		std::time_t now = std::time(nullptr);
 		std::tm timeInfo{};
-		localtime_r(&now, &timeInfo);
+		fillLocalTime(now, timeInfo);
 		connectionLogFile << '[' << std::put_time(&timeInfo, "%Y-%m-%d %H:%M:%S") << "] "
 					  << session.playerContext.player.profile.username
 					  << " id=" << session.playerContext.player.profile.playerId

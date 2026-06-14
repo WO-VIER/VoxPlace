@@ -27,8 +27,10 @@ sudo apt install cmake g++ pkg-config libglfw3-dev libenet-dev libsodium-dev lib
 
 ### Windows
 
-- CMake >= 3.20 : `winget install Kitware.CMake`
-- MSVC Build Tools ou LLVM/Clang
+- One-shot setup recommandé : `.\setup-windows.cmd` ou `.\setup-windows.ps1`
+- CMake >= 3.20
+- Git, requis par CMake FetchContent
+- MSVC Build Tools 2022
 - vcpkg pour `libcurl` : `vcpkg install curl:x64-windows`
 
 Les dépendances principales sont téléchargées automatiquement au premier build via CMake FetchContent.
@@ -54,9 +56,18 @@ Les exécutables sont générés dans `build_debug/` ou `build_release/`.
 
 ### Windows
 
-Ouvrir **x64 Native Tools Command Prompt for VS 2022** (ou équivalent Clang) à la racine du projet :
+Depuis un PowerShell normal à la racine du projet :
 
 ```powershell
+# Installe/prepare Git, CMake, MSVC Build Tools, vcpkg, curl puis build en Debug
+.\setup-windows.cmd
+
+# Setup seulement, sans compiler
+.\setup-windows.cmd -NoBuild
+
+# Variante PowerShell directe si les scripts .ps1 sont autorises
+.\setup-windows.ps1
+
 # Debug
 .\build.ps1
 
@@ -65,9 +76,13 @@ Ouvrir **x64 Native Tools Command Prompt for VS 2022** (ou équivalent Clang) à
 
 # Clean et rebuild
 .\build.ps1 -Clean
+
+# Package portable Release pour une machine sans compilateur
+.\package-windows.cmd
 ```
 
-Les exécutables sont générés dans `build\win-release\Release\`.
+Les exécutables sont générés dans `build\win-debug\` ou `build\win-release\`.
+Le zip portable est généré dans `dist\VoxPlace-win-x64-release.zip`.
 
 ## Utilisation
 
